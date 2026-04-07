@@ -1,0 +1,202 @@
+# MarkdownMonkey
+
+English | **[中文](./README.md)**
+
+A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framework.
+
+## ✨ Features
+
+- 📝 **Markdown Editing** - Live preview, syntax highlighting, Mermaid diagrams, math formulas (KaTeX)
+- 📁 **File Management** - Create, open, save Markdown files with file tree browsing and multi-encoding support (UTF-8/GBK/UTF-16)
+- 🗂️ **Multi-Tab** - Edit multiple files simultaneously with independent undo/redo history per tab
+- 📋 **Outline View** - Auto-extract headings to generate table of contents for quick navigation
+- 🤖 **AI Assistant** - Integrated with multiple AI providers (OpenAI, Claude, DeepSeek, Kimi, Ollama, OpenRouter)
+- 🎨 **Theme Switching** - Dark / Light / Follow System
+- 🌐 **Internationalization** - Simplified Chinese / American English
+- ⌨️ **Keyboard Shortcuts** - Rich keyboard shortcut support
+- 📤 **Multi-Format Export** - HTML / PDF / DOCX (Word) / Plain Text
+- 💾 **Auto Save** - Configurable auto-save interval with external modification detection
+- 🔍 **Search & Replace** - Case-sensitive search, global search across files
+- 📊 **Table Editor** - Visual table creation and editing
+- ✅ **Spell Check** - English spelling + Chinese detection
+- 🔐 **Secure Storage** - API keys securely stored via system keyring
+- 🖼️ **Image Support** - Paste/drag-drop images with automatic Markdown syntax insertion
+
+## 🛠️ Tech Stack
+
+| Category | Technology | Version |
+|----------|-----------|---------|
+| **UI Framework** | Dioxus (desktop) | 0.7 |
+| **Language** | Rust | Edition 2021 |
+| **Markdown Parsing** | pulldown-cmark | 0.10 |
+| **HTML Sanitization** | ammonia | 4 |
+| **Syntax Highlighting** | syntect | 5 |
+| **HTTP** | reqwest (rustls-tls) | 0.12 |
+| **Async Runtime** | tokio | 1 |
+| **Key Storage** | keyring | 3 |
+| **Serialization** | serde + serde_json | 1 |
+| **File Dialogs** | rfd | 0.15 |
+| **PDF Export** | printpdf | 0.7 |
+| **DOCX Export** | zip (OOXML) | 2.2 |
+| **File Watching** | notify | 6 |
+| **Clipboard** | arboard | 3 |
+
+## 🏗️ Architecture
+
+The project is organized in a **Components + Actions + Services/State** layered structure, following a PAL (Presentation-Actions-Logic) inspired architecture: some components still read/write `AppState` directly, and the Actions layer is intentionally lightweight.
+
+```
+┌─────────────────────────────────────────────────┐
+│  Presentation Layer                              │
+│  components/ — UI components, rendering only     │
+│  ├── editor.rs, preview.rs, sidebar.rs          │
+│  ├── toolbar.rs, tabbar.rs, statusbar.rs        │
+│  └── *_modal.rs (various modals)                │
+├─────────────────────────────────────────────────┤
+│  Actions Layer                                   │
+│  actions/ — Business logic handlers              │
+│  ├── app_actions.rs — App-level operations       │
+│  ├── editor_actions.rs — Editor operations       │
+│  ├── file_actions.rs — File operations           │
+│  └── shortcut_actions.rs — Shortcut dispatch     │
+├─────────────────────────────────────────────────┤
+│  Logic Layer                                     │
+│  state/ — Global state (AppState, Dioxus Signal) │
+│  services/ — Pure logic services (testable)      │
+│  utils/ — Utility functions (i18n, etc.)         │
+└─────────────────────────────────────────────────┘
+```
+
+### Core Principles
+
+1. All hooks are called unconditionally at the top of components
+2. Always render all sub-components; control visibility with CSS
+3. Prefer Actions for reusable interaction logic, while allowing direct state access for simplicity
+4. State management uses Dioxus Signal reactive pattern
+
+## 📁 Project Structure
+
+```
+src/
+├── main.rs              # Application entry point, launches Dioxus desktop
+├── app.rs               # Main app component (layout, init, auto-save, file watching)
+│
+├── state/
+│   └── app_state.rs     # Global state (AppState, 40+ Signals)
+│
+├── components/          # UI components (17 total)
+│   ├── editor.rs        # Markdown editor (textarea + virtual line numbers)
+│   ├── preview.rs       # Live preview panel (debounced rendering)
+│   ├── sidebar.rs       # Sidebar (outline + file tree)
+│   ├── toolbar.rs       # Formatting toolbar
+│   ├── tabbar.rs        # Multi-tab bar
+│   ├── statusbar.rs     # Status bar (word count/line count/save status)
+│   ├── file_tree.rs     # File tree browser
+│   ├── table_editor_modal.rs  # Table editor modal
+│   ├── ai_chat_modal.rs       # AI chat modal
+│   ├── ai_result_modal.rs     # AI result modal
+│   ├── settings_modal.rs      # Settings modal
+│   ├── shortcuts_modal.rs     # Keyboard shortcuts modal
+│   ├── search_modal.rs        # Search & replace modal
+│   ├── global_search_modal.rs # Global search modal
+│   ├── file_modified_modal.rs # File modification alert modal
+│   ├── large_file_warning_modal.rs # Large file warning modal
+│   ├── close_confirm_modal.rs # Close unsaved confirm modal
+│   └── icons.rs         # SVG icon components
+│
+├── actions/             # Interaction logic layer
+│   ├── app_actions.rs   # App-level Actions (theme, modals, sidebar)
+│   ├── editor_actions.rs # Editor Actions (formatting, text operations)
+│   ├── file_actions.rs  # File Actions (open, save, encoding detection)
+│   └── shortcut_actions.rs # Shortcut dispatch
+│
+├── services/            # Service layer (pure logic, independently testable)
+│   ├── markdown.rs      # Markdown rendering (pulldown-cmark + syntax highlight)
+│   ├── ai.rs            # AI API calls (multi-provider, streaming/non-streaming)
+│   ├── export.rs        # Export service (HTML/PDF/DOCX/TXT)
+│   ├── auto_save.rs     # Auto-save service
+│   ├── image.rs         # Image processing (Base64)
+│   ├── settings.rs      # Settings persistence
+│   ├── recent_files.rs  # Recent files history
+│   ├── file_watcher.rs  # External file modification detection
+│   ├── spellcheck.rs    # Spell checking
+│   ├── syntax_highlight.rs # Syntax highlighting
+│   └── keyring_service.rs  # Keyring management
+│
+├── utils/
+│   ├── i18n.rs          # Internationalization (ZH/EN)
+│   └── file_utils.rs    # File scanning utilities (depth/count limits)
+│
+└── styles/              # CSS styles
+    ├── variables.css    # CSS variables (theme colors)
+    ├── base.css         # Base styles
+    ├── editor.css       # Editor styles
+    ├── toolbar.css      # Toolbar styles
+    ├── sidebar.css      # Sidebar styles
+    └── modals.css       # Modal styles
+```
+
+## 🚀 Development
+
+### Requirements
+
+- Rust 1.80+
+- Cargo
+
+### Build
+
+```bash
+# Development mode
+cargo build
+
+# Release mode (optimized size)
+cargo build --release
+```
+
+### Run
+
+```bash
+cargo run
+```
+
+### Test
+
+```bash
+# Run all tests
+cargo test
+
+# Run specific module tests
+cargo test services::
+cargo test actions::
+
+# Format check
+cargo fmt --all -- --check
+
+# Clippy lint
+cargo clippy
+```
+
+## ⌨️ Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+N | New File |
+| Ctrl+Z | Undo |
+| Ctrl+Y / Ctrl+Shift+Z | Redo |
+| Ctrl+B | Bold |
+| Ctrl+I | Italic |
+| Ctrl+` | Inline Code |
+| Ctrl+K | Insert Link |
+| Ctrl+F | Search & Replace |
+| Ctrl+Shift+F | Global Search |
+| Ctrl+\\ | Toggle Sidebar |
+| Ctrl+P | Toggle Preview |
+| Ctrl+T | Toggle Theme |
+| Ctrl+, | Open Settings |
+| Ctrl+/ | Show Shortcuts |
+| Ctrl+J | AI Assistant |
+| Escape | Close Modal |
+
+## 📄 License
+
+MIT License

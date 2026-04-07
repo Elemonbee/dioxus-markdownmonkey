@@ -1,13 +1,13 @@
 # MarkdownMonkey
 
+**[English](./README_EN.md)** | 中文
+
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
 
-A modern Markdown editor built with [Dioxus](https://dioxuslabs.com/) framework.
-
-## 特性 / Features
+## ✨ 特性
 
 - 📝 **Markdown 编辑** - 实时预览、语法高亮、Mermaid 图表、数学公式 (KaTeX)
-- 📁 **文件管理** - 新建、打开、保存 Markdown 文件，文件树浏览
+- 📁 **文件管理** - 新建、打开、保存 Markdown 文件，文件树浏览，多编码支持 (UTF-8/GBK/UTF-16)
 - 🗂️ **多标签页** - 同时编辑多个文件，每个标签独立撤销/重做历史
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
 - 🤖 **AI 助手** - 集成多个 AI 提供商（OpenAI、Claude、DeepSeek、Kimi、Ollama、OpenRouter）
@@ -16,12 +16,13 @@ A modern Markdown editor built with [Dioxus](https://dioxuslabs.com/) framework.
 - ⌨️ **快捷键** - 丰富的键盘快捷键支持
 - 📤 **多格式导出** - HTML / PDF / DOCX (Word) / 纯文本
 - 💾 **自动保存** - 可配置间隔的自动保存，外部修改检测
-- 🔍 **搜索替换** - 支持正则、大小写敏感
+- 🔍 **搜索替换** - 支持大小写敏感、全局搜索
 - 📊 **表格编辑器** - 可视化表格创建与编辑
 - ✅ **拼写检查** - 英文拼写 + 中文检测
 - 🔐 **安全存储** - API Key 通过系统密钥环安全存储
+- 🖼️ **图片支持** - 粘贴/拖放图片，自动插入 Markdown 语法
 
-## 技术栈 / Tech Stack
+## 🛠️ 技术栈
 
 | 类别 | 技术 | 版本 |
 |------|------|------|
@@ -40,11 +41,9 @@ A modern Markdown editor built with [Dioxus](https://dioxuslabs.com/) framework.
 | **文件监控** | notify | 6 |
 | **剪贴板** | arboard | 3 |
 
-## 架构 / Architecture
+## 🏗️ 架构
 
-项目以 **组件 + Actions + Services/State** 的分层方式组织代码。当前实现接近 PAL (Presentation-Actions-Logic)，但并不是严格的纯 PAL：部分组件仍会直接读写 `AppState`，Actions 层也以轻量封装为主。
-
-The codebase uses a **components + actions + services/state** layered structure. It is PAL-inspired rather than a strict PAL implementation: some components still read/write `AppState` directly, and the Actions layer is intentionally lightweight.
+项目以 **组件 + Actions + Services/State** 的分层方式组织代码，采用 PAL (Presentation-Actions-Logic) 启发式架构：部分组件仍会直接读写 `AppState`，Actions 层以轻量封装为主。
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -59,7 +58,7 @@ The codebase uses a **components + actions + services/state** layered structure.
 │  ├── app_actions.rs — 应用级操作                  │
 │  ├── editor_actions.rs — 编辑器操作               │
 │  ├── file_actions.rs — 文件操作                   │
-│  └── shortcut_actions.rs — 快捷键操作             │
+│  └── shortcut_actions.rs — 快捷键分发             │
 ├─────────────────────────────────────────────────┤
 │  Logic (逻辑层)                                  │
 │  state/ — 全局状态 (AppState, Dioxus Signal)     │
@@ -68,26 +67,26 @@ The codebase uses a **components + actions + services/state** layered structure.
 └─────────────────────────────────────────────────┘
 ```
 
-### 核心原则 / Core Principles
+### 核心原则
 
-1. **所有 Hooks 在组件顶部无条件调用** / All hooks called unconditionally at component top
-2. **始终渲染所有子组件，用 CSS 控制显示** / Always render all sub-components, control visibility with CSS
-3. **优先通过 Actions 复用交互逻辑，但允许组件直接操作状态以保持实现简单** / Prefer Actions for reusable interaction logic, while allowing direct state access where it keeps the implementation simpler
-4. **状态管理使用 Dioxus Signal 响应式模式** / State management uses Dioxus Signal reactive pattern
+1. 所有 Hooks 在组件顶部无条件调用
+2. 始终渲染所有子组件，用 CSS 控制显示
+3. 优先通过 Actions 复用交互逻辑，但允许组件直接操作状态以保持实现简单
+4. 状态管理使用 Dioxus Signal 响应式模式
 
-## 项目结构 / Project Structure
+## 📁 项目结构
 
 ```
 src/
 ├── main.rs              # 应用入口，启动 Dioxus desktop
-├── app.rs               # 主应用组件（布局、初始化）
+├── app.rs               # 主应用组件（布局、初始化、自动保存、文件监控）
 │
 ├── state/
 │   └── app_state.rs     # 全局状态 (AppState, 40+ Signal)
 │
 ├── components/          # UI 组件 (17 个)
 │   ├── editor.rs        # Markdown 编辑器 (textarea + 虚拟行号)
-│   ├── preview.rs       # 实时预览面板
+│   ├── preview.rs       # 实时预览面板 (防抖渲染)
 │   ├── sidebar.rs       # 侧边栏 (大纲 + 文件树)
 │   ├── toolbar.rs       # 格式化工具栏
 │   ├── tabbar.rs        # 多标签页栏
@@ -102,17 +101,18 @@ src/
 │   ├── global_search_modal.rs # 全局搜索弹窗
 │   ├── file_modified_modal.rs # 文件修改提示弹窗
 │   ├── large_file_warning_modal.rs # 大文件警告弹窗
+│   ├── close_confirm_modal.rs # 关闭未保存确认弹窗
 │   └── icons.rs         # SVG 图标组件
 │
-├── actions/             # 交互逻辑层（轻量封装）
+├── actions/             # 交互逻辑层
 │   ├── app_actions.rs   # 应用级 Actions (主题、弹窗、侧边栏)
 │   ├── editor_actions.rs # 编辑器 Actions (格式化、文本操作)
-│   ├── file_actions.rs  # 文件操作 Actions (打开、保存、扫描)
+│   ├── file_actions.rs  # 文件操作 Actions (打开、保存、编码检测)
 │   └── shortcut_actions.rs # 快捷键分发
 │
 ├── services/            # 服务层 (纯逻辑，可独立测试)
 │   ├── markdown.rs      # Markdown 渲染 (pulldown-cmark + 代码高亮)
-│   ├── ai.rs            # AI API 调用 (多提供商)
+│   ├── ai.rs            # AI API 调用 (多提供商，流式/非流式)
 │   ├── export.rs        # 导出服务 (HTML/PDF/DOCX/TXT)
 │   ├── auto_save.rs     # 自动保存服务
 │   ├── image.rs         # 图片处理 (Base64)
@@ -124,7 +124,8 @@ src/
 │   └── keyring_service.rs  # 密钥管理
 │
 ├── utils/
-│   └── i18n.rs          # 国际化 (中/英)
+│   ├── i18n.rs          # 国际化 (中/英)
+│   └── file_utils.rs    # 文件扫描工具 (带深度/数量限制)
 │
 └── styles/              # CSS 样式
     ├── variables.css    # CSS 变量 (主题色)
@@ -135,62 +136,67 @@ src/
     └── modals.css       # 弹窗样式
 ```
 
-## 开发 / Development
+## 🚀 开发
 
-### 环境要求 / Requirements
+### 环境要求
 
 - Rust 1.80+
 - Cargo
 
-### 构建 / Build
+### 构建
 
 ```bash
-# 开发模式 / Development
+# 开发模式
 cargo build
 
-# 发布模式 (优化体积) / Release (optimized)
+# 发布模式 (优化体积)
 cargo build --release
 ```
 
-### 运行 / Run
+### 运行
 
 ```bash
 cargo run
 ```
 
-### 测试 / Test
+### 测试
 
 ```bash
-# 运行所有测试 / Run all tests
+# 运行所有测试
 cargo test
 
-# 运行特定模块测试 / Run specific module tests
+# 运行特定模块测试
 cargo test services::
 cargo test actions::
+
+# 格式检查
+cargo fmt --all -- --check
+
+# Clippy 检查
+cargo clippy
 ```
 
-## 快捷键 / Keyboard Shortcuts
+## ⌨️ 快捷键
 
-| 快捷键 / Shortcut | 功能 / Function |
+| 快捷键 | 功能 |
 |--------|------|
-| Ctrl+N | 新建文件 / New File |
-| Ctrl+O | 打开文件 / Open File |
-| Ctrl+S | 保存文件 / Save File |
-| Ctrl+Shift+S | 另存为 / Save As |
-| Ctrl+Z | 撤销 / Undo |
-| Ctrl+Y / Ctrl+Shift+Z | 重做 / Redo |
-| Ctrl+B | 粗体 / Bold |
-| Ctrl+I | 斜体 / Italic |
-| Ctrl+K | 插入链接 / Insert Link |
-| Ctrl+\ | 切换侧边栏 / Toggle Sidebar |
-| Ctrl+P | 切换预览 / Toggle Preview |
-| Ctrl+, | 打开设置 / Open Settings |
-| Ctrl+/ | 显示快捷键 / Show Shortcuts |
-| Ctrl+J | AI 助手 / AI Assistant |
-| Ctrl+F | 搜索替换 / Search & Replace |
-| Ctrl++ / Ctrl+- | 字体缩放 / Font Zoom |
-| Escape | 关闭弹窗 / Close Modal |
+| Ctrl+N | 新建文件 |
+| Ctrl+Z | 撤销 |
+| Ctrl+Y / Ctrl+Shift+Z | 重做 |
+| Ctrl+B | 粗体 |
+| Ctrl+I | 斜体 |
+| Ctrl+` | 行内代码 |
+| Ctrl+K | 插入链接 |
+| Ctrl+F | 搜索替换 |
+| Ctrl+Shift+F | 全局搜索 |
+| Ctrl+\\ | 切换侧边栏 |
+| Ctrl+P | 切换预览 |
+| Ctrl+T | 切换主题 |
+| Ctrl+, | 打开设置 |
+| Ctrl+/ | 显示快捷键 |
+| Ctrl+J | AI 助手 |
+| Escape | 关闭弹窗 |
 
-## 许可证 / License
+## 📄 许可证
 
 MIT License
