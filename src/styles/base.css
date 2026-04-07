@@ -1,0 +1,258 @@
+/* ============================================
+   基础样式 / Base Styles
+   ============================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  line-height: 1.5;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ============================================
+   应用布局 / App Layout
+   ============================================ */
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.app-main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ============================================
+   动画效果 / Animations
+   ============================================ */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ============================================
+   按钮样式 / Button Styles
+   ============================================ */
+
+.btn-primary {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--border-radius);
+  background-color: var(--accent-primary);
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: var(--font-size-sm);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.btn-secondary {
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: var(--font-size-sm);
+}
+
+.btn-secondary:hover {
+  background-color: var(--bg-hover);
+}
+
+.btn-secondary:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.btn-danger {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--border-radius);
+  background-color: var(--accent-error);
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: var(--font-size-sm);
+}
+
+.btn-danger:hover {
+  filter: brightness(1.1);
+}
+
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--border-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-icon:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ============================================
+   响应式布局 / Responsive Layout
+   ============================================ */
+
+/* 中等屏幕 / Medium screens */
+@media (max-width: 1024px) {
+  .sidebar {
+    min-width: 180px;
+    max-width: 280px;
+  }
+  
+  .preview-pane {
+    min-width: 300px;
+  }
+  
+  .toolbar-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+}
+
+/* 小屏幕 / Small screens */
+@media (max-width: 768px) {
+  .sidebar {
+    position: absolute;
+    left: 0;
+    top: var(--toolbar-height);
+    bottom: var(--statusbar-height);
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform var(--transition-normal);
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.3);
+  }
+  
+  .sidebar:not(.sidebar-collapsed) {
+    transform: translateX(0);
+  }
+  
+  .preview-pane {
+    display: none;
+  }
+  
+  .toolbar-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+  }
+  
+  .toolbar-divider {
+    margin: 0 4px;
+  }
+  
+  .modal {
+    min-width: 320px;
+    max-width: 95vw;
+  }
+}
+
+/* 超小屏幕 / Extra small screens */
+@media (max-width: 480px) {
+  .toolbar {
+    padding: 0 8px;
+    gap: 2px;
+  }
+  
+  .toolbar-group {
+    gap: 1px;
+  }
+  
+  .tab {
+    padding: 0 10px;
+    font-size: 11px;
+  }
+  
+  .statusbar {
+    font-size: 11px;
+    padding: 0 8px;
+  }
+  
+  .statusbar-left,
+  .statusbar-center,
+  .statusbar-right {
+    gap: 8px;
+  }
+  
+  .modal {
+    min-width: 280px;
+    margin: 8px;
+  }
+  
+  .settings-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  
+  .settings-row input,
+  .settings-row select {
+    width: 100%;
+  }
+}

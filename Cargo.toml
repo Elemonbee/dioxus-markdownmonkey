@@ -1,0 +1,76 @@
+[package]
+name = "markdownmonkey"
+version = "0.4.0"
+edition = "2021"
+description = "A modern Markdown editor built with Dioxus"
+authors = ["MarkdownMonkey Team"]
+license = "MIT"
+
+[dependencies]
+# Dioxus 核心 - 0.7.3
+dioxus = { version = "0.7", features = ["macro", "desktop"] }
+
+# Markdown 解析与渲染
+pulldown-cmark = "0.10"
+ammonia = "4"
+
+# 代码高亮
+syntect = "5"
+
+# HTTP 客户端 (AI API)
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+futures-util = "0.3"
+
+# 安全存储 (API Key)
+keyring = "3"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 文件对话框
+rfd = "0.15"
+
+# 日期时间
+chrono = "0.4"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# 错误处理
+thiserror = "2"
+
+# 目录
+dirs = "5"
+
+# 剪贴板
+arboard = "3"
+regex = "1"
+
+# Base64 编码（图片处理）
+base64 = "0.22"
+
+# 编码转换（GBK/GB2312 支持）
+encoding_rs = "0.8"
+
+# 文件系统事件监控
+notify = "6"
+
+# PDF 导出
+printpdf = "0.7"
+
+# Word/Docx 导出 (使用 zip + xml)
+zip = "2.2"
+
+
+[dev-dependencies]
+# 测试
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true

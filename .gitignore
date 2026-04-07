@@ -1,0 +1,46 @@
+# Rust
+/target/
+# Cargo.lock should be committed for binary applications to ensure reproducible builds
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Dioxus
+dist/
+
+# Local env / secrets
+.env
+.env.*
+*.local
+
+# App runtime artifacts
+settings.json
+*.log
+logs/
+
+# Docs audit artifacts
+backup/
+archive/
+reports/
+
+# Kilocode config (may contain secrets)
+.kilocode/
+.kilo/
+.kilocodemodes
+
+# Git debug temp files
+git_config*.txt
