@@ -494,7 +494,7 @@ impl ExportService {
             .chars()
             .take_while(|c| c.is_ascii_digit())
             .collect();
-        if leading_digits.len() > 0
+        if !leading_digits.is_empty()
             && trimmed_stripped.get(leading_digits.len()..leading_digits.len() + 2) == Some(". ")
         {
             return (trimmed_stripped.to_string(), None, false);
