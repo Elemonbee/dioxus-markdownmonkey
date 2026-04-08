@@ -1,5 +1,4 @@
 # MarkdownMonkey
-<img width="3840" height="2024" alt="image" src="https://github.com/user-attachments/assets/0d16563f-d718-472c-b1c1-d94e040a9874" />
 
 
 English | **[中文](./README.md)**
