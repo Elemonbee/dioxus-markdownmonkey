@@ -7,8 +7,8 @@ authors = ["MarkdownMonkey Team"]
 license = "MIT"
 
 [dependencies]
-# Dioxus 核心 - 0.7.3
-dioxus = { version = "0.7", features = ["macro", "desktop"] }
+# Dioxus 核心 - 0.7.5
+dioxus = { version = "0.7.5", features = ["macro", "desktop"] }
 
 # Markdown 解析与渲染
 pulldown-cmark = "0.10"

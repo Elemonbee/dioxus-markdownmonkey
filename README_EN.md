@@ -26,7 +26,7 @@ A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framew
 
 | Category | Technology | Version |
 |----------|-----------|---------|
-| **UI Framework** | Dioxus (desktop) | 0.7 |
+| **UI Framework** | Dioxus (desktop) | 0.7.5 |
 | **Language** | Rust | Edition 2021 |
 | **Markdown Parsing** | pulldown-cmark | 0.10 |
 | **HTML Sanitization** | ammonia | 4 |

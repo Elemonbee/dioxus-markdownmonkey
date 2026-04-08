@@ -26,7 +26,7 @@
 
 | 类别 | 技术 | 版本 |
 |------|------|------|
-| **UI 框架** | Dioxus (desktop) | 0.7 |
+| **UI 框架** | Dioxus (desktop) | 0.7.5 |
 | **语言** | Rust | Edition 2021 |
 | **Markdown 解析** | pulldown-cmark | 0.10 |
 | **HTML 安全** | ammonia | 4 |
