@@ -10,7 +10,6 @@ use dioxus::prelude::*;
 
 /// 文件修改提示弹窗 / File Modified Modal
 #[component]
-
 pub fn FileModifiedModal() -> Element {
     let mut state = use_context::<AppState>();
     let show = *state.file_external_modified.read();

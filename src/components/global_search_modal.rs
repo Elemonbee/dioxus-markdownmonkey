@@ -26,7 +26,6 @@ pub struct SearchResult {
 
 /// 全局搜索弹窗 / Global Search Modal
 #[component]
-
 pub fn GlobalSearchModal() -> Element {
     let mut state = use_context::<AppState>();
     let show = *state.show_global_search.read();

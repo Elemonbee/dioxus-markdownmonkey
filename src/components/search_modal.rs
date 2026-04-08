@@ -84,8 +84,8 @@ fn replace_nth_match(
         content.to_string()
     }
 }
+/// 搜索替换弹窗 / Search and Replace Modal
 #[component]
-
 pub fn SearchModal() -> Element {
     let mut state = use_context::<AppState>();
     let show = *state.show_search.read();
