@@ -3,6 +3,7 @@
 **[English](./README_EN.md)** | 中文
 
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
+> 本项目为 Vibe Coding 项目，所有代码由 AI 生成。
 
 ## ✨ 特性
 
