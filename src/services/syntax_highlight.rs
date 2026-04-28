@@ -40,20 +40,20 @@ impl SyntaxHighlightService {
         let syntax = self.get_syntax(language);
 
         // 获取主题 / Get theme（无可用主题时不 panic，退化为转义纯文本 / No panic if themes missing; fall back to escaped text）
-        let Some(theme) = (|| {
-            self.theme_set
-                .themes
-                .get(&self.current_theme)
-                .or_else(|| {
-                    tracing::warn!(
-                        "语法高亮主题 '{}' 未找到，尝试默认主题 / Theme '{}' missing, trying defaults",
-                        self.current_theme,
-                        self.current_theme
-                    );
-                    self.theme_set.themes.get("base16-ocean.dark")
-                })
-                .or_else(|| self.theme_set.themes.values().next())
-        })() else {
+        let Some(theme) = self
+            .theme_set
+            .themes
+            .get(&self.current_theme)
+            .or_else(|| {
+                tracing::warn!(
+                    "语法高亮主题 '{}' 未找到，尝试默认主题 / Theme '{}' missing, trying defaults",
+                    self.current_theme,
+                    self.current_theme
+                );
+                self.theme_set.themes.get("base16-ocean.dark")
+            })
+            .or_else(|| self.theme_set.themes.values().next())
+        else {
             tracing::error!(
                 "ThemeSet 为空，跳过代码高亮 / ThemeSet is empty, skipping code highlight"
             );
