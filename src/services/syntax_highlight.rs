@@ -39,28 +39,26 @@ impl SyntaxHighlightService {
         // 尝试获取语法 / Try to get syntax
         let syntax = self.get_syntax(language);
 
-        // 获取主题 / Get theme
-        let theme =
-            match self.theme_set.themes.get(&self.current_theme) {
-                Some(t) => t,
-                None => {
-                    // 回退到第一个可用主题，如果为空则使用默认值
-                    // Fallback to first available theme, or use default if empty
-                    self.theme_set.themes.values().next().unwrap_or_else(|| {
-                        tracing::warn!("No themes available, using base16-ocean.dark as fallback");
-                        // syntect load_defaults 保证至少有主题，这里做防御性回退
-                        // load_defaults guarantees at least one theme exists
-                        self.theme_set
-                            .themes
-                            .get("base16-ocean.dark")
-                            .unwrap_or_else(|| {
-                                self.theme_set.themes.values().next().expect(
-                                    "ThemeSet::load_defaults should provide at least one theme",
-                                )
-                            })
-                    })
-                }
-            };
+        // 获取主题 / Get theme（无可用主题时不 panic，退化为转义纯文本 / No panic if themes missing; fall back to escaped text）
+        let Some(theme) = (|| {
+            self.theme_set
+                .themes
+                .get(&self.current_theme)
+                .or_else(|| {
+                    tracing::warn!(
+                        "语法高亮主题 '{}' 未找到，尝试默认主题 / Theme '{}' missing, trying defaults",
+                        self.current_theme,
+                        self.current_theme
+                    );
+                    self.theme_set.themes.get("base16-ocean.dark")
+                })
+                .or_else(|| self.theme_set.themes.values().next())
+        })() else {
+            tracing::error!(
+                "ThemeSet 为空，跳过代码高亮 / ThemeSet is empty, skipping code highlight"
+            );
+            return self.escape_html(code);
+        };
 
         match syntax {
             Some(syntax) => {

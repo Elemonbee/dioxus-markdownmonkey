@@ -28,22 +28,26 @@
 
 ## 🛠️ 技术栈
 
+版本列为当前 `Cargo.lock` 解析结果，执行 `cargo update` 后可能微调。
+
 | 类别 | 技术 | 版本 |
 |------|------|------|
-| **UI 框架** | Dioxus (desktop) | 0.7.5 |
+| **UI 框架** | Dioxus (desktop) | 0.7.6 |
 | **语言** | Rust | Edition 2021 |
-| **Markdown 解析** | pulldown-cmark | 0.10 |
-| **HTML 安全** | ammonia | 4 |
-| **代码高亮** | syntect | 5 |
-| **HTTP** | reqwest (rustls-tls) | 0.12 |
-| **异步运行时** | tokio | 1 |
-| **密钥存储** | keyring | 3 |
-| **序列化** | serde + serde_json | 1 |
-| **文件对话框** | rfd | 0.15 |
-| **PDF 导出** | printpdf | 0.7 |
-| **DOCX 导出** | zip (OOXML) | 2.2 |
-| **文件监控** | notify | 6 |
-| **剪贴板** | arboard | 3 |
+| **Markdown 解析** | pulldown-cmark | 0.12.2 |
+| **HTML 安全** | ammonia | 4.1.2 |
+| **代码高亮** | syntect | 5.3.0 |
+| **HTTP** | reqwest (rustls-tls) | 0.12.28 |
+| **异步运行时** | tokio | 1.50.0 |
+| **密钥存储** | keyring | 3.6.3 |
+| **序列化** | serde + serde_json | 1.x |
+| **文件对话框** | rfd | 0.15.4 |
+| **用户目录** | dirs | 6.0.0 |
+| **日志** | tracing + tracing-subscriber (env-filter) | 0.1 / 0.3.23 |
+| **PDF 导出** | printpdf | 0.7.0 |
+| **DOCX 导出** | zip (OOXML) | 4.6.1 |
+| **文件监控** | notify | 7.0.0 |
+| **剪贴板** | arboard | 3.6.1 |
 
 ## 🏗️ 架构
 
@@ -161,6 +165,13 @@ cargo build --release
 
 ```bash
 cargo run
+```
+
+调试时可设置日志级别，例如：
+
+```bash
+# Windows PowerShell
+$env:RUST_LOG="markdownmonkey=debug,info"; cargo run
 ```
 
 ### 测试

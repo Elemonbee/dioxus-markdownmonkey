@@ -28,22 +28,26 @@ A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framew
 
 ## 🛠️ Tech Stack
 
+Versions reflect the current `Cargo.lock` resolution and may change after `cargo update`.
+
 | Category | Technology | Version |
 |----------|-----------|---------|
-| **UI Framework** | Dioxus (desktop) | 0.7.5 |
+| **UI Framework** | Dioxus (desktop) | 0.7.6 |
 | **Language** | Rust | Edition 2021 |
-| **Markdown Parsing** | pulldown-cmark | 0.10 |
-| **HTML Sanitization** | ammonia | 4 |
-| **Syntax Highlighting** | syntect | 5 |
-| **HTTP** | reqwest (rustls-tls) | 0.12 |
-| **Async Runtime** | tokio | 1 |
-| **Key Storage** | keyring | 3 |
-| **Serialization** | serde + serde_json | 1 |
-| **File Dialogs** | rfd | 0.15 |
-| **PDF Export** | printpdf | 0.7 |
-| **DOCX Export** | zip (OOXML) | 2.2 |
-| **File Watching** | notify | 6 |
-| **Clipboard** | arboard | 3 |
+| **Markdown Parsing** | pulldown-cmark | 0.12.2 |
+| **HTML Sanitization** | ammonia | 4.1.2 |
+| **Syntax Highlighting** | syntect | 5.3.0 |
+| **HTTP** | reqwest (rustls-tls) | 0.12.28 |
+| **Async Runtime** | tokio | 1.50.0 |
+| **Key Storage** | keyring | 3.6.3 |
+| **Serialization** | serde + serde_json | 1.x |
+| **File Dialogs** | rfd | 0.15.4 |
+| **User directories** | dirs | 6.0.0 |
+| **Logging** | tracing + tracing-subscriber (env-filter) | 0.1 / 0.3.23 |
+| **PDF Export** | printpdf | 0.7.0 |
+| **DOCX Export** | zip (OOXML) | 4.6.1 |
+| **File Watching** | notify | 7.0.0 |
+| **Clipboard** | arboard | 3.6.1 |
 
 ## 🏗️ Architecture
 
@@ -86,7 +90,11 @@ src/
 ├── app.rs               # Main app component (layout, init, auto-save, file watching)
 │
 ├── state/
-│   └── app_state.rs     # Global state (AppState, 40+ Signals)
+│   ├── mod.rs           # Re-exports AppState and types
+│   ├── types.rs         # Theme, TabInfo, History, etc.
+│   ├── app_state.rs     # AppState struct and initialization
+│   ├── app_state_ops.rs # Document/tabs/outline business logic
+│   └── app_state_tests.rs # State unit tests (cfg test)
 │
 ├── components/          # UI components (17 total)
 │   ├── editor.rs        # Markdown editor (textarea + virtual line numbers)
@@ -161,6 +169,13 @@ cargo build --release
 
 ```bash
 cargo run
+```
+
+For verbose logging:
+
+```bash
+# Unix-like
+RUST_LOG=markdownmonkey=debug,info cargo run
 ```
 
 ### Test

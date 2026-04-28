@@ -18,8 +18,11 @@ mod state; // 状态管理 / State Management
 mod utils; // 工具函数 / Utility Functions
 
 fn main() {
-    // 初始化日志 / Initialize logging
-    tracing_subscriber::fmt::init();
+    // 初始化 tracing：默认 info；可通过 RUST_LOG 覆盖（如 markdownmonkey=debug,hyper=info）
+    // Initialize tracing: default info; override with RUST_LOG (e.g. markdownmonkey=debug)
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     // 启动 Dioxus Desktop 应用 / Launch Dioxus Desktop Application
     dioxus::LaunchBuilder::new()

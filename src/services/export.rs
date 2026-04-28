@@ -1142,7 +1142,14 @@ impl ExportService {
         let mut result = line.to_string();
         static FOOTNOTE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
         let re = FOOTNOTE_RE.get_or_init(|| {
-            regex::Regex::new(r"\[\^(\d+)\]").expect("footnote regex should compile")
+            regex::Regex::new(r"\[\^(\d+)\]").unwrap_or_else(|e| {
+                tracing::error!(
+                    "脚注正则编译失败，使用空匹配回退 / Footnote regex compile failed, using empty fallback: {}",
+                    e
+                );
+                // 永不匹配的合法正则，避免 panic / Valid never-match pattern to avoid panicking
+                regex::Regex::new("$^").unwrap_or_else(|_| regex::Regex::new("a^").unwrap())
+            })
         });
         result = re.replace_all(&result, "|$1|").to_string();
         result

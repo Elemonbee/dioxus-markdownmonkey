@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! 文件监控服务 / File Watcher Service
 //!
 //! 监控文件外部修改，当文件被其他程序修改时通知用户

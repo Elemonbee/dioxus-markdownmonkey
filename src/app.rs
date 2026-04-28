@@ -102,8 +102,22 @@ fn detect_system_theme_inner() -> Option<&'static str> {
 
     #[cfg(target_os = "linux")]
     {
-        // Linux: 检查 GTK 设置（适用于 GNOME/KDE）/ Linux: Check GTK settings (for GNOME/KDE)
+        // Linux: GNOME 优先读 color-scheme，再 gtk-theme；最后读常见环境变量 / Linux: GNOME color-scheme, gtk-theme, then env
         use std::process::Command;
+
+        if let Ok(output) = Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            if stdout.contains("prefer-dark") || stdout.contains("'dark'") {
+                return Some("dark");
+            }
+            if stdout.contains("prefer-light") {
+                return Some("light");
+            }
+        }
+
         if let Ok(output) = Command::new("gsettings")
             .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
             .output()
@@ -112,6 +126,25 @@ fn detect_system_theme_inner() -> Option<&'static str> {
             if stdout.contains("dark") {
                 return Some("dark");
             }
+        }
+
+        fn env_lower(key: &str) -> Option<String> {
+            std::env::var(key).ok().map(|s| s.to_lowercase())
+        }
+
+        if matches!(env_lower("GTK_THEME").as_deref(), Some(s) if s.contains("dark")) {
+            return Some("dark");
+        }
+        match env_lower("COLOR_SCHEME").as_deref() {
+            Some(s) if s == "dark" || s.contains("prefer-dark") => return Some("dark"),
+            Some(s) if s == "light" || s.contains("prefer-light") => return Some("light"),
+            _ => {}
+        }
+        if std::env::var("DARK_MODE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+        {
+            return Some("dark");
         }
     }
 
