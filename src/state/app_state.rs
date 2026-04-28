@@ -3,10 +3,8 @@
 //! 类型定义见 `types.rs`；业务方法见 `app_state_ops.rs`
 //! See `types.rs` for data shapes; see `app_state_ops.rs` for behavior
 
-use super::types::{
-    AIConfig, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme,
-};
 use super::types::History as DocumentHistory;
+use super::types::{AIConfig, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme};
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
@@ -66,13 +64,13 @@ pub struct AppState {
     /// 侧边栏标签 (大纲/文件) / Sidebar Tab (Outline/Files)
     pub sidebar_tab: Signal<SidebarTab>,
     // ========== 弹窗状态 / Modal State ==========
-    pub show_settings: Signal<bool>, // 设置弹窗 / Settings Modal
-    pub show_shortcuts: Signal<bool>, // 快捷键弹窗 / Shortcuts Modal
-    pub show_ai_chat: Signal<bool>,   // AI 聊天弹窗 / AI Chat Modal
-    pub show_ai_result: Signal<bool>, // AI 结果弹窗 / AI Result Modal
-    pub show_search: Signal<bool>,    // 搜索弹窗 / Search Modal
+    pub show_settings: Signal<bool>,      // 设置弹窗 / Settings Modal
+    pub show_shortcuts: Signal<bool>,     // 快捷键弹窗 / Shortcuts Modal
+    pub show_ai_chat: Signal<bool>,       // AI 聊天弹窗 / AI Chat Modal
+    pub show_ai_result: Signal<bool>,     // AI 结果弹窗 / AI Result Modal
+    pub show_search: Signal<bool>,        // 搜索弹窗 / Search Modal
     pub show_global_search: Signal<bool>, // 全局搜索弹窗 / Global Search Modal
-    pub show_table_editor: Signal<bool>, // 表格编辑器弹窗 / Table Editor Modal
+    pub show_table_editor: Signal<bool>,  // 表格编辑器弹窗 / Table Editor Modal
 
     // ========== 搜索状态 / Search State ==========
     pub search_query: Signal<String>,  // 搜索词 / Search Query
