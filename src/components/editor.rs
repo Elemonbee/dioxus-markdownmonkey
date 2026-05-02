@@ -130,8 +130,12 @@ pub fn Editor() -> Element {
             ondragleave: move |_| {
                 *is_dragging.write() = false;
             },
-            ondrop: move |_| {
-                tracing::info!("Drag detected - use Ctrl+O to open files");
+            ondrop: move |e| {
+                *is_dragging.write() = false;
+                // Dioxus Desktop 拖放事件处理
+                // Handle drag-drop events in Dioxus Desktop
+                let _ = e.data();
+                tracing::info!("文件拖放 - 使用 Ctrl+O 打开文件 / File drop - use Ctrl+O to open files");
             },
 
             div { class: "editor-header",

@@ -13,10 +13,14 @@ use super::types::{OutlineItem, SaveStatus, TabInfo};
 impl AppState {
     /// 更新内容 / Update Content
     pub fn update_content(&mut self, new_content: String) {
+        // 处理内嵌图片：将 data URI 替换为本地文件路径
+        // Process embedded images: replace data URIs with local file paths
+        let processed = self.process_embedded_images(&new_content);
+
         // 使用哈希检测实际变化，避免重复记录 / Use hash to detect actual changes
         {
             let mut history = self.history.write();
-            if !history.is_different(&new_content) {
+            if !history.is_different(&processed) {
                 return; // 内容没变，不记录 / Content unchanged, skip
             }
         }
@@ -29,7 +33,7 @@ impl AppState {
             history.future.clear();
         }
 
-        *self.content.write() = new_content;
+        *self.content.write() = processed;
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
 
@@ -46,6 +50,25 @@ impl AppState {
             }
         }
         self.update_outline();
+        self.run_spell_check();
+    }
+
+    /// 运行拼写检查 / Run Spell Check
+    pub fn run_spell_check(&mut self) {
+        if !*self.spell_check_enabled.read() {
+            *self.spell_check_results.write() = Vec::new();
+            return;
+        }
+        let content = self.content.read().clone();
+        let service = crate::services::spellcheck::SpellCheckService::new();
+        let results = service.check_text(&content);
+        tracing::debug!(
+            "拼写检查完成，发现 {} 个错误 / Spell check done, {} errors",
+            results.len(),
+            results.len()
+        );
+        *self.spell_check_results.write() = results;
+        *self.spell_error_index.write() = 0;
     }
 
     /// 撤销 / Undo
@@ -73,6 +96,7 @@ impl AppState {
             // Sync hash so subsequent is_different checks work correctly
             self.history.write().is_different(past_content.as_ref());
             self.update_outline();
+            self.run_spell_check();
             return true;
         }
         false
@@ -103,6 +127,7 @@ impl AppState {
             // Sync hash so subsequent is_different checks work correctly
             self.history.write().is_different(future_content.as_ref());
             self.update_outline();
+            self.run_spell_check();
             return true;
         }
         false
@@ -238,6 +263,7 @@ impl AppState {
         *self.modified.write() = false;
         *self.history.write() = DocumentHistory::default();
         self.update_outline();
+        self.run_spell_check();
     }
 
     /// 打开文件到新标签页 / Open File in New Tab
@@ -290,6 +316,7 @@ impl AppState {
         // 更新大纲 / Update outline
         tracing::info!("[open_file_in_tab] About to call update_outline()");
         self.update_outline();
+        self.run_spell_check();
         tracing::info!(
             "[open_file_in_tab] After update_outline(), outline items: {}",
             self.outline_items.read().len()
@@ -331,6 +358,7 @@ impl AppState {
         *self.modified.write() = modified;
         *self.history.write() = history;
         self.update_outline();
+        self.run_spell_check();
     }
 
     /// 关闭当前标签页 / Close Current Tab
@@ -353,6 +381,7 @@ impl AppState {
             drop(tabs);
 
             self.update_outline();
+            self.run_spell_check();
             return false;
         }
 
@@ -393,6 +422,7 @@ impl AppState {
         *self.modified.write() = modified;
         *self.history.write() = history;
         self.update_outline();
+        self.run_spell_check();
 
         true
     }
@@ -540,6 +570,7 @@ impl AppState {
         *self.save_status.write() = SaveStatus::Unsaved;
 
         self.update_outline();
+        self.run_spell_check();
     }
 
     /// 在行首插入前缀 / Insert prefix at line start
@@ -578,6 +609,7 @@ impl AppState {
         *self.save_status.write() = SaveStatus::Unsaved;
 
         self.update_outline();
+        self.run_spell_check();
     }
 
     /// 在光标位置插入文本 / Insert text at cursor position
@@ -613,5 +645,90 @@ impl AppState {
         *self.save_status.write() = SaveStatus::Unsaved;
 
         self.update_outline();
+        self.run_spell_check();
     }
+
+    // ========== 图片处理 / Image Processing ==========
+
+    /// 处理内容中的内嵌图片（data URI），保存到磁盘并替换为文件路径
+    /// Process embedded images (data URIs) in content, save to disk and replace with file paths
+    fn process_embedded_images(&self, content: &str) -> String {
+        // 快速路径：无 data URI 则跳过 / Fast path: skip if no data URIs
+        if !content.contains("data:image/") {
+            return content.to_string();
+        }
+
+        let workspace = self.get_image_output_dir();
+
+        // 匹配 data:image/xxx;base64,... 模式
+        let re = match regex::Regex::new(
+            r"data:image/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=\n\r]+",
+        ) {
+            Ok(re) => re,
+            Err(e) => {
+                tracing::error!(
+                    "图片 URI 正则编译失败 / Image URI regex compile failed: {}",
+                    e
+                );
+                return content.to_string();
+            }
+        };
+
+        let mut result = content.to_string();
+
+        for mat in re.find_iter(content) {
+            let data_uri = mat.as_str();
+
+            // 提取 MIME 类型 / Extract MIME type
+            let mime_end = data_uri.find(';').unwrap_or(0);
+            let mime = &data_uri[5..mime_end]; // skip "data:"
+            let mime_str = format!("image/{}", mime);
+
+            // 使用 ImageService 保存图片 / Use ImageService to save image
+            if let Some(markdown_path) = crate::services::image::ImageService::handle_pasted_image(
+                data_uri,
+                &mime_str,
+                workspace.as_deref(),
+            ) {
+                // handle_pasted_image 返回完整 Markdown: ![alt](path)
+                // 我们只需要路径部分 / We only need the path part
+                // 从返回的 Markdown 中提取路径 / Extract path from returned Markdown
+                if let Some(path) = extract_path_from_markdown(&markdown_path) {
+                    result = result.replace(data_uri, &path);
+                    tracing::info!("图片已保存 / Image saved: {}", path);
+                }
+            } else {
+                tracing::warn!("图片保存失败，保留 data URI / Image save failed, keeping data URI");
+            }
+        }
+
+        result
+    }
+
+    /// 获取图片输出目录 / Get image output directory
+    fn get_image_output_dir(&self) -> Option<PathBuf> {
+        // 优先使用工作区目录/images / Prefer workspace/images
+        if let Some(ref root) = *self.workspace_root.read() {
+            return Some(root.join("images"));
+        }
+        // 其次使用当前文件所在目录/images / Then use current file's parent/images
+        if let Some(ref file_path) = *self.current_file.read() {
+            if let Some(parent) = file_path.parent() {
+                return Some(parent.to_path_buf().join("images"));
+            }
+        }
+        None
+    }
+}
+
+/// 从 Markdown 图片语法中提取路径 / Extract path from Markdown image syntax
+fn extract_path_from_markdown(markdown: &str) -> Option<String> {
+    // Input format: ![alt](path)
+    if let Some(start) = markdown.find("](") {
+        if markdown.ends_with(')') {
+            let path = &markdown[start + 2..markdown.len() - 1];
+            return Some(path.to_string());
+        }
+    }
+    None
 }

@@ -1,9 +1,8 @@
-#![allow(dead_code)]
 //! 图片服务 / Image Service
 //! 处理图片粘贴和保存 / Handle image paste and save
 //!
-//! 注意：此模块为预留功能，暂未集成到 UI
-//! Note: This module is reserved for future use, not yet integrated into UI
+//! 通过 JS 桥接处理粘贴/拖放图片，自动保存到工作区 images/ 目录
+//! Handles paste/drop images via JS bridge, auto-saves to workspace images/ directory
 
 use base64::{engine::general_purpose, Engine as _};
 use std::fs;
@@ -11,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// 图片错误类型 / Image Error Types
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ImageError {
     ClipboardError(String),
     WriteError(String),

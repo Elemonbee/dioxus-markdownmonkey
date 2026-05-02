@@ -41,3 +41,8 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-targets
+
+      - name: Security audit
+        run: |
+          cargo install cargo-audit --locked 2>/dev/null
+          cargo audit

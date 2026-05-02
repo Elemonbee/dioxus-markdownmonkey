@@ -327,6 +327,10 @@ impl I18n {
         texts.insert("save_close", lang_map("保存并关闭", "Save & Close"));
         texts.insert("follow_system", lang_map("跟随系统", "System"));
 
+        // 拼写检查 / Spell Check
+        texts.insert("spell_check", lang_map("拼写检查", "Spell Check"));
+        texts.insert("spell_errors", lang_map("个拼写错误", "spell errors"));
+
         // 预览 / Preview
         texts.insert("preview", lang_map("预览", "Preview"));
         texts.insert("sync_scroll_toggle", lang_map("同步滚动", "Sync Scroll"));

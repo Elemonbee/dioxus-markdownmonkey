@@ -145,4 +145,41 @@ impl EditorActions {
     pub fn insert_horizontal_rule(state: &mut AppState) {
         Self::insert_text(state, "\n---\n");
     }
+
+    // ========== 拼写检查操作 / Spell Check Operations ==========
+
+    /// 切换拼写检查 / Toggle Spell Check
+    pub fn toggle_spell_check(state: &mut AppState) {
+        let current = *state.spell_check_enabled.read();
+        *state.spell_check_enabled.write() = !current;
+        if !current {
+            // 刚启用，运行检查 / Just enabled, run check
+            state.run_spell_check();
+        } else {
+            // 禁用，清除结果 / Disabled, clear results
+            *state.spell_check_results.write() = Vec::new();
+        }
+    }
+
+    /// 导航到下一个拼写错误 / Navigate to next spell error
+    #[allow(dead_code)]
+    pub fn next_spell_error(state: &mut AppState) {
+        let total = state.spell_check_results.read().len();
+        if total == 0 {
+            return;
+        }
+        let current = *state.spell_error_index.read();
+        *state.spell_error_index.write() = (current + 1) % total;
+    }
+
+    /// 导航到上一个拼写错误 / Navigate to previous spell error
+    #[allow(dead_code)]
+    pub fn prev_spell_error(state: &mut AppState) {
+        let total = state.spell_check_results.read().len();
+        if total == 0 {
+            return;
+        }
+        let current = *state.spell_error_index.read();
+        *state.spell_error_index.write() = if current == 0 { total - 1 } else { current - 1 };
+    }
 }

@@ -50,6 +50,14 @@ pub struct AppState {
     /// 同步滚动 / Sync Scroll
     pub sync_scroll: Signal<bool>,
 
+    // ========== 拼写检查状态 / Spell Check State ==========
+    /// 拼写检查是否启用 / Is Spell Check Enabled
+    pub spell_check_enabled: Signal<bool>,
+    /// 拼写检查结果 / Spell Check Results
+    pub spell_check_results: Signal<Vec<crate::services::spellcheck::SpellError>>,
+    /// 当前高亮的拼写错误索引 / Current highlighted spell error index
+    pub spell_error_index: Signal<usize>,
+
     // ========== UI 状态 / UI State ==========
     /// 主题 / Theme
     pub theme: Signal<Theme>,
@@ -151,6 +159,11 @@ impl AppState {
             word_wrap: Signal::new(false),
             line_numbers: Signal::new(true),
             sync_scroll: Signal::new(true),
+
+            // 拼写检查状态 / Spell Check State
+            spell_check_enabled: Signal::new(false),
+            spell_check_results: Signal::new(Vec::new()),
+            spell_error_index: Signal::new(0),
 
             // UI 状态 / UI State
             theme: Signal::new(Theme::Dark),

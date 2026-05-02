@@ -52,6 +52,7 @@ pub fn SettingsModal() -> Element {
     let large_file_threshold_t = t("large_file_threshold", lang);
     let reset_default_t = t("reset_default", lang);
     let save_close_t = t("save_close", lang);
+    let spell_check_t = t("spell_check", lang);
 
     let display_class = if show { "" } else { "hidden" };
 
@@ -141,6 +142,17 @@ pub fn SettingsModal() -> Element {
                                 checked: *state.sync_scroll.read(),
                                 onchange: move |_| {
                                     EditorActions::toggle_sync_scroll(&mut state);
+                                },
+                            }
+                        }
+
+                        div { class: "settings-row",
+                            label { "{spell_check_t}" }
+                            input {
+                                r#type: "checkbox",
+                                checked: *state.spell_check_enabled.read(),
+                                onchange: move |_| {
+                                    EditorActions::toggle_spell_check(&mut state);
                                 },
                             }
                         }
@@ -364,6 +376,8 @@ pub fn SettingsModal() -> Element {
                             EditorActions::set_word_wrap(&mut state, false);
                             EditorActions::set_line_numbers(&mut state, true);
                             EditorActions::set_sync_scroll(&mut state, true);
+                            *state.spell_check_enabled.write() = false;
+                            *state.spell_check_results.write() = Vec::new();
                             AppActions::set_sidebar_width(&mut state, 280);
                         },
                         "{reset_default_t}"
@@ -411,6 +425,7 @@ pub fn SettingsModal() -> Element {
                                 sidebar_width: *state.sidebar_width.read(),
                                 auto_save_enabled: *state.auto_save_enabled.read(),
                                 auto_save_interval: *state.auto_save_interval.read(),
+                                spell_check_enabled: *state.spell_check_enabled.read(),
                                 ai: AISettings {
                                     enabled: ai_enabled,
                                     provider: ai_provider.clone(),

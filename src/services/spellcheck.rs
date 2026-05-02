@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! 拼写检查服务 / Spell Check Service
 //!
 //! 支持中英文拼写检查 / Supports Chinese and English spell checking
@@ -268,6 +267,7 @@ impl SpellCheckService {
     }
 
     /// 设置启用状态 / Set enabled status
+    #[allow(dead_code)]
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
@@ -509,11 +509,13 @@ impl SpellCheckService {
     }
 
     /// 检查是否包含中文字符 / Check if contains Chinese characters
+    #[allow(dead_code)]
     pub fn contains_chinese(&self, text: &str) -> bool {
         text.chars().any(Self::is_chinese_char)
     }
 
     /// 检查是否是中文字符 / Check if is Chinese character
+    #[allow(dead_code)]
     fn is_chinese_char(c: char) -> bool {
         matches!(c, '\u{4E00}'..='\u{9FFF}')
     }

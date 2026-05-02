@@ -38,6 +38,9 @@ pub struct AppSettings {
     /// 自动保存间隔（秒）/ Auto Save Interval (seconds)
     #[serde(default = "default_auto_save_interval")]
     pub auto_save_interval: u32,
+    /// 拼写检查启用 / Spell Check Enabled
+    #[serde(default)]
+    pub spell_check_enabled: bool,
     /// AI 配置 / AI Configuration
     pub ai: AISettings,
 }
@@ -81,6 +84,7 @@ impl Default for AppSettings {
             sidebar_width: 280,
             auto_save_enabled: false,
             auto_save_interval: 30,
+            spell_check_enabled: false,
             ai: AISettings::default(),
         }
     }

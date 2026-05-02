@@ -185,6 +185,12 @@ pub fn App() -> Element {
             *state.auto_save_enabled.write() = settings.auto_save_enabled;
             *state.auto_save_interval.write() = settings.auto_save_interval;
 
+            // 应用拼写检查设置 / Apply spell check settings
+            *state.spell_check_enabled.write() = settings.spell_check_enabled;
+            if settings.spell_check_enabled {
+                state.run_spell_check();
+            }
+
             // 应用 AI 设置 / Apply AI settings
             {
                 let mut config = state.ai_config.write();

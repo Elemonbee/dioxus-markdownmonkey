@@ -45,6 +45,10 @@ pub fn StatusBar() -> Element {
     let encoding_text = t("encoding_utf8", lang);
     let filetype_text = t("file_type_markdown", lang);
 
+    let spell_enabled = *state.spell_check_enabled.read();
+    let spell_count = state.spell_check_results.read().len();
+    let spell_text = t("spell_errors", lang);
+
     // CSS 计算
     let modified_display = if modified { "" } else { "display: none;" };
 
@@ -66,6 +70,11 @@ pub fn StatusBar() -> Element {
                 span { class: "status-item", "{chars_label}: {char_count}" }
                 span { class: "status-item", "{words_label}: {word_count}" }
                 span { class: "status-item", "{read_label}: {read_time}{min_label}" }
+                if spell_enabled && spell_count > 0 {
+                    span { class: "status-item spell-errors",
+                        "{spell_count} {spell_text}"
+                    }
+                }
             }
 
             // 右侧设置
