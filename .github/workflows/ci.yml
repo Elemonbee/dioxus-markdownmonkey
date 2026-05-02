@@ -44,5 +44,5 @@ jobs:
 
       - name: Security audit
         run: |
-          cargo install cargo-audit --locked 2>/dev/null
+          cargo install cargo-audit --locked --quiet
           cargo audit
