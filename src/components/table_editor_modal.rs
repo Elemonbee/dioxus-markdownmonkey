@@ -1,8 +1,7 @@
-#![allow(dead_code)]
 //! 表格可视化编辑器组件 / Table Visual Editor Component
 //!
-//! 注意：部分功能为预留功能，暂未使用
-//! Note: Some functions are reserved for future use, not yet used
+//! 可视化表格创建和编辑，支持动态行列操作
+//! Visual table creation and editing with dynamic row/column operations
 
 use crate::state::AppState;
 use crate::utils::i18n::t;
@@ -17,6 +16,7 @@ pub struct TableData {
 
 impl TableData {
     /// 从 Markdown 解析表格 / Parse table from Markdown
+    #[allow(dead_code)]
     pub fn from_markdown(markdown: &str) -> Option<Self> {
         let lines: Vec<&str> = markdown.trim().lines().collect();
         if lines.len() < 2 {
@@ -83,6 +83,7 @@ impl TableData {
     }
 
     /// 创建空表格 / Create empty table
+    #[allow(dead_code)]
     pub fn new(columns: usize, rows: usize) -> Self {
         Self::new_with_lang(columns, rows, crate::state::Language::ZhCN)
     }
@@ -97,6 +98,7 @@ impl TableData {
     }
 
     /// 添加列 / Add column
+    #[allow(dead_code)]
     pub fn add_column(&mut self) {
         self.add_column_with_lang(crate::state::Language::ZhCN)
     }
