@@ -2,56 +2,63 @@
 
 use ammonia::{Builder, UrlRelative};
 use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use std::sync::OnceLock;
 
-fn build_sanitizer() -> Builder<'static> {
-    let mut builder = Builder::default();
-    builder.add_tags([
-        "p",
-        "br",
-        "hr",
-        "pre",
-        "code",
-        "blockquote",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "ul",
-        "ol",
-        "li",
-        "dl",
-        "dt",
-        "dd",
-        "table",
-        "thead",
-        "tbody",
-        "tfoot",
-        "tr",
-        "th",
-        "td",
-        "em",
-        "strong",
-        "del",
-        "sup",
-        "sub",
-        "a",
-        "img",
-        "span",
-        "div",
-        "input",
-    ]);
-    builder.add_generic_attributes(["id", "class", "style"]);
-    builder.add_tag_attributes("a", ["href", "title"]);
-    builder.add_tag_attributes("img", ["src", "alt", "title", "width", "height"]);
-    builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
-    builder.add_tag_attributes("td", ["align", "valign"]);
-    builder.add_tag_attributes("th", ["align", "valign"]);
-    builder.add_tag_attributes("pre", ["class"]);
-    builder.add_tag_attributes("div", ["class"]);
-    builder.url_relative(UrlRelative::PassThrough);
-    builder
+/// 全局缓存消毒器配置（避免每次渲染重建）/ Globally cached sanitizer config (avoids rebuilding per render)
+static SANITIZER: OnceLock<Builder<'static>> = OnceLock::new();
+
+/// 获取缓存的消毒器 / Get cached sanitizer
+fn get_sanitizer() -> &'static Builder<'static> {
+    SANITIZER.get_or_init(|| {
+        let mut builder = Builder::default();
+        builder.add_tags([
+            "p",
+            "br",
+            "hr",
+            "pre",
+            "code",
+            "blockquote",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ul",
+            "ol",
+            "li",
+            "dl",
+            "dt",
+            "dd",
+            "table",
+            "thead",
+            "tbody",
+            "tfoot",
+            "tr",
+            "th",
+            "td",
+            "em",
+            "strong",
+            "del",
+            "sup",
+            "sub",
+            "a",
+            "img",
+            "span",
+            "div",
+            "input",
+        ]);
+        builder.add_generic_attributes(["id", "class", "style"]);
+        builder.add_tag_attributes("a", ["href", "title"]);
+        builder.add_tag_attributes("img", ["src", "alt", "title", "width", "height"]);
+        builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
+        builder.add_tag_attributes("td", ["align", "valign"]);
+        builder.add_tag_attributes("th", ["align", "valign"]);
+        builder.add_tag_attributes("pre", ["class"]);
+        builder.add_tag_attributes("div", ["class"]);
+        builder.url_relative(UrlRelative::PassThrough);
+        builder
+    })
 }
 
 /// Markdown 服务 / Markdown Service
@@ -88,7 +95,7 @@ impl MarkdownService {
 
         // 使用 ammonia 消毒 HTML 输出（在追加 script 之前）
         // Sanitize HTML output with ammonia (before appending script)
-        let sanitizer = build_sanitizer();
+        let sanitizer = get_sanitizer();
         html_output = sanitizer.clean(&html_output).to_string();
 
         // 添加 Mermaid 初始化脚本（已知安全，在消毒后追加）
@@ -131,7 +138,7 @@ if(typeof mermaid !== 'undefined') {
 
         // 使用 ammonia 消毒 HTML 输出（在追加 style/script 之前）
         // Sanitize HTML output with ammonia (before appending style/script)
-        let sanitizer = build_sanitizer();
+        let sanitizer = get_sanitizer();
         html_output = sanitizer.clean(&html_output).to_string();
 
         // 添加代码高亮 CSS（已知安全，在消毒后追加）

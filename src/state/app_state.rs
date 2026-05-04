@@ -5,6 +5,10 @@
 
 use super::types::History as DocumentHistory;
 use super::types::{AIConfig, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme};
+use crate::config::{
+    DEFAULT_AUTO_SAVE_INTERVAL_SECS, DEFAULT_FONT_SIZE, DEFAULT_PREVIEW_FONT_SIZE,
+    DEFAULT_SIDEBAR_WIDTH,
+};
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
@@ -49,6 +53,10 @@ pub struct AppState {
     pub line_numbers: Signal<bool>,
     /// 同步滚动 / Sync Scroll
     pub sync_scroll: Signal<bool>,
+
+    // ========== 文件编码状态 / File Encoding State ==========
+    /// 当前文件编码名称 / Current file encoding name
+    pub file_encoding: Signal<String>,
 
     // ========== 拼写检查状态 / Spell Check State ==========
     /// 拼写检查是否启用 / Is Spell Check Enabled
@@ -154,11 +162,14 @@ impl AppState {
             // 编辑器状态 / Editor State
             cursor_start: Signal::new(0),
             cursor_end: Signal::new(0),
-            font_size: Signal::new(16),
-            preview_font_size: Signal::new(16),
+            font_size: Signal::new(DEFAULT_FONT_SIZE),
+            preview_font_size: Signal::new(DEFAULT_PREVIEW_FONT_SIZE),
             word_wrap: Signal::new(false),
             line_numbers: Signal::new(true),
             sync_scroll: Signal::new(true),
+
+            // 文件编码状态 / File Encoding State
+            file_encoding: Signal::new("UTF-8".to_string()),
 
             // 拼写检查状态 / Spell Check State
             spell_check_enabled: Signal::new(false),
@@ -170,7 +181,7 @@ impl AppState {
             language: Signal::new(Language::ZhCN),
             sidebar_visible: Signal::new(true),
             show_preview: Signal::new(true),
-            sidebar_width: Signal::new(280),
+            sidebar_width: Signal::new(DEFAULT_SIDEBAR_WIDTH),
             sidebar_tab: Signal::new(SidebarTab::Outline),
 
             // 弹窗状态 / Modal State
@@ -199,7 +210,7 @@ impl AppState {
 
             // 自动保存状态 / Auto Save State
             auto_save_enabled: Signal::new(false),
-            auto_save_interval: Signal::new(30),
+            auto_save_interval: Signal::new(DEFAULT_AUTO_SAVE_INTERVAL_SECS),
 
             // 文件监控状态 / File Watch State
             file_external_modified: Signal::new(false),

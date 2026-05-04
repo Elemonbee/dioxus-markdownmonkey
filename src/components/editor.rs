@@ -179,6 +179,9 @@ pub fn Editor() -> Element {
                     value: "{content}",
                     placeholder: "{placeholder_text}",
                     spellcheck: false,
+                    "aria-label": "Markdown editor",
+                    "aria-multiline": "true",
+                    role: "textbox",
                     onscroll: move |e| {
                         let scroll_data = e.data();
                         let sh = scroll_data.scroll_height() as f32;

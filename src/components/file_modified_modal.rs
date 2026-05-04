@@ -46,6 +46,8 @@ pub fn FileModifiedModal() -> Element {
 
             div {
                 class: "modal file-modified-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 // 头部
@@ -87,8 +89,9 @@ pub fn FileModifiedModal() -> Element {
                             let current_file = current_file.clone();
                             move |_| {
                                 if let Some(path) = &current_file {
-                                    if let Ok(content) = FileActions::read_file_with_encoding(path) {
+                                    if let Ok((content, encoding)) = FileActions::read_file_with_encoding(path) {
                                         *state.content.write() = content;
+                                        *state.file_encoding.write() = encoding;
                                         *state.modified.write() = false;
                                         let mut history = state.history.write();
                                         history.past.clear();

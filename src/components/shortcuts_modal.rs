@@ -45,6 +45,8 @@ pub fn ShortcutsModal() -> Element {
 
             div {
                 class: "modal shortcuts-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",

@@ -92,7 +92,7 @@ pub fn FileTree() -> Element {
     };
 
     rsx! {
-        div { class: "file-tree",
+        div { class: "file-tree", role: "tree", "aria-label": "File tree",
             // 文件树头部
             div { class: "file-tree-header",
                 span { "{files_t}" }
@@ -429,6 +429,42 @@ fn collapse_arrow_svg(is_collapsed: bool) -> &'static str {
     }
 }
 
+/// 在系统文件管理器中显示文件 / Reveal file in system file explorer
+fn reveal_in_explorer(path: &Path) {
+    let path_str = path.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path_str])
+            .spawn()
+            .ok();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path_str])
+            .spawn()
+            .ok();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let parent = path.parent().unwrap_or(path);
+        std::process::Command::new("xdg-open")
+            .arg(parent)
+            .spawn()
+            .ok();
+    }
+}
+
+/// 复制路径到剪贴板 / Copy path to clipboard
+fn copy_path_to_clipboard(path: &Path) {
+    let path_str = path.to_string_lossy().to_string();
+    match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&path_str)) {
+        Ok(()) => tracing::info!("路径已复制到剪贴板: {}", path_str),
+        Err(e) => tracing::error!("复制路径失败: {}", e),
+    }
+}
+
 /// 扁平化文件树项组件
 #[component]
 fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
@@ -437,6 +473,10 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
     let mut show_context_menu = use_signal(|| false);
     let mut show_rename_input = use_signal(|| false);
     let mut rename_value = use_signal(String::new);
+    // 右键菜单光标位置 / Context menu cursor position
+    let mut context_pos = use_signal(|| (0i32, 0i32));
+    // 两步删除确认 / Two-step delete confirmation
+    let mut confirm_delete = use_signal(|| false);
 
     let path = props.path.clone();
     let depth = props.depth;
@@ -468,28 +508,42 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
         "file-item"
     };
 
+    // i18n
     let lang = *state.language.read();
     let rename_t = t("rename_file", lang);
     let delete_t = t("delete_file", lang);
     let new_file_t = t("new_file_btn", lang);
     let new_folder_t = t("new_folder", lang);
+    let copy_path_t = t("copy_path", lang);
+    let reveal_t = t("reveal_in_explorer", lang);
+    let confirm_delete_t = t("confirm_delete", lang);
 
     let path_for_click = path.clone();
     let path_for_rename = path.clone();
     let path_for_delete = path.clone();
     let path_for_new_file = path.clone();
     let path_for_new_folder = path.clone();
+    let path_for_copy = path.clone();
+    let path_for_reveal = path.clone();
     let name_for_rename = name.clone();
     let name_for_rename_ctx = name.clone();
+
+    // 菜单位置 CSS / Menu position CSS
+    let (cx, cy) = *context_pos.read();
+    let menu_style = format!("left: {}px; top: {}px;", cx, cy);
 
     rsx! {
         div {
             class: "{item_class}",
             style: "padding-left: {indent}px;",
+            role: "treeitem",
+            aria_expanded: if is_dir { Some(if is_collapsed { "false" } else { "true" }) } else { None },
+            "aria-label": "{name}",
             onclick: move |e| {
                 e.stop_propagation();
                 if *show_context_menu.read() {
                     show_context_menu.set(false);
+                    confirm_delete.set(false);
                     return;
                 }
                 if *show_rename_input.read() {
@@ -512,6 +566,9 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
             oncontextmenu: move |e| {
                 e.prevent_default();
                 e.stop_propagation();
+                let coords = e.client_coordinates();
+                context_pos.set((coords.x as i32, coords.y as i32));
+                confirm_delete.set(false);
                 show_context_menu.set(true);
             },
 
@@ -559,21 +616,26 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
                     class: "context-menu-overlay",
                     onclick: move |_| {
                         show_context_menu.set(false);
+                        confirm_delete.set(false);
                     },
                     oncontextmenu: move |e| {
                         e.prevent_default();
                         show_context_menu.set(false);
+                        confirm_delete.set(false);
                     },
                 }
                 div {
                     class: "context-menu",
+                    style: "{menu_style}",
 
+                    // === 目录专属操作 / Directory-only actions ===
                     if is_dir {
                         button {
                             class: "context-menu-item",
                             onclick: move |e| {
                                 e.stop_propagation();
                                 show_context_menu.set(false);
+                                confirm_delete.set(false);
                                 if let Err(err) = FileActions::create_new_file(&mut state, &path_for_new_file, "untitled.md") {
                                     tracing::error!("Create file failed: {}", err);
                                 }
@@ -585,35 +647,80 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
                             onclick: move |e| {
                                 e.stop_propagation();
                                 show_context_menu.set(false);
+                                confirm_delete.set(false);
                                 if let Err(err) = FileActions::create_new_folder(&mut state, &path_for_new_folder, "new_folder") {
                                     tracing::error!("Create folder failed: {}", err);
                                 }
                             },
                             "{new_folder_t}"
                         }
+                        div { class: "context-menu-divider" }
                     }
 
+                    // === 通用操作 / Common actions ===
                     button {
                         class: "context-menu-item",
                         onclick: move |e| {
                             e.stop_propagation();
                             show_context_menu.set(false);
+                            confirm_delete.set(false);
                             rename_value.set(name_for_rename_ctx.clone());
                             show_rename_input.set(true);
                         },
                         "{rename_t}"
                     }
-
                     button {
-                        class: "context-menu-item danger",
+                        class: "context-menu-item",
                         onclick: move |e| {
                             e.stop_propagation();
+                            copy_path_to_clipboard(&path_for_copy);
                             show_context_menu.set(false);
-                            if let Err(err) = FileActions::delete_file(&mut state, &path_for_delete) {
-                                tracing::error!("Delete failed: {}", err);
-                            }
+                            confirm_delete.set(false);
                         },
-                        "{delete_t}"
+                        "{copy_path_t}"
+                    }
+                    button {
+                        class: "context-menu-item",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            reveal_in_explorer(&path_for_reveal);
+                            show_context_menu.set(false);
+                            confirm_delete.set(false);
+                        },
+                        "{reveal_t}"
+                    }
+
+                    div { class: "context-menu-divider" }
+
+                    // === 删除（两步确认）/ Delete (two-step confirmation) ===
+                    {
+                        let deleting = *confirm_delete.read();
+                        let btn_text = if deleting {
+                            confirm_delete_t.clone()
+                        } else {
+                            delete_t.clone()
+                        };
+                        rsx! {
+                            button {
+                                class: "context-menu-item danger",
+                                style: if deleting { "font-weight: bold;" } else { "" },
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    if *confirm_delete.read() {
+                                        // 第二次点击：执行删除 / Second click: execute delete
+                                        if let Err(err) = FileActions::delete_file(&mut state, &path_for_delete) {
+                                            tracing::error!("Delete failed: {}", err);
+                                        }
+                                        show_context_menu.set(false);
+                                        confirm_delete.set(false);
+                                    } else {
+                                        // 第一次点击：要求确认 / First click: ask for confirmation
+                                        confirm_delete.set(true);
+                                    }
+                                },
+                                "{btn_text}"
+                            }
+                        }
                     }
                 }
             }

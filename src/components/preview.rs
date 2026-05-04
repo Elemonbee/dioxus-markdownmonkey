@@ -3,11 +3,21 @@
 //! 遵循 PAL 架构，使用 Actions 处理理业务逻辑
 //! 支持虚拟滚动行号提升大文件性能
 
-use crate::config::PREVIEW_DEBOUNCE_MS;
+use crate::config::{
+    PREVIEW_DEBOUNCE_MS, PREVIEW_LARGE_FILE_DEBOUNCE_MS, PREVIEW_LARGE_FILE_THRESHOLD_BYTES,
+};
 use crate::services::markdown::{katex_script, mermaid_script, MarkdownService};
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, *};
+use std::hash::{Hash, Hasher};
+
+/// 计算内容哈希，用于 O(1) 变更检测 / Compute content hash for O(1) change detection
+fn content_hash(s: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
 
 /// 预览组件 / Preview Component
 #[component]
@@ -17,19 +27,33 @@ pub fn Preview() -> Element {
     // 读取状态
     let show_preview = *state.show_preview.read();
     let sync_scroll = *state.sync_scroll.read();
-    let content = state.content.read().clone();
 
-    // 缓存：只在内容变化时重新渲染 HTML / Cache: only re-render HTML when content changes
+    // 缓存：只在内容哈希变化时重新渲染 HTML / Cache: re-render only when content hash changes
+    // 使用哈希替代完整内容字符串，节省大文件内存（Signal<String> → Signal<u64>）
+    // Use hash instead of full content string to save memory for large files
     let mut cached_html = use_signal(String::new);
-    let mut cached_content = use_signal(String::new);
+    let mut cached_content_hash = use_signal(|| 0u64);
 
-    let content_changed = content != *cached_content.read();
+    // 先读哈希判断是否变化，避免无变化时的 O(n) 克隆
+    // Read hash first to detect changes, avoiding O(n) clone when unchanged
+    let content = state.content.read();
+    let hash = content_hash(&content);
+    let content_changed = hash != *cached_content_hash.read();
 
     if content_changed {
+        // 仅在变化时克隆 / Clone only when changed
         let content_clone = content.clone();
+        let content_len = content.len();
+        drop(content);
 
         spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(PREVIEW_DEBOUNCE_MS)).await;
+            // 大文件使用更长防抖，减少频繁渲染 / Longer debounce for large files
+            let debounce_ms = if content_len > PREVIEW_LARGE_FILE_THRESHOLD_BYTES {
+                PREVIEW_LARGE_FILE_DEBOUNCE_MS
+            } else {
+                PREVIEW_DEBOUNCE_MS
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(debounce_ms)).await;
 
             if content_clone.is_empty() {
                 cached_html.set(String::new());
@@ -38,7 +62,7 @@ pub fn Preview() -> Element {
                 let rendered = md_service.render_with_highlight(&content_clone);
                 cached_html.set(rendered);
             }
-            cached_content.set(content_clone);
+            cached_content_hash.set(hash);
 
             let _ = document::eval(
                 r#"
@@ -95,6 +119,8 @@ pub fn Preview() -> Element {
     rsx! {
         div {
             class: "{pane_class}",
+            role: "region",
+            "aria-label": "Preview",
 
             div { class: "preview-header",
                 span { "{preview_t}" }

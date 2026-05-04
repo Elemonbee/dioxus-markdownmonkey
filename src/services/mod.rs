@@ -13,6 +13,7 @@ pub mod recent_files;
 pub mod settings;
 pub mod spellcheck;
 pub mod syntax_highlight;
+pub mod theme_detector;
 
 #[cfg(test)]
 mod __tests;

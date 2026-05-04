@@ -169,6 +169,8 @@ pub fn TableEditorModal() -> Element {
 
             div {
                 class: "modal table-editor-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",

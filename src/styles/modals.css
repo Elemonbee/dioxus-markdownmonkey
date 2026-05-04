@@ -138,6 +138,63 @@
   font-size: var(--font-size-sm);
 }
 
+/* 模型选择行（下拉 + 刷新按钮）/ Model select row (dropdown + refresh button) */
+.settings-model-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-model-select select,
+.settings-model-select input[type="text"] {
+  width: 172px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.settings-model-select .model-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.settings-model-select .model-refresh-btn:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.settings-model-select .model-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-loading-hint {
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  font-style: italic;
+}
+
+.model-error-hint {
+  color: var(--accent-warning);
+  font-size: var(--font-size-sm);
+  margin-top: 4px;
+  width: 100%;
+}
+
 /* ============================================
    快捷键弹窗 / Shortcuts Modal
    ============================================ */

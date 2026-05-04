@@ -58,6 +58,8 @@ pub fn GlobalSearchModal() -> Element {
 
             div {
                 class: "modal global-search-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 // 头部 / Header

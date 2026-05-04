@@ -51,6 +51,8 @@ pub fn LargeFileWarningModal() -> Element {
 
             div {
                 class: "modal large-file-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 // 头部

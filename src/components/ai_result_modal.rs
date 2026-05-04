@@ -33,6 +33,8 @@ pub fn AiResultModal() -> Element {
 
             div {
                 class: "modal ai-result-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",

@@ -1,9 +1,12 @@
 //! 设置弹窗组件 / Settings Modal Component
 
 use crate::actions::{AppActions, EditorActions};
-use crate::components::icons::CloseIcon;
-use crate::config::{LARGE_FILE_THRESHOLD_BYTES, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
-use crate::services::ai::AIService;
+use crate::components::icons::{CloseIcon, RefreshIcon};
+use crate::config::{
+    AUTO_SAVE_INTERVAL_MAX_SECS, AUTO_SAVE_INTERVAL_MIN_SECS, LARGE_FILE_THRESHOLD_BYTES,
+    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+};
+use crate::services::ai::{fetch_available_models, AIService};
 use crate::services::keyring_service;
 use crate::services::settings::{save_settings, AISettings, AppSettings};
 use crate::state::{AIProvider, AppState};
@@ -54,7 +57,62 @@ pub fn SettingsModal() -> Element {
     let save_close_t = t("save_close", lang);
     let spell_check_t = t("spell_check", lang);
 
+    // 模型下拉列表 i18n / Model dropdown i18n
+    let loading_models_t = t("loading_models", lang);
+    let fetch_models_t = t("fetch_models", lang);
+    let custom_model_t = t("custom_model", lang);
+    let no_models_found_t = t("no_models_found", lang);
+    let select_model_t = t("select_model", lang);
+
+    // 模型列表局部状态（运行时，不持久化）/ Model list local state (runtime-only)
+    let mut available_models: Signal<Vec<String>> = use_signal(Vec::new);
+    let mut models_loading: Signal<bool> = use_signal(|| false);
+    let mut models_error: Signal<Option<String>> = use_signal(|| None);
+    let mut use_custom_model: Signal<bool> = use_signal(|| false);
+
     let display_class = if show { "" } else { "hidden" };
+
+    // 预克隆 i18n 字符串（避免跨闭包 move）/ Pre-clone i18n strings (avoid cross-closure move)
+    let no_models_for_effect = no_models_found_t.clone();
+    let no_models_for_provider = no_models_found_t.clone();
+    let no_models_for_refresh = no_models_found_t.clone();
+
+    // 弹窗打开时自动获取 / Auto-fetch when modal opens
+    let _ = use_effect(move || {
+        let show_now = *state.show_settings.read();
+        if show_now {
+            let provider = state.ai_config.read().provider.clone();
+            if matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter)
+                && available_models.read().is_empty()
+                && !*models_loading.read()
+            {
+                let base_url = state.ai_config.read().base_url.clone();
+                let api_key = state.ai_config.read().api_key.clone();
+                *models_loading.write() = true;
+                *models_error.write() = None;
+                let no_models_t = no_models_for_effect.clone();
+                spawn(async move {
+                    match fetch_available_models(&provider, &base_url, &api_key).await {
+                        Ok(models) => {
+                            if models.is_empty() {
+                                *models_error.write() = Some(no_models_t);
+                                *use_custom_model.write() = true;
+                            } else {
+                                *use_custom_model.write() = false;
+                            }
+                            *available_models.write() = models;
+                        }
+                        Err(e) => {
+                            *models_error.write() = Some(format!("{}", e));
+                            *available_models.write() = Vec::new();
+                            *use_custom_model.write() = true;
+                        }
+                    }
+                    *models_loading.write() = false;
+                });
+            }
+        }
+    });
 
     rsx! {
         div {
@@ -65,6 +123,8 @@ pub fn SettingsModal() -> Element {
 
             div {
                 class: "modal settings-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",
@@ -178,7 +238,7 @@ pub fn SettingsModal() -> Element {
                                 value: "{*state.auto_save_interval.read()}",
                                 oninput: move |e| {
                                     if let Ok(secs) = e.value().parse::<u32>() {
-                                        *state.auto_save_interval.write() = secs.clamp(10, 300);
+                                        *state.auto_save_interval.write() = secs.clamp(AUTO_SAVE_INTERVAL_MIN_SECS, AUTO_SAVE_INTERVAL_MAX_SECS);
                                     }
                                 },
                             }
@@ -298,7 +358,37 @@ pub fn SettingsModal() -> Element {
                                         "openrouter" => AIProvider::OpenRouter,
                                         _ => AIProvider::OpenAI,
                                     };
-                                    AppActions::set_ai_provider(&mut state, provider);
+                                    AppActions::set_ai_provider(&mut state, provider.clone());
+                                    // 重置模型列表状态 / Reset model list state
+                                    available_models.set(Vec::new());
+                                    models_error.set(None);
+                                    use_custom_model.set(false);
+                                    if matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter) {
+                                        let base_url = state.ai_config.read().base_url.clone();
+                                        let api_key = state.ai_config.read().api_key.clone();
+                                        *models_loading.write() = true;
+                                        *models_error.write() = None;
+                                        let no_models_t = no_models_for_provider.clone();
+                                        spawn(async move {
+                                            match fetch_available_models(&provider, &base_url, &api_key).await {
+                                                Ok(models) => {
+                                                    if models.is_empty() {
+                                                        *models_error.write() = Some(no_models_t);
+                                                        *use_custom_model.write() = true;
+                                                    } else {
+                                                        *use_custom_model.write() = false;
+                                                    }
+                                                    *available_models.write() = models;
+                                                }
+                                                Err(e) => {
+                                                    *models_error.write() = Some(format!("{}", e));
+                                                    *available_models.write() = Vec::new();
+                                                    *use_custom_model.write() = true;
+                                                }
+                                            }
+                                            *models_loading.write() = false;
+                                        });
+                                    }
                                 },
                                 option { value: "openai", "{provider_openai_t}" }
                                 option { value: "claude", "{provider_claude_t}" }
@@ -337,14 +427,124 @@ pub fn SettingsModal() -> Element {
 
                         div { class: "settings-row",
                             label { "{model_name_t}" }
-                            input {
-                                r#type: "text",
-                                placeholder: "{model_name_t}",
-                                value: "{state.ai_config.read().model}",
-                                oninput: move |e| {
-                                    let mut config = state.ai_config.write();
-                                    config.model = e.value();
-                                },
+
+                            div { class: "settings-model-select",
+                                {
+                                    let provider = state.ai_config.read().provider.clone();
+                                    let current_model = state.ai_config.read().model.clone();
+                                    let is_dropdown_provider = matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter);
+                                    let models = available_models.read().clone();
+                                    let loading = *models_loading.read();
+                                    let error = models_error.read().clone();
+                                    let custom = *use_custom_model.read();
+
+                                    if is_dropdown_provider && !loading && error.is_none() && !custom && !models.is_empty() {
+                                        // 下拉列表模式 / Dropdown mode
+                                        rsx! {
+                                            select {
+                                                value: "{current_model}",
+                                                onchange: move |e| {
+                                                    let val = e.value();
+                                                    if val == "__custom__" {
+                                                        use_custom_model.set(true);
+                                                    } else {
+                                                        let mut config = state.ai_config.write();
+                                                        config.model = val;
+                                                    }
+                                                },
+                                                option { value: "", disabled: true, "{select_model_t}" }
+                                                for model_name in models.iter() {
+                                                    {
+                                                        let selected = *model_name == current_model;
+                                                        rsx! {
+                                                            option {
+                                                                value: "{model_name}",
+                                                                selected: "{selected}",
+                                                                "{model_name}"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                option { value: "__custom__", "{custom_model_t}..." }
+                                            }
+                                        }
+                                    } else if is_dropdown_provider && loading {
+                                        // 加载中 / Loading
+                                        rsx! {
+                                            span { class: "model-loading-hint", "{loading_models_t}" }
+                                        }
+                                    } else {
+                                        // 文本输入模式（默认或其他提供商）/ Text input mode
+                                        rsx! {
+                                            input {
+                                                r#type: "text",
+                                                placeholder: "{model_name_t}",
+                                                value: "{state.ai_config.read().model}",
+                                                oninput: move |e| {
+                                                    let mut config = state.ai_config.write();
+                                                    config.model = e.value();
+                                                },
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 刷新按钮（仅 Ollama/OpenRouter）/ Refresh button (Ollama/OpenRouter only)
+                                {
+                                    let provider = state.ai_config.read().provider.clone();
+                                    let is_dropdown_provider = matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter);
+                                    if is_dropdown_provider {
+                                        rsx! {
+                                            button {
+                                                class: "model-refresh-btn",
+                                                title: "{fetch_models_t}",
+                                                disabled: *models_loading.read(),
+                                                onclick: move |_| {
+                                                    let provider = state.ai_config.read().provider.clone();
+                                                    let base_url = state.ai_config.read().base_url.clone();
+                                                    let api_key = state.ai_config.read().api_key.clone();
+                                                    *models_loading.write() = true;
+                                                    *models_error.write() = None;
+                                                    let no_models_t = no_models_for_refresh.clone();
+                                                    spawn(async move {
+                                                        match fetch_available_models(&provider, &base_url, &api_key).await {
+                                                            Ok(models) => {
+                                                                if models.is_empty() {
+                                                                    *models_error.write() = Some(no_models_t);
+                                                                    *use_custom_model.write() = true;
+                                                                } else {
+                                                                    *use_custom_model.write() = false;
+                                                                }
+                                                                *available_models.write() = models;
+                                                            }
+                                                            Err(e) => {
+                                                                *models_error.write() = Some(format!("{}", e));
+                                                                *available_models.write() = Vec::new();
+                                                                *use_custom_model.write() = true;
+                                                            }
+                                                        }
+                                                        *models_loading.write() = false;
+                                                    });
+                                                },
+                                                RefreshIcon { size: 16 }
+                                            }
+                                        }
+                                    } else {
+                                        rsx! {}
+                                    }
+                                }
+                            }
+
+                            // 错误提示 / Error hint
+                            {
+                                let error = models_error.read().clone();
+                                if let Some(err) = error {
+                                    rsx! {
+                                        div { class: "model-error-hint", "{err}" }
+                                    }
+                                } else {
+                                    rsx! {}
+                                }
                             }
                         }
 
@@ -426,6 +626,19 @@ pub fn SettingsModal() -> Element {
                                 auto_save_enabled: *state.auto_save_enabled.read(),
                                 auto_save_interval: *state.auto_save_interval.read(),
                                 spell_check_enabled: *state.spell_check_enabled.read(),
+                                // 窗口尺寸持久化 / Window size persistence
+                                window_width: {
+                                    let desktop = dioxus::desktop::use_window();
+                                    let size = desktop.window.inner_size();
+                                    let scale = desktop.window.scale_factor();
+                                    (size.width as f64 / scale).max(600.0)
+                                },
+                                window_height: {
+                                    let desktop = dioxus::desktop::use_window();
+                                    let size = desktop.window.inner_size();
+                                    let scale = desktop.window.scale_factor();
+                                    (size.height as f64 / scale).max(400.0)
+                                },
                                 ai: AISettings {
                                     enabled: ai_enabled,
                                     provider: ai_provider.clone(),

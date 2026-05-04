@@ -4,7 +4,7 @@ use crate::actions::AppActions;
 use crate::components::icons::{
     CloseIcon, ContinueIcon, GrammarIcon, ImproveIcon, OutlineIcon, TranslateIcon,
 };
-use crate::services::ai::{AIError, AIService};
+use crate::services::ai::{format_ai_error, AITask, AIService};
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
@@ -48,6 +48,8 @@ pub fn AiChatModal() -> Element {
 
             div {
                 class: "modal ai-chat-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",
@@ -187,30 +189,8 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
     let lang = *state.language.read();
 
     // Pre-compute i18n strings for async use
-    let title_continue = t("ai_continue_result", lang);
-    let title_improve = t("ai_improve_result", lang);
-    let title_outline = t("ai_outline_result", lang);
-    let title_translate = t("ai_translate_result", lang);
-    let title_grammar = t("ai_grammar_result", lang);
-    let title_default = t("ai_response", lang);
     let title_error = t("ai_error", lang);
     let error_prefix = t("error", lang);
-
-    fn format_ai_error(error: &AIError, prefix: &str) -> String {
-        match error {
-            AIError::Config(msg)
-            | AIError::Authentication(msg)
-            | AIError::RateLimit(msg)
-            | AIError::ServiceUnavailable(msg)
-            | AIError::Timeout(msg)
-            | AIError::Api(msg)
-            | AIError::Parse(msg) => format!("{}: {}", prefix, msg),
-            AIError::Network(err) => format!(
-                "{}: 网络请求失败，请检查连接后重试 / Network request failed: {}",
-                prefix, err
-            ),
-        }
-    }
 
     rsx! {
         button {
@@ -231,42 +211,25 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                 let mut ai_title = state.ai_title;
                 let mut show_ai_result_signal = state.show_ai_result;
 
+                // 通过 AITask 枚举统一处理 / Unified handling via AITask enum
+                let task = AITask::from_str_id(&task_type);
+
                 // Capture i18n strings for async
-                let tc = title_continue.clone();
-                let ti = title_improve.clone();
-                let to = title_outline.clone();
-                let tt = title_translate.clone();
-                let tg = title_grammar.clone();
-                let td = title_default.clone();
                 let te = title_error.clone();
                 let ep = error_prefix.clone();
+                let result_title = t(task.title_i18n_key(), lang);
 
                 // 立即显示结果弹窗（流式更新）/ Show result modal immediately (streaming updates)
                 *ai_result.write() = String::new();
-                *ai_title.write() = match task_type.as_str() {
-                    "continue" => tc,
-                    "improve" => ti,
-                    "outline" => to,
-                    "translate" => tt,
-                    "fix_grammar" => tg,
-                    _ => td,
-                };
+                *ai_title.write() = result_title;
                 AppActions::show_ai_result(&mut state);
                 *show_ai_result_signal.write() = true;
 
                 spawn(async move {
                     let service = AIService::new(api_key, Some(base_url), Some(model));
 
-                    // 构建消息 / Build messages
-                    let messages = match task_type.as_str() {
-                        "continue" => crate::services::ai::build_continue_messages(&content),
-                        "improve" => crate::services::ai::build_improve_messages(&content),
-                        "outline" => crate::services::ai::build_outline_messages(&input),
-                        "translate" => crate::services::ai::build_translate_messages(&content, "English"),
-                        "fix_grammar" => crate::services::ai::build_grammar_messages(&content),
-                        "custom" => crate::services::ai::build_custom_messages(&input, &content),
-                        _ => vec![],
-                    };
+                    // 通过 AITask 统一构建消息 / Unified message building via AITask
+                    let messages = task.build_messages(&content, &input);
 
                     // 使用流式响应 / Use streaming response
                     let result = service.chat_stream(messages, |chunk| {

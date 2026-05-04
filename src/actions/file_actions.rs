@@ -36,15 +36,17 @@ impl FileActions {
         }
 
         // 使用编码检测读取文件 / Read file with encoding detection
-        let content = Self::read_file_with_encoding(&path)?;
+        let (content, encoding) = Self::read_file_with_encoding(&path)?;
 
         // 记录打开文件前的状态 / Log state before opening file
         tracing::info!(
-            "[FileActions::open_file] path={:?}, content_len={}",
+            "[FileActions::open_file] path={:?}, content_len={}, encoding={}",
             path,
-            content.len()
+            content.len(),
+            encoding
         );
 
+        *state.file_encoding.write() = encoding;
         state.open_file_in_tab(path, content);
         Ok(())
     }
@@ -62,12 +64,13 @@ impl FileActions {
                 *state.show_large_file_warning.write() = false;
 
                 // 读取文件内容 / Read file content
-                let content = Self::read_file_with_encoding(&path)?;
+                let (content, encoding) = Self::read_file_with_encoding(&path)?;
                 tracing::info!(
-                    "[FileActions::confirm_load_large_file] Loading large file: {:?}, content_len={}",
-                    path, content.len()
+                    "[FileActions::confirm_load_large_file] Loading large file: {:?}, content_len={}, encoding={}",
+                    path, content.len(), encoding
                 );
 
+                *state.file_encoding.write() = encoding;
                 state.open_file_in_tab(path, content);
                 Ok(())
             }
@@ -87,12 +90,13 @@ impl FileActions {
     /// 带编码检测的文件读取 / Read file with encoding detection
     /// 检测顺序：BOM → UTF-8（无 BOM）→ GBK/GB2312
     /// Detection order: BOM → UTF-8 (no BOM) → GBK/GB2312
-    pub(crate) fn read_file_with_encoding(path: &Path) -> Result<String, String> {
+    /// 返回 (内容, 编码名称) / Returns (content, encoding name)
+    pub(crate) fn read_file_with_encoding(path: &Path) -> Result<(String, String), String> {
         // 先读取原始字节 / First read raw bytes
         let bytes = fs::read(path).map_err(|e| format!("无法读取文件: {}", e))?;
 
         if bytes.is_empty() {
-            return Ok(String::new());
+            return Ok((String::new(), "UTF-8".to_string()));
         }
 
         // 1. 检查 BOM 标记（优先级最高）/ Check BOM markers (highest priority)
@@ -100,8 +104,9 @@ impl FileActions {
         // UTF-8 BOM: EF BB BF
         if bytes.len() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF {
             // UTF-8 with BOM：去掉 BOM 后返回
-            return String::from_utf8(bytes[3..].to_vec())
-                .map_err(|e| format!("UTF-8 BOM 解码失败: {}", e));
+            let content = String::from_utf8(bytes[3..].to_vec())
+                .map_err(|e| format!("UTF-8 BOM 解码失败: {}", e))?;
+            return Ok((content, "UTF-8 BOM".to_string()));
         }
 
         // UTF-16 LE BOM: FF FE
@@ -109,11 +114,12 @@ impl FileActions {
             let data = &bytes[2..];
             if data.len() % 2 != 0 {
                 tracing::warn!("UTF-16 LE 文件被截断: {:?}", path);
-                // 截断文件：丢弃最后一个不完整字节
                 let safe_len = data.len() - (data.len() % 2);
-                return Self::utf16_decode(&data[..safe_len], true);
+                let content = Self::utf16_decode(&data[..safe_len], true)?;
+                return Ok((content, "UTF-16 LE".to_string()));
             }
-            return Self::utf16_decode(data, true);
+            let content = Self::utf16_decode(data, true)?;
+            return Ok((content, "UTF-16 LE".to_string()));
         }
 
         // UTF-16 BE BOM: FE FF
@@ -122,14 +128,16 @@ impl FileActions {
             if data.len() % 2 != 0 {
                 tracing::warn!("UTF-16 BE 文件被截断: {:?}", path);
                 let safe_len = data.len() - (data.len() % 2);
-                return Self::utf16_decode(&data[..safe_len], false);
+                let content = Self::utf16_decode(&data[..safe_len], false)?;
+                return Ok((content, "UTF-16 BE".to_string()));
             }
-            return Self::utf16_decode(data, false);
+            let content = Self::utf16_decode(data, false)?;
+            return Ok((content, "UTF-16 BE".to_string()));
         }
 
         // 2. 尝试纯 UTF-8（无 BOM）/ Try pure UTF-8 (no BOM)
         match String::from_utf8(bytes.clone()) {
-            Ok(content) => return Ok(content),
+            Ok(content) => return Ok((content, "UTF-8".to_string())),
             Err(_) => {
                 tracing::info!("文件不是有效 UTF-8，尝试 GBK/GB2312: {:?}", path);
             }
@@ -144,7 +152,7 @@ impl FileActions {
             encoding_used.name(),
             path
         );
-        Ok(cow.into_owned())
+        Ok((cow.into_owned(), encoding_used.name().to_string()))
     }
 
     /// UTF-16 字节流转为 String / Convert UTF-16 byte stream to String
@@ -230,8 +238,8 @@ impl FileActions {
         fs::write(&path, "").map_err(|e| format!("无法创建文件: {}", e))?;
 
         // 刷新文件列表
-        if let Some(workspace) = state.workspace_root.read().clone() {
-            let files = file_utils::scan_markdown_files(&workspace);
+        if let Some(workspace) = state.workspace_root.read().as_ref() {
+            let files = file_utils::scan_markdown_files(workspace);
             *state.file_list.write() = files;
         }
 
@@ -255,8 +263,8 @@ impl FileActions {
         fs::create_dir(&path).map_err(|e| format!("无法创建文件夹: {}", e))?;
 
         // 刷新文件列表 / Refresh file list
-        if let Some(workspace) = state.workspace_root.read().clone() {
-            let files = file_utils::scan_markdown_files(&workspace);
+        if let Some(workspace) = state.workspace_root.read().as_ref() {
+            let files = file_utils::scan_markdown_files(workspace);
             *state.file_list.write() = files;
         }
 
@@ -265,8 +273,8 @@ impl FileActions {
 
     /// 刷新工作区 / Refresh Workspace
     pub fn refresh_workspace(state: &mut AppState) {
-        if let Some(workspace) = state.workspace_root.read().clone() {
-            let files = file_utils::scan_markdown_files(&workspace);
+        if let Some(workspace) = state.workspace_root.read().as_ref() {
+            let files = file_utils::scan_markdown_files(workspace);
             *state.file_list.write() = files;
         }
     }
@@ -279,8 +287,8 @@ impl FileActions {
             fs::remove_file(path).map_err(|e| format!("无法删除文件: {}", e))?;
         }
 
-        if let Some(workspace) = state.workspace_root.read().clone() {
-            let files = file_utils::scan_markdown_files(&workspace);
+        if let Some(workspace) = state.workspace_root.read().as_ref() {
+            let files = file_utils::scan_markdown_files(workspace);
             *state.file_list.write() = files;
         }
 
@@ -304,8 +312,8 @@ impl FileActions {
 
         fs::rename(old_path, &new_path).map_err(|e| format!("无法重命名: {}", e))?;
 
-        if let Some(workspace) = state.workspace_root.read().clone() {
-            let files = file_utils::scan_markdown_files(&workspace);
+        if let Some(workspace) = state.workspace_root.read().as_ref() {
+            let files = file_utils::scan_markdown_files(workspace);
             *state.file_list.write() = files;
         }
 

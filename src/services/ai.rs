@@ -554,94 +554,234 @@ impl AIService {
 }
 
 // ============================================
-// 消息构建函数 / Message Builder Functions
+// AI 任务类型 / AI Task Types
 // ============================================
 
-/// 构建续写消息 / Build continue messages
-pub fn build_continue_messages(text: &str) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: "你是一个专业的写作助手。请根据用户提供的文本，自然地续写内容。续写应该与原文风格一致，内容连贯。".to_string(),
-        },
-        Message {
-            role: "user".to_string(),
-            content: format!("请续写以下文本：\n\n{}", text),
-        },
-    ]
+/// AI 任务类型枚举 / AI Task Type Enum
+///
+/// 将 6 个独立的 builder 函数统一为一个枚举，
+/// 每个变体携带自己的 system prompt 和 user prompt 模板。
+/// Consolidates 6 separate builder functions into a single enum,
+/// each variant carries its own system prompt and user prompt template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AITask {
+    /// 续写 / Continue writing
+    Continue,
+    /// 优化 / Improve text
+    Improve,
+    /// 大纲 / Generate outline
+    Outline,
+    /// 翻译 / Translate text
+    Translate,
+    /// 语法修正 / Fix grammar
+    FixGrammar,
+    /// 自定义请求 / Custom prompt
+    Custom,
 }
 
-/// 构建优化消息 / Build improve messages
-pub fn build_improve_messages(text: &str) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: "你是一个专业的文字编辑。请优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。".to_string(),
-        },
-        Message {
-            role: "user".to_string(),
-            content: format!("请优化以下文本：\n\n{}", text),
-        },
-    ]
-}
+impl AITask {
+    /// 从字符串标识符解析任务类型 / Parse task type from string identifier
+    pub fn from_str_id(s: &str) -> Self {
+        match s {
+            "continue" => Self::Continue,
+            "improve" => Self::Improve,
+            "outline" => Self::Outline,
+            "translate" => Self::Translate,
+            "fix_grammar" => Self::FixGrammar,
+            "custom" => Self::Custom,
+            _ => Self::Custom,
+        }
+    }
 
-/// 构建大纲消息 / Build outline messages
-pub fn build_outline_messages(topic: &str) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: "你是一个专业的内容策划师。请根据用户提供的主题，生成一个详细的 Markdown 格式大纲。使用 #、##、### 等标题层级。".to_string(),
-        },
-        Message {
-            role: "user".to_string(),
-            content: format!("请为以下主题生成一个详细的大纲：\n\n{}", topic),
-        },
-    ]
-}
+    /// 获取结果弹窗标题的 i18n key / Get i18n key for result modal title
+    pub fn title_i18n_key(&self) -> &'static str {
+        match self {
+            Self::Continue => "ai_continue_result",
+            Self::Improve => "ai_improve_result",
+            Self::Outline => "ai_outline_result",
+            Self::Translate => "ai_translate_result",
+            Self::FixGrammar => "ai_grammar_result",
+            Self::Custom => "ai_response",
+        }
+    }
 
-/// 构建翻译消息 / Build translate messages
-pub fn build_translate_messages(text: &str, target_lang: &str) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: format!(
-                "你是一个专业的翻译师。请将用户提供的文本翻译成{}。保持原文的格式和风格。",
-                target_lang
+    /// 构建消息列表 / Build message list
+    ///
+    /// - `content`: 编辑器当前文档内容
+    /// - `input`: 用户自定义输入（大纲主题、自定义提示词等）
+    pub fn build_messages(&self, content: &str, input: &str) -> Vec<Message> {
+        let (system_prompt, user_content) = self.build_prompts(content, input);
+        vec![
+            Message {
+                role: "system".to_string(),
+                content: system_prompt,
+            },
+            Message {
+                role: "user".to_string(),
+                content: user_content,
+            },
+        ]
+    }
+
+    /// 生成 system prompt 和 user content / Generate system prompt and user content
+    fn build_prompts(&self, content: &str, input: &str) -> (String, String) {
+        match self {
+            Self::Continue => (
+                "你是一个专业的写作助手。请根据用户提供的文本，自然地续写内容。续写应该与原文风格一致，内容连贯。".to_string(),
+                format!("请续写以下文本：\n\n{}", content),
             ),
-        },
-        Message {
-            role: "user".to_string(),
-            content: text.to_string(),
-        },
-    ]
+            Self::Improve => (
+                "你是一个专业的文字编辑。请优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。".to_string(),
+                format!("请优化以下文本：\n\n{}", content),
+            ),
+            Self::Outline => (
+                "你是一个专业的内容策划师。请根据用户提供的主题，生成一个详细的 Markdown 格式大纲。使用 #、##、### 等标题层级。".to_string(),
+                format!("请为以下主题生成一个详细的大纲：\n\n{}", if input.is_empty() { content } else { input }),
+            ),
+            Self::Translate => (
+                "你是一个专业的翻译师。请将用户提供的文本翻译成English。保持原文的格式和风格。".to_string(),
+                content.to_string(),
+            ),
+            Self::FixGrammar => (
+                "你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误。只返回修正后的文本，不要解释。".to_string(),
+                content.to_string(),
+            ),
+            Self::Custom => (
+                if input.is_empty() {
+                    "你是一个智能助手。请根据用户的要求提供帮助。".to_string()
+                } else {
+                    input.to_string()
+                },
+                content.to_string(),
+            ),
+        }
+    }
 }
 
-/// 构建语法修正消息 / Build grammar fix messages
-pub fn build_grammar_messages(text: &str) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: "你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误。只返回修正后的文本，不要解释。".to_string(),
-        },
-        Message {
-            role: "user".to_string(),
-            content: text.to_string(),
-        },
-    ]
+/// 格式化 AI 错误为用户友好的显示文本 / Format AI error for user-friendly display
+pub fn format_ai_error(error: &AIError, prefix: &str) -> String {
+    match error {
+        AIError::Config(msg)
+        | AIError::Authentication(msg)
+        | AIError::RateLimit(msg)
+        | AIError::ServiceUnavailable(msg)
+        | AIError::Timeout(msg)
+        | AIError::Api(msg)
+        | AIError::Parse(msg) => format!("{}: {}", prefix, msg),
+        AIError::Network(err) => format!(
+            "{}: 网络请求失败，请检查连接后重试 / Network request failed: {}",
+            prefix, err
+        ),
+    }
 }
 
-/// 构建自定义请求消息 / Build custom prompt messages
-pub fn build_custom_messages(prompt: &str, text: &str) -> Vec<Message> {
-    vec![
-        Message {
-            role: "system".to_string(),
-            content: prompt.to_string(),
-        },
-        Message {
-            role: "user".to_string(),
-            content: text.to_string(),
-        },
-    ]
+// ============================================
+// 模型列表获取 / Model List Fetching
+// ============================================
+
+/// Ollama 模型列表响应 / Ollama model list response
+#[derive(Deserialize)]
+struct OllamaModelsResponse {
+    models: Vec<OllamaModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModel {
+    name: String,
+}
+
+/// OpenRouter 模型列表响应 / OpenRouter model list response
+#[derive(Deserialize)]
+struct OpenRouterModelsResponse {
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Deserialize)]
+struct OpenRouterModel {
+    id: String,
+}
+
+/// 获取指定提供商的可用模型列表 / Fetch available models for a given provider
+///
+/// 仅支持 Ollama 和 OpenRouter。其他提供商返回 Config 错误。
+/// Only supports Ollama and OpenRouter. Other providers return a Config error.
+pub async fn fetch_available_models(
+    provider: &AIProvider,
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, AIError> {
+    match provider {
+        AIProvider::Ollama => fetch_ollama_models(base_url).await,
+        AIProvider::OpenRouter => fetch_openrouter_models(base_url, api_key).await,
+        _ => Err(AIError::Config("Model listing not supported for this provider".to_string())),
+    }
+}
+
+/// 从 Ollama 获取本地模型列表 / Fetch local model list from Ollama
+///
+/// Ollama base_url 通常是 `http://localhost:11434/v1`，
+/// tags 端点在根路径：`http://localhost:11434/api/tags`
+async fn fetch_ollama_models(base_url: &str) -> Result<Vec<String>, AIError> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    // 去掉 /v1 后缀，拼接 /api/tags
+    let tags_url = base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .to_string()
+        + "/api/tags";
+
+    let response = client
+        .get(&tags_url)
+        .send()
+        .await
+        .map_err(AIService::map_reqwest_error)?;
+
+    if !response.status().is_success() {
+        return Err(AIError::ServiceUnavailable(
+            "无法连接到 Ollama 服务，请确认 Ollama 已启动 / Cannot connect to Ollama service"
+                .to_string(),
+        ));
+    }
+
+    let body: OllamaModelsResponse = response.json().await?;
+    let mut models: Vec<String> = body.models.into_iter().map(|m| m.name).collect();
+    models.sort();
+    Ok(models)
+}
+
+/// 从 OpenRouter 获取可用模型列表 / Fetch available models from OpenRouter
+async fn fetch_openrouter_models(base_url: &str, api_key: &str) -> Result<Vec<String>, AIError> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+
+    let mut request = client.get(&models_url);
+    if !api_key.trim().is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(AIService::map_reqwest_error)?;
+
+    if !response.status().is_success() {
+        return Err(AIError::ServiceUnavailable(
+            "无法获取 OpenRouter 模型列表 / Cannot fetch OpenRouter model list".to_string(),
+        ));
+    }
+
+    let body: OpenRouterModelsResponse = response.json().await?;
+    let mut models: Vec<String> = body.data.into_iter().map(|m| m.id).collect();
+    models.sort();
+    Ok(models)
 }
 
 #[cfg(test)]
@@ -686,5 +826,84 @@ mod tests {
     fn test_map_http_error_service_unavailable() {
         let err = AIService::map_http_error(503, "busy".to_string());
         assert!(matches!(err, AIError::ServiceUnavailable(_)));
+    }
+
+    // --- AITask tests ---
+
+    #[test]
+    fn test_ai_task_from_str_id() {
+        assert_eq!(AITask::from_str_id("continue"), AITask::Continue);
+        assert_eq!(AITask::from_str_id("improve"), AITask::Improve);
+        assert_eq!(AITask::from_str_id("outline"), AITask::Outline);
+        assert_eq!(AITask::from_str_id("translate"), AITask::Translate);
+        assert_eq!(AITask::from_str_id("fix_grammar"), AITask::FixGrammar);
+        assert_eq!(AITask::from_str_id("custom"), AITask::Custom);
+        // Unknown falls back to Custom
+        assert_eq!(AITask::from_str_id("unknown"), AITask::Custom);
+    }
+
+    #[test]
+    fn test_ai_task_title_i18n_key() {
+        assert_eq!(AITask::Continue.title_i18n_key(), "ai_continue_result");
+        assert_eq!(AITask::Improve.title_i18n_key(), "ai_improve_result");
+        assert_eq!(AITask::Outline.title_i18n_key(), "ai_outline_result");
+        assert_eq!(AITask::Translate.title_i18n_key(), "ai_translate_result");
+        assert_eq!(AITask::FixGrammar.title_i18n_key(), "ai_grammar_result");
+        assert_eq!(AITask::Custom.title_i18n_key(), "ai_response");
+    }
+
+    #[test]
+    fn test_ai_task_build_messages_continue() {
+        let msgs = AITask::Continue.build_messages("Hello world", "");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "system");
+        assert!(msgs[1].content.contains("Hello world"));
+    }
+
+    #[test]
+    fn test_ai_task_build_messages_custom_with_input() {
+        let msgs = AITask::Custom.build_messages("doc content", "Summarize this");
+        assert_eq!(msgs[0].content, "Summarize this");
+        assert_eq!(msgs[1].content, "doc content");
+    }
+
+    #[test]
+    fn test_ai_task_build_messages_custom_empty_input() {
+        let msgs = AITask::Custom.build_messages("doc content", "");
+        assert_eq!(msgs[0].content, "你是一个智能助手。请根据用户的要求提供帮助。");
+    }
+
+    #[test]
+    fn test_ai_task_build_messages_outline_uses_input() {
+        let msgs = AITask::Outline.build_messages("fallback", "My Topic");
+        assert!(msgs[1].content.contains("My Topic"));
+        assert!(!msgs[1].content.contains("fallback"));
+    }
+
+    #[test]
+    fn test_ai_task_build_messages_outline_falls_back_to_content() {
+        let msgs = AITask::Outline.build_messages("fallback content", "");
+        assert!(msgs[1].content.contains("fallback content"));
+    }
+
+    #[test]
+    fn test_format_ai_error_api() {
+        let err = AIError::Api("test error".to_string());
+        let msg = format_ai_error(&err, "Error");
+        assert!(msg.contains("Error: test error"));
+    }
+
+    #[test]
+    fn test_format_ai_error_config() {
+        let err = AIError::Config("bad config".to_string());
+        let msg = format_ai_error(&err, "Error");
+        assert!(msg.contains("Error: bad config"));
+    }
+
+    #[test]
+    fn test_format_ai_error_auth() {
+        let err = AIError::Authentication("invalid key".to_string());
+        let msg = format_ai_error(&err, "Error");
+        assert!(msg.contains("Error: invalid key"));
     }
 }

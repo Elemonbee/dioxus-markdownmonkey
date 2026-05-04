@@ -42,6 +42,8 @@ pub fn CloseConfirmModal() -> Element {
 
             div {
                 class: "modal close-confirm-modal",
+                role: "dialog",
+                "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",

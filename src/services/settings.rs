@@ -41,6 +41,12 @@ pub struct AppSettings {
     /// 拼写检查启用 / Spell Check Enabled
     #[serde(default)]
     pub spell_check_enabled: bool,
+    /// 窗口宽度 / Window Width
+    #[serde(default = "default_window_width")]
+    pub window_width: f64,
+    /// 窗口高度 / Window Height
+    #[serde(default = "default_window_height")]
+    pub window_height: f64,
     /// AI 配置 / AI Configuration
     pub ai: AISettings,
 }
@@ -69,6 +75,14 @@ fn default_auto_save_interval() -> u32 {
     30
 }
 
+fn default_window_width() -> f64 {
+    1200.0
+}
+
+fn default_window_height() -> f64 {
+    800.0
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -85,6 +99,8 @@ impl Default for AppSettings {
             auto_save_enabled: false,
             auto_save_interval: 30,
             spell_check_enabled: false,
+            window_width: 1200.0,
+            window_height: 800.0,
             ai: AISettings::default(),
         }
     }
@@ -184,6 +200,15 @@ pub fn load_settings() -> AppSettings {
 pub fn save_settings(settings: &AppSettings) -> io::Result<()> {
     let service = SettingsService::new()?;
     service.save(settings)
+}
+
+/// 便捷函数：仅保存窗口尺寸（不影响其他设置）/ Save only window size (doesn't affect other settings)
+pub fn save_window_size(width: f64, height: f64) -> io::Result<()> {
+    let service = SettingsService::new()?;
+    let mut settings = service.load().unwrap_or_default();
+    settings.window_width = width;
+    settings.window_height = height;
+    service.save(&settings)
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@ pub fn StatusBar() -> Element {
     let read_label = t("read", lang);
     let theme_label = t("theme", lang);
     let min_label = t("min", lang);
-    let encoding_text = t("encoding_utf8", lang);
+    let encoding_text = state.file_encoding.read();
     let filetype_text = t("file_type_markdown", lang);
 
     let spell_enabled = *state.spell_check_enabled.read();
@@ -53,7 +53,7 @@ pub fn StatusBar() -> Element {
     let modified_display = if modified { "" } else { "display: none;" };
 
     rsx! {
-        div { class: "statusbar",
+        div { class: "statusbar", role: "status", "aria-live": "polite",
             // 左侧状态
             div { class: "statusbar-left",
                 span { class: "status-item", "{save_status_text}" }

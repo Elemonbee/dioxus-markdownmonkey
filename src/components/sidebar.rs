@@ -53,6 +53,8 @@ pub fn Sidebar() -> Element {
         div {
             class: "{container_class}",
             style: "width: {sidebar_width}px; min-width: {sidebar_width}px;",
+            role: "complementary",
+            "aria-label": "Sidebar",
 
             div { class: "sidebar-header",
                 span { class: "sidebar-header-title", "{files_text}" }
@@ -82,9 +84,11 @@ pub fn Sidebar() -> Element {
             }
 
             // 标签切换 / Tab Switching
-            div { class: "sidebar-tabs",
+            div { class: "sidebar-tabs", role: "tablist",
                 button {
                     class: "{tab_outline_class}",
+                    role: "tab",
+                    aria_selected: "{is_outline}",
                     onclick: move |_| {
                         AppActions::set_sidebar_tab(&mut state, SidebarTab::Outline);
                     },
@@ -92,6 +96,8 @@ pub fn Sidebar() -> Element {
                 }
                 button {
                     class: "{tab_files_class}",
+                    role: "tab",
+                    aria_selected: "{is_files}",
                     onclick: move |_| {
                         AppActions::set_sidebar_tab(&mut state, SidebarTab::Files);
                     },
@@ -101,7 +107,7 @@ pub fn Sidebar() -> Element {
 
             // 内容区域 - 条件渲染当前活动的视图
             // Content area - conditionally render the active view
-            div { class: "sidebar-content",
+            div { class: "sidebar-content", role: "region", "aria-label": "Sidebar content",
                 if is_outline {
                     OutlineView {}
                 }

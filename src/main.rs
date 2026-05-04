@@ -24,6 +24,11 @@ fn main() {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // 加载保存的设置以恢复窗口尺寸 / Load saved settings to restore window size
+    let saved = services::settings::load_settings();
+    let win_w = saved.window_width.max(600.0);
+    let win_h = saved.window_height.max(400.0);
+
     // 启动 Dioxus Desktop 应用 / Launch Dioxus Desktop Application
     dioxus::LaunchBuilder::new()
         .with_cfg(
@@ -31,7 +36,7 @@ fn main() {
                 .with_window(
                     dioxus::desktop::WindowBuilder::new()
                         .with_title("Markdown Monkey")
-                        .with_inner_size(dioxus::desktop::LogicalSize::new(1200.0, 800.0))
+                        .with_inner_size(dioxus::desktop::LogicalSize::new(win_w, win_h))
                         .with_min_inner_size(dioxus::desktop::LogicalSize::new(600.0, 400.0))
                         // 不置顶窗口 / Don't keep window always on top
                         .with_always_on_top(false),

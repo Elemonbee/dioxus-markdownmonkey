@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 use super::app_state::AppState;
 use super::types::History as DocumentHistory;
+use crate::config::{
+    OUTLINE_DEBOUNCE_MS, OUTLINE_DEBOUNCE_THRESHOLD_BYTES, OUTLINE_LARGE_FILE_MAX_HEADINGS,
+    OUTLINE_LIMIT_THRESHOLD_BYTES,
+};
 use super::types::{OutlineItem, SaveStatus, TabInfo};
 
 impl AppState {
@@ -37,13 +41,13 @@ impl AppState {
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
 
-        // 更新大纲（带防抖：中等以上文件 500ms 内不重复更新）
-        // Update outline (with debounce: skip if <500ms since last update for medium+ files)
+        // 更新大纲（带防抖：中等以上文件短时间内不重复更新）
+        // Update outline (with debounce: skip if too soon since last update for medium+ files)
         let content_len = self.content.read().len();
-        if content_len > 50 * 1024 {
+        if content_len > OUTLINE_DEBOUNCE_THRESHOLD_BYTES {
             let now = std::time::Instant::now();
             let should_skip = self.last_outline_update.read().is_some_and(|last| {
-                now.duration_since(last) < std::time::Duration::from_millis(500)
+                now.duration_since(last) < std::time::Duration::from_millis(OUTLINE_DEBOUNCE_MS)
             });
             if should_skip {
                 return;
@@ -59,9 +63,11 @@ impl AppState {
             *self.spell_check_results.write() = Vec::new();
             return;
         }
-        let content = self.content.read().clone();
-        let service = crate::services::spellcheck::SpellCheckService::new();
-        let results = service.check_text(&content);
+        let results = {
+            let content = self.content.read();
+            let service = crate::services::spellcheck::SpellCheckService::new();
+            service.check_text(&content)
+        };
         tracing::debug!(
             "拼写检查完成，发现 {} 个错误 / Spell check done, {} errors",
             results.len(),
@@ -140,7 +146,7 @@ impl AppState {
         let content = self.content.read();
         let content_len = content.len();
 
-        if content_len < 50 * 1024 {
+        if content_len < OUTLINE_DEBOUNCE_THRESHOLD_BYTES {
             tracing::debug!(
                 "[update_outline] content_len={}, lines={}",
                 content_len,
@@ -148,12 +154,12 @@ impl AppState {
             );
         }
 
-        // 超大文件时限制大纲更新（超过 500KB 只提取前 100 个标题，超过 1MB 跳过）
-        // For very large files (>500KB), limit outline; >1MB skip entirely for performance
-        let max_items = if content_len > 1024 * 1024 {
-            None // 超过 1MB 跳过大纲更新 / Skip outline for >1MB files
-        } else if content_len > 500 * 1024 {
-            Some(100)
+        // 超大文件时限制大纲更新
+        // For very large files, limit outline or skip entirely for performance
+        let max_items = if content_len > crate::config::LARGE_FILE_THRESHOLD_BYTES {
+            None // 超过阈值跳过大纲更新 / Skip outline for files exceeding threshold
+        } else if content_len > OUTLINE_LIMIT_THRESHOLD_BYTES {
+            Some(OUTLINE_LARGE_FILE_MAX_HEADINGS)
         } else {
             None
         };
@@ -262,6 +268,7 @@ impl AppState {
         *self.current_file.write() = None;
         *self.modified.write() = false;
         *self.history.write() = DocumentHistory::default();
+        *self.file_encoding.write() = "UTF-8".to_string();
         self.update_outline();
         self.run_spell_check();
     }

@@ -3,13 +3,14 @@
 use crate::actions::AppActions;
 use crate::components::*;
 use crate::config::{
-    FILE_WATCH_ACTIVE_INTERVAL_MS, FILE_WATCH_IDLE_INTERVAL_SECS,
-    FILE_WATCH_INTERNAL_WRITE_GRACE_MS,
+    AUTO_SAVE_ACTIVE_POLL_SECS, AUTO_SAVE_IDLE_POLL_SECS, FILE_WATCH_ACTIVE_INTERVAL_MS,
+    FILE_WATCH_IDLE_INTERVAL_SECS, FILE_WATCH_INTERNAL_WRITE_GRACE_MS,
 };
 use crate::services::auto_save::AutoSaveService;
 use crate::services::file_watcher::FileModificationChecker;
 use crate::services::keyring_service;
 use crate::services::settings::load_settings;
+use crate::services::theme_detector::ThemeDetector;
 use crate::state::AppState;
 use crate::state::{AIProvider, Language, Theme};
 use dioxus::prelude::*;
@@ -23,133 +24,6 @@ const ALL_CSS: &str = concat!(
     include_str!("styles/editor.css"),
     include_str!("styles/modals.css"),
 );
-
-/// 检测系统主题 / Detect System Theme (Windows/macOS/Linux)
-/// 失败时安全回退到深色主题 / Safely falls back to dark theme on failure
-fn detect_system_theme() -> &'static str {
-    match detect_system_theme_inner() {
-        Some(theme) => theme,
-        None => {
-            tracing::warn!(
-                "主题检测失败，使用默认深色主题 / Theme detection failed, using default dark theme"
-            );
-            "dark"
-        }
-    }
-}
-
-/// 内部主题检测实现 / Internal theme detection implementation
-fn detect_system_theme_inner() -> Option<&'static str> {
-    #[cfg(target_os = "windows")]
-    {
-        // Windows: 读取注册表检测系统主题 / Read registry to detect system theme
-        use std::process::Command;
-        if let Ok(output) = Command::new("reg")
-            .args([
-                "query",
-                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                "/v",
-                "AppsUseLightTheme",
-            ])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // 如果包含 0x0 则是深色主题 / 0x0 indicates dark theme
-            if stdout.contains("0x0") || stdout.contains("0x0000") {
-                return Some("dark");
-            }
-            // 如果包含 0x1 则是浅色主题 / 0x1 indicates light theme
-            if stdout.contains("0x1") || stdout.contains("0x0001") {
-                return Some("light");
-            }
-        }
-        // 备用：检查系统颜色设置 / Fallback: check system color settings
-        if let Ok(output) = Command::new("reg")
-            .args([
-                "query",
-                "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                "/v",
-                "SystemUsesLightTheme",
-            ])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("0x0") {
-                return Some("dark");
-            }
-            if stdout.contains("0x1") {
-                return Some("light");
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: 使用 defaults 命令检测 / macOS: Use defaults command to detect
-        use std::process::Command;
-        if let Ok(output) = Command::new("defaults")
-            .args(["read", "-g", "AppleInterfaceStyle"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("Dark") {
-                return Some("dark");
-            }
-        }
-        // 如果没有设置 AppleInterfaceStyle，说明是浅色模式 / No AppleInterfaceStyle means light mode
-        return Some("light");
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Linux: GNOME 优先读 color-scheme，再 gtk-theme；最后读常见环境变量 / Linux: GNOME color-scheme, gtk-theme, then env
-        use std::process::Command;
-
-        if let Ok(output) = Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-            if stdout.contains("prefer-dark") || stdout.contains("'dark'") {
-                return Some("dark");
-            }
-            if stdout.contains("prefer-light") {
-                return Some("light");
-            }
-        }
-
-        if let Ok(output) = Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-            if stdout.contains("dark") {
-                return Some("dark");
-            }
-        }
-
-        fn env_lower(key: &str) -> Option<String> {
-            std::env::var(key).ok().map(|s| s.to_lowercase())
-        }
-
-        if matches!(env_lower("GTK_THEME").as_deref(), Some(s) if s.contains("dark")) {
-            return Some("dark");
-        }
-        match env_lower("COLOR_SCHEME").as_deref() {
-            Some(s) if s == "dark" || s.contains("prefer-dark") => return Some("dark"),
-            Some(s) if s == "light" || s.contains("prefer-light") => return Some("light"),
-            _ => {}
-        }
-        if std::env::var("DARK_MODE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-        {
-            return Some("dark");
-        }
-    }
-
-    None
-}
 
 /// 主应用组件 / Main Application Component
 pub fn App() -> Element {
@@ -250,7 +124,7 @@ pub fn App() -> Element {
     let theme = *state.theme.read();
     let theme_str = match theme {
         Theme::Light => "light",
-        Theme::System => detect_system_theme(),
+        Theme::System => ThemeDetector::detect(),
         Theme::Dark => "dark",
     };
 
@@ -269,9 +143,9 @@ pub fn App() -> Element {
                     // 动态调整休眠时间：活跃时 5s，空闲时 60s，减少 CPU 唤醒
                     // Dynamic sleep: 5s when active, 60s when idle, reduce CPU wakeups
                     let sleep_duration = if enabled && has_file {
-                        std::time::Duration::from_secs(5)
+                        std::time::Duration::from_secs(AUTO_SAVE_ACTIVE_POLL_SECS)
                     } else {
-                        std::time::Duration::from_secs(60)
+                        std::time::Duration::from_secs(AUTO_SAVE_IDLE_POLL_SECS)
                     };
                     tokio::time::sleep(sleep_duration).await;
 
@@ -375,6 +249,36 @@ pub fn App() -> Element {
                             *state.file_external_modified.write() = true;
                             // FileModifiedModal 会显示提示 / FileModifiedModal will show the prompt
                         }
+                    }
+                }
+            }
+        });
+    }
+
+    // 窗口尺寸持久化 / Window Size Persistence
+    // 每 60 秒保存窗口尺寸到设置文件，下次启动时恢复
+    // Save window size every 60s so it's restored on next launch
+    {
+        let desktop = dioxus::desktop::use_window();
+        let window_arc = desktop.window.clone(); // Arc<Window> is Send + Sync
+        use_future(move || {
+            let win = window_arc.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+                    let physical_size = win.inner_size();
+                    let scale = win.scale_factor();
+                    let w = (physical_size.width as f64 / scale).max(600.0);
+                    let h = (physical_size.height as f64 / scale).max(400.0);
+
+                    if let Err(e) =
+                        crate::services::settings::save_window_size(w, h)
+                    {
+                        tracing::warn!(
+                            "窗口尺寸保存失败 / Failed to save window size: {}",
+                            e
+                        );
                     }
                 }
             }

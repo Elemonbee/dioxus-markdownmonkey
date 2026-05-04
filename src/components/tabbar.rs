@@ -37,7 +37,7 @@ pub fn TabBar() -> Element {
     };
 
     rsx! {
-        div { class: "tabbar",
+        div { class: "tabbar", role: "tablist", "aria-label": "Open tabs",
             for (index, title, modified, is_active) in tabs_data {
                 TabItem {
                     key: "{index}",
@@ -87,6 +87,9 @@ fn TabItem(props: TabItemProps) -> Element {
     rsx! {
         div {
             class: "{tab_class}",
+            role: "tab",
+            aria_selected: "{props.is_active}",
+            tabindex: if props.is_active { "0" } else { "-1" },
             onclick: move |_| {
                 FileActions::switch_tab(&mut state, index);
             },
@@ -101,6 +104,7 @@ fn TabItem(props: TabItemProps) -> Element {
             button {
                 class: "tab-close",
                 title: "{close_tab_t}",
+                "aria-label": "{close_tab_t} {props.title}",
                 onclick: move |evt: Event<MouseData>| {
                     evt.stop_propagation();
                     let should_confirm = {

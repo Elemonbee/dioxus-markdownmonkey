@@ -5,6 +5,7 @@
 //! 注意：部分功能为预留功能，暂未使用
 //! Note: Some functions are reserved for future use, not yet used
 
+use crate::config::{FONT_SIZE_MAX, FONT_SIZE_MIN};
 use crate::state::AppState;
 use dioxus::prelude::{ReadableExt, WritableExt};
 /// 编辑器 Actions 处理器 / Editor Actions Handler
@@ -43,12 +44,12 @@ impl EditorActions {
 
     /// 设置字体大小 / Set Font Size
     pub fn set_font_size(state: &mut AppState, size: u32) {
-        *state.font_size.write() = size.clamp(10, 32);
+        *state.font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
     }
 
     /// 设置预览字体大小 / Set Preview Font Size
     pub fn set_preview_font_size(state: &mut AppState, size: u32) {
-        *state.preview_font_size.write() = size.clamp(10, 32);
+        *state.preview_font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
     }
 
     /// 切换自动换行 / Toggle Word Wrap

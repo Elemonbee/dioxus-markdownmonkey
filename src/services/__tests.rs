@@ -217,7 +217,7 @@ mod tests {
             Some("gpt-4o-mini".to_string()),
         );
 
-        let messages = crate::services::ai::build_continue_messages("hello");
+        let messages = crate::services::ai::AITask::Continue.build_messages("hello", "");
         let result = rt.block_on(service.chat(messages));
         assert!(matches!(result, Err(AIError::Config(_))));
     }

@@ -94,7 +94,7 @@ pub fn Toolbar() -> Element {
     };
 
     rsx! {
-        div { class: "toolbar",
+        div { class: "toolbar", role: "toolbar", "aria-label": "Editor toolbar",
             // 文件操作 / File Operations
             div { class: "toolbar-group",
                 button {
@@ -356,12 +356,14 @@ pub fn Toolbar() -> Element {
                 button {
                     class: "{sidebar_class}",
                     title: "{toggle_sidebar_t} (Ctrl+\\)",
+                    aria_pressed: "{show_sidebar}",
                     onclick: move |_| { AppActions::toggle_sidebar(&mut state); },
                     SidebarIcon { size: 18 }
                 }
                 button {
                     class: "{preview_class}",
                     title: "{toggle_preview_t} (Ctrl+P)",
+                    aria_pressed: "{show_preview}",
                     onclick: move |_| { AppActions::toggle_preview(&mut state); },
                     PreviewIcon { size: 18 }
                 }
@@ -380,6 +382,7 @@ pub fn Toolbar() -> Element {
                 button {
                     class: "{auto_save_class}",
                     title: "{auto_save_title}",
+                    aria_pressed: "{*state.auto_save_enabled.read()}",
                     onclick: move |_| {
                         let enabled = !*state.auto_save_enabled.read();
                         *state.auto_save_enabled.write() = enabled;
