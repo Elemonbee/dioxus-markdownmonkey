@@ -431,6 +431,7 @@ fn collapse_arrow_svg(is_collapsed: bool) -> &'static str {
 
 /// 在系统文件管理器中显示文件 / Reveal file in system file explorer
 fn reveal_in_explorer(path: &Path) {
+    #[allow(unused_variables)]
     let path_str = path.to_string_lossy().to_string();
     #[cfg(target_os = "windows")]
     {
