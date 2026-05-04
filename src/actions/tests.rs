@@ -975,7 +975,12 @@ mod file_actions_integration_tests {
             let path = temp.path().join("utf16le.md");
             // UTF-16 LE BOM + "Hello"
             let mut bytes: Vec<u8> = vec![0xFF, 0xFE]; // BOM
-            bytes.extend_from_slice(&"Hello".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>());
+            bytes.extend_from_slice(
+                &"Hello"
+                    .encode_utf16()
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            );
             fs::write(&path, &bytes).unwrap();
 
             let mut state = AppState::new();
@@ -993,7 +998,12 @@ mod file_actions_integration_tests {
             let path = temp.path().join("utf16be.md");
             // UTF-16 BE BOM + "Hello"
             let mut bytes: Vec<u8> = vec![0xFE, 0xFF]; // BOM
-            bytes.extend_from_slice(&"Hello".encode_utf16().flat_map(|c| c.to_be_bytes()).collect::<Vec<u8>>());
+            bytes.extend_from_slice(
+                &"Hello"
+                    .encode_utf16()
+                    .flat_map(|c| c.to_be_bytes())
+                    .collect::<Vec<u8>>(),
+            );
             fs::write(&path, &bytes).unwrap();
 
             let mut state = AppState::new();

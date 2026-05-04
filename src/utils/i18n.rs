@@ -183,7 +183,10 @@ impl I18n {
         );
         texts.insert("enter_new_name", lang_map("输入新名称", "Enter new name"));
         texts.insert("copy_path", lang_map("复制路径", "Copy Path"));
-        texts.insert("reveal_in_explorer", lang_map("在文件管理器中显示", "Reveal in File Explorer"));
+        texts.insert(
+            "reveal_in_explorer",
+            lang_map("在文件管理器中显示", "Reveal in File Explorer"),
+        );
         texts.insert("confirm_delete", lang_map("确认删除？", "Confirm Delete?"));
         texts.insert("close_tab", lang_map("关闭标签", "Close Tab"));
         texts.insert(
@@ -390,7 +393,10 @@ impl I18n {
         texts.insert("provider_deepseek", lang_map("DeepSeek", "DeepSeek"));
         texts.insert("provider_kimi", lang_map("Kimi", "Kimi"));
         texts.insert("provider_openrouter", lang_map("OpenRouter", "OpenRouter"));
-        texts.insert("loading_models", lang_map("加载模型中...", "Loading models..."));
+        texts.insert(
+            "loading_models",
+            lang_map("加载模型中...", "Loading models..."),
+        );
         texts.insert("fetch_models", lang_map("获取模型", "Fetch Models"));
         texts.insert("custom_model", lang_map("自定义模型", "Custom Model"));
         texts.insert("no_models_found", lang_map("未找到模型", "No models found"));

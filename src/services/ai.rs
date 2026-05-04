@@ -713,7 +713,9 @@ pub async fn fetch_available_models(
     match provider {
         AIProvider::Ollama => fetch_ollama_models(base_url).await,
         AIProvider::OpenRouter => fetch_openrouter_models(base_url, api_key).await,
-        _ => Err(AIError::Config("Model listing not supported for this provider".to_string())),
+        _ => Err(AIError::Config(
+            "Model listing not supported for this provider".to_string(),
+        )),
     }
 }
 
@@ -767,10 +769,7 @@ async fn fetch_openrouter_models(base_url: &str, api_key: &str) -> Result<Vec<St
         request = request.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(AIService::map_reqwest_error)?;
+    let response = request.send().await.map_err(AIService::map_reqwest_error)?;
 
     if !response.status().is_success() {
         return Err(AIError::ServiceUnavailable(
@@ -870,7 +869,10 @@ mod tests {
     #[test]
     fn test_ai_task_build_messages_custom_empty_input() {
         let msgs = AITask::Custom.build_messages("doc content", "");
-        assert_eq!(msgs[0].content, "你是一个智能助手。请根据用户的要求提供帮助。");
+        assert_eq!(
+            msgs[0].content,
+            "你是一个智能助手。请根据用户的要求提供帮助。"
+        );
     }
 
     #[test]

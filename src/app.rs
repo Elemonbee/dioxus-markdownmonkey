@@ -272,13 +272,8 @@ pub fn App() -> Element {
                     let w = (physical_size.width as f64 / scale).max(600.0);
                     let h = (physical_size.height as f64 / scale).max(400.0);
 
-                    if let Err(e) =
-                        crate::services::settings::save_window_size(w, h)
-                    {
-                        tracing::warn!(
-                            "窗口尺寸保存失败 / Failed to save window size: {}",
-                            e
-                        );
+                    if let Err(e) = crate::services::settings::save_window_size(w, h) {
+                        tracing::warn!("窗口尺寸保存失败 / Failed to save window size: {}", e);
                     }
                 }
             }

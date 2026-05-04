@@ -4,7 +4,7 @@ use crate::actions::AppActions;
 use crate::components::icons::{
     CloseIcon, ContinueIcon, GrammarIcon, ImproveIcon, OutlineIcon, TranslateIcon,
 };
-use crate::services::ai::{format_ai_error, AITask, AIService};
+use crate::services::ai::{format_ai_error, AIService, AITask};
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::*;

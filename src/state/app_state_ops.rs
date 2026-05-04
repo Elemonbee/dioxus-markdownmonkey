@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 
 use super::app_state::AppState;
 use super::types::History as DocumentHistory;
+use super::types::{OutlineItem, SaveStatus, TabInfo};
 use crate::config::{
     OUTLINE_DEBOUNCE_MS, OUTLINE_DEBOUNCE_THRESHOLD_BYTES, OUTLINE_LARGE_FILE_MAX_HEADINGS,
     OUTLINE_LIMIT_THRESHOLD_BYTES,
 };
-use super::types::{OutlineItem, SaveStatus, TabInfo};
 
 impl AppState {
     /// 更新内容 / Update Content
