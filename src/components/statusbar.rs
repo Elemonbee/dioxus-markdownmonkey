@@ -2,9 +2,9 @@
 //!
 //! 遵循 PAL 架构：使用 Actions 处理业务逻辑
 
-use crate::state::{AppState, SaveStatus};
+use crate::state::{AppState, ExportStatus, SaveStatus};
 use crate::utils::i18n::t;
-use dioxus::prelude::{ReadableExt, *};
+use dioxus::prelude::{ReadableExt, WritableExt, *};
 
 /// 状态栏组件 / Status Bar Component
 #[component]
@@ -15,6 +15,7 @@ pub fn StatusBar() -> Element {
     // 读取状态
     let modified = *state.modified.read();
     let save_status_val = *state.save_status.read();
+    let export_status_val = state.export_status.read().clone();
     let theme_val = *state.theme.read();
     let lang = *state.language.read();
 
@@ -28,6 +29,25 @@ pub fn StatusBar() -> Element {
         SaveStatus::Saved => t("saved", lang),
         SaveStatus::Saving => t("saving", lang),
         SaveStatus::Unsaved => t("unsaved", lang),
+    };
+
+    let export_status_text = match &export_status_val {
+        ExportStatus::Idle => String::new(),
+        ExportStatus::Exporting { format_name } => {
+            let tmpl = t("exporting", lang);
+            tmpl.replace("{format}", format_name)
+        }
+        ExportStatus::Completed { format_name } => {
+            let tmpl = t("export_complete", lang);
+            tmpl.replace("{format}", format_name)
+        }
+        ExportStatus::Failed {
+            format_name,
+            error: _,
+        } => {
+            let tmpl = t("export_failed", lang);
+            tmpl.replace("{format}", format_name)
+        }
     };
 
     let theme_text = match theme_val {
@@ -52,6 +72,35 @@ pub fn StatusBar() -> Element {
     // CSS 计算
     let modified_display = if modified { "" } else { "display: none;" };
 
+    // 导出状态 CSS
+    let export_display = if matches!(export_status_val, ExportStatus::Idle) {
+        "display: none;"
+    } else {
+        ""
+    };
+    let export_class = match &export_status_val {
+        ExportStatus::Failed { .. } => "status-item export-status export-failed",
+        ExportStatus::Completed { .. } => "status-item export-status export-complete",
+        _ => "status-item export-status",
+    };
+
+    // 自动清除完成/失败状态（3秒后）
+    // Auto-clear completed/failed status after 3 seconds
+    let export_status_signal = state.export_status;
+    use_effect(move || {
+        let is_done = matches!(
+            &*export_status_signal.read(),
+            ExportStatus::Completed { .. } | ExportStatus::Failed { .. }
+        );
+        if is_done {
+            let mut es = export_status_signal;
+            spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                *es.write() = ExportStatus::Idle;
+            });
+        }
+    });
+
     rsx! {
         div { class: "statusbar", role: "status", "aria-live": "polite",
             // 左侧状态
@@ -62,6 +111,12 @@ pub fn StatusBar() -> Element {
                     class: "status-item modified",
                     style: "{modified_display}",
                     "{modified_text}"
+                }
+                // 导出状态 / Export status
+                span {
+                    class: "{export_class}",
+                    style: "{export_display}",
+                    "{export_status_text}"
                 }
             }
 

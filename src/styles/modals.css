@@ -196,6 +196,44 @@
 }
 
 /* ============================================
+   连接测试 / Connection Test
+   ============================================ */
+
+.connection-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.btn-test-connection {
+  padding: 4px 12px;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.btn-test-connection.testing {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.connection-result {
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.connection-success {
+  color: var(--accent-success);
+}
+
+.connection-error {
+  color: var(--accent-error);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================
    快捷键弹窗 / Shortcuts Modal
    ============================================ */
 

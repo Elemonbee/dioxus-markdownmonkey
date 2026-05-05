@@ -70,6 +70,16 @@ pub fn SettingsModal() -> Element {
     let mut models_error: Signal<Option<String>> = use_signal(|| None);
     let mut use_custom_model: Signal<bool> = use_signal(|| false);
 
+    // 连接测试状态 / Connection test state
+    let connection_testing: Signal<bool> = use_signal(|| false);
+    let connection_result: Signal<Option<Result<String, String>>> = use_signal(|| None);
+
+    // 连接测试 i18n / Connection test i18n
+    let test_connection_t = t("test_connection", lang);
+    let connection_success_t = t("connection_success", lang);
+    let connection_failed_t = t("connection_failed", lang);
+    let connection_testing_t = t("connection_testing", lang);
+
     let display_class = if show { "" } else { "hidden" };
 
     // 预克隆 i18n 字符串（避免跨闭包 move）/ Pre-clone i18n strings (avoid cross-closure move)
@@ -131,6 +141,7 @@ pub fn SettingsModal() -> Element {
                     h2 { "{settings_t}" }
                     button {
                         class: "modal-close",
+                        autofocus: true,
                         onclick: move |_| {
                             AppActions::hide_settings(&mut state);
                         },
@@ -409,6 +420,54 @@ pub fn SettingsModal() -> Element {
                                     let mut config = state.ai_config.write();
                                     config.api_key = e.value();
                                 },
+                            }
+                        }
+
+                        // 连接测试按钮 / Connection test button
+                        div { class: "settings-row",
+                            label { "" }
+                            div { class: "connection-test-row",
+                                button {
+                                    class: if *connection_testing.read() { "btn-secondary btn-test-connection testing" } else { "btn-secondary btn-test-connection" },
+                                    disabled: *connection_testing.read(),
+                                    onclick: move |_| {
+                                        let api_key = state.ai_config.read().api_key.clone();
+                                        let base_url = state.ai_config.read().base_url.clone();
+                                        let model = state.ai_config.read().model.clone();
+                                        let mut connection_testing = connection_testing;
+                                        let mut connection_result = connection_result;
+                                        let connection_success_t = connection_success_t.clone();
+                                        let connection_failed_t = connection_failed_t.clone();
+                                        spawn(async move {
+                                            *connection_testing.write() = true;
+                                            *connection_result.write() = None;
+                                            let service = AIService::new(api_key, Some(base_url), Some(model));
+                                            match service.test_connection().await {
+                                                Ok(_) => {
+                                                    *connection_testing.write() = false;
+                                                    *connection_result.write() = Some(Ok(connection_success_t));
+                                                }
+                                                Err(e) => {
+                                                    *connection_testing.write() = false;
+                                                    *connection_result.write() = Some(Err(format!("{}: {}", connection_failed_t, e)));
+                                                }
+                                            }
+                                        });
+                                    },
+                                    if *connection_testing.read() {
+                                        "{connection_testing_t}"
+                                    } else {
+                                        "{test_connection_t}"
+                                    }
+                                }
+                                {
+                                    let result_val = connection_result.read().clone();
+                                    match result_val {
+                                        Some(Ok(msg)) => rsx! { span { class: "connection-result connection-success", "{msg}" } },
+                                        Some(Err(msg)) => rsx! { span { class: "connection-result connection-error", "{msg}" } },
+                                        None => rsx! {},
+                                    }
+                                }
                             }
                         }
 

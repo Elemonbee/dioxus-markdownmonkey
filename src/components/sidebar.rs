@@ -5,13 +5,14 @@
 
 use crate::actions::AppActions;
 use crate::components::file_tree::FileTree;
-use crate::components::icons::CloseIcon;
+use crate::components::icons::{CloseIcon, FileIcon};
 use crate::config::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
-use crate::state::AppState;
-use crate::state::SidebarTab;
+use crate::services::recent_files::RecentFile;
+use crate::state::{AppState, Language, SidebarTab};
 use crate::utils::i18n::t;
 use dioxus::document;
 use dioxus::prelude::*;
+use std::path::PathBuf;
 
 /// 侧边栏组件 / Sidebar Component
 #[component]
@@ -27,6 +28,7 @@ pub fn Sidebar() -> Element {
 
     let outline_text = t("outline", lang);
     let files_text = t("files", lang);
+    let recent_text = t("recent", lang);
     let close_t = t("close", lang);
     let sidebar_width_text = t("sidebar_width", lang);
 
@@ -46,8 +48,14 @@ pub fn Sidebar() -> Element {
     } else {
         "sidebar-tab"
     };
+    let tab_recent_class = if sidebar_tab == SidebarTab::Recent {
+        "sidebar-tab active"
+    } else {
+        "sidebar-tab"
+    };
     let is_outline = sidebar_tab == SidebarTab::Outline;
     let is_files = sidebar_tab == SidebarTab::Files;
+    let is_recent = sidebar_tab == SidebarTab::Recent;
 
     rsx! {
         div {
@@ -103,6 +111,15 @@ pub fn Sidebar() -> Element {
                     },
                     "{files_text}"
                 }
+                button {
+                    class: "{tab_recent_class}",
+                    role: "tab",
+                    aria_selected: "{is_recent}",
+                    onclick: move |_| {
+                        AppActions::set_sidebar_tab(&mut state, SidebarTab::Recent);
+                    },
+                    "{recent_text}"
+                }
             }
 
             // 内容区域 - 条件渲染当前活动的视图
@@ -113,6 +130,9 @@ pub fn Sidebar() -> Element {
                 }
                 if is_files {
                     FileTree {}
+                }
+                if is_recent {
+                    RecentFilesView {}
                 }
             }
         }
@@ -184,6 +204,130 @@ fn OutlineItemView(props: OutlineItemProps) -> Element {
             },
             span { class: "outline-marker", "{marker}" }
             span { class: "outline-text", "{props.text}" }
+        }
+    }
+}
+
+// ========== 最近文件视图 / Recent Files View ==========
+
+/// 最近文件视图 / Recent Files View
+#[component]
+fn RecentFilesView() -> Element {
+    let state = use_context::<AppState>();
+    let lang = *state.language.read();
+
+    // 获取排序后的最近文件列表 / Get sorted recent files list
+    let files: Vec<RecentFile> = {
+        let rf = state.recent_files.read();
+        rf.sorted_by_frecency().into_iter().cloned().collect()
+    };
+
+    let is_empty = files.is_empty();
+    let no_recent_text = t("no_recent_files", lang);
+    let no_recent_hint = t("no_recent_hint", lang);
+
+    rsx! {
+        div { class: "recent-files-view",
+            if is_empty {
+                div { class: "empty-hint",
+                    p { "{no_recent_text}" }
+                    p { class: "hint-desc", "{no_recent_hint}" }
+                }
+            } else {
+                div { class: "recent-files-list",
+                    for file in files.iter() {
+                        RecentFileItem {
+                            key: "{file.path.display()}",
+                            path: file.path.clone(),
+                            name: file.name.clone(),
+                            last_opened: file.last_opened,
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 最近文件项属性 / Recent File Item Props
+#[derive(Props, Clone, PartialEq)]
+struct RecentFileItemProps {
+    path: PathBuf,
+    name: String,
+    last_opened: u64,
+}
+
+/// 最近文件项视图 / Recent File Item View
+#[component]
+fn RecentFileItem(props: RecentFileItemProps) -> Element {
+    let mut state = use_context::<AppState>();
+    let lang = *state.language.read();
+    let remove_text = t("remove", lang);
+
+    // 计算相对时间 / Calculate relative time
+    let relative_time = format_relative_time(props.last_opened, lang);
+
+    // 预克隆用于闭包 / Pre-clone for closures
+    let path_for_open = props.path.clone();
+    let path_for_remove = props.path.clone();
+    let path_display = props.path.to_string_lossy().to_string();
+
+    rsx! {
+        div { class: "recent-file-item",
+            div {
+                class: "recent-file-info",
+                onclick: move |_| {
+                    AppActions::open_recent_file(&mut state, path_for_open.clone());
+                },
+                FileIcon { size: 14 }
+                div { class: "recent-file-details",
+                    span { class: "recent-file-name", "{props.name}" }
+                    span { class: "recent-file-path", "{path_display}" }
+                }
+            }
+            div { class: "recent-file-meta",
+                span { class: "recent-file-time", "{relative_time}" }
+                button {
+                    class: "btn-icon recent-file-remove",
+                    title: "{remove_text}",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        AppActions::remove_recent_file(&mut state, path_for_remove.clone());
+                    },
+                    CloseIcon { size: 12 }
+                }
+            }
+        }
+    }
+}
+
+/// 格式化相对时间 / Format relative time
+fn format_relative_time(timestamp: u64, lang: Language) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let elapsed_secs = now.saturating_sub(timestamp);
+
+    if elapsed_secs < 60 {
+        t("just_now", lang)
+    } else if elapsed_secs < 3600 {
+        let mins = elapsed_secs / 60;
+        match lang {
+            Language::ZhCN => format!("{} 分钟前", mins),
+            Language::EnUS => format!("{}m ago", mins),
+        }
+    } else if elapsed_secs < 86400 {
+        let hours = elapsed_secs / 3600;
+        match lang {
+            Language::ZhCN => format!("{} 小时前", hours),
+            Language::EnUS => format!("{}h ago", hours),
+        }
+    } else {
+        let days = elapsed_secs / 86400;
+        match lang {
+            Language::ZhCN => format!("{} 天前", days),
+            Language::EnUS => format!("{}d ago", days),
         }
     }
 }

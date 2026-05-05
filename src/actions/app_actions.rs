@@ -2,9 +2,11 @@
 //!
 //! 处理主题切换、语言切换、侧边栏等全局操作
 
+use crate::actions::FileActions;
 use crate::config::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use crate::state::{AIProvider, AppState, Language, SidebarTab, Theme};
 use dioxus::prelude::{ReadableExt, WritableExt};
+use std::path::PathBuf;
 
 /// 应用 Actions 处理器 / App Actions Handler
 pub struct AppActions;
@@ -128,5 +130,28 @@ impl AppActions {
         config.provider = provider.clone();
         config.base_url = crate::services::ai::AIService::default_base_url(&provider).to_string();
         config.model = crate::services::ai::AIService::default_model(&provider).to_string();
+    }
+
+    /// 打开最近文件 / Open Recent File
+    /// 更新 frecency 并切换到该文件
+    /// Updates frecency and switches to the file
+    pub fn open_recent_file(state: &mut AppState, path: PathBuf) {
+        if let Err(e) = FileActions::open_file(state, path.clone()) {
+            tracing::error!("Failed to open recent file: {}", e);
+            return;
+        }
+        // 更新最近文件的 frecency / Update recent file frecency
+        {
+            let mut rf = state.recent_files.write();
+            rf.add(path);
+            let _ = rf.save();
+        }
+    }
+
+    /// 移除最近文件 / Remove Recent File
+    pub fn remove_recent_file(state: &mut AppState, path: PathBuf) {
+        let mut rf = state.recent_files.write();
+        rf.remove(&path);
+        let _ = rf.save();
     }
 }

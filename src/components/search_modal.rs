@@ -121,6 +121,7 @@ pub fn SearchModal() -> Element {
                     input {
                         r#type: "text",
                         class: "search-input",
+                        autofocus: true,
                         placeholder: "{find_text}...",
                         value: "{search_query}",
                         oninput: move |e| {
