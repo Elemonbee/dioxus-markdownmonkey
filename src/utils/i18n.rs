@@ -206,6 +206,22 @@ impl I18n {
         texts.insert("new_file", lang_map("新建文件", "New File"));
         texts.insert("export_html", lang_map("导出 HTML", "Export HTML"));
         texts.insert("export_pdf", lang_map("导出 PDF", "Export PDF"));
+        texts.insert("export_docx", lang_map("导出 Word", "Export Word"));
+        texts.insert("export_txt", lang_map("导出纯文本", "Export Text"));
+
+        // 导出状态 / Export Status
+        texts.insert(
+            "exporting",
+            lang_map("正在导出 {format}...", "Exporting {format}..."),
+        );
+        texts.insert(
+            "export_complete",
+            lang_map("{format} 导出完成", "{format} export completed"),
+        );
+        texts.insert(
+            "export_failed",
+            lang_map("{format} 导出失败", "{format} export failed"),
+        );
         texts.insert("bold", lang_map("粗体", "Bold"));
         texts.insert("italic", lang_map("斜体", "Italic"));
         texts.insert("code", lang_map("代码", "Code"));
@@ -241,6 +257,19 @@ impl I18n {
             "add_headings",
             lang_map("添加标题以生成大纲", "Add headings to generate outline"),
         );
+
+        // 最近文件 / Recent Files
+        texts.insert("recent", lang_map("最近", "Recent"));
+        texts.insert(
+            "no_recent_files",
+            lang_map("暂无最近文件", "No Recent Files"),
+        );
+        texts.insert(
+            "no_recent_hint",
+            lang_map("打开文件后将显示在此处", "Opened files will appear here"),
+        );
+        texts.insert("just_now", lang_map("刚刚", "Just now"));
+        texts.insert("remove", lang_map("移除", "Remove"));
 
         // AI 结果 / AI Results
         texts.insert("copy", lang_map("复制", "Copy"));
@@ -405,6 +434,18 @@ impl I18n {
             "models_fetch_error",
             lang_map("获取模型失败", "Failed to fetch models"),
         );
+
+        // API 连接测试 / API Connection Test
+        texts.insert("test_connection", lang_map("测试连接", "Test Connection"));
+        texts.insert(
+            "connection_success",
+            lang_map("连接成功", "Connection successful"),
+        );
+        texts.insert(
+            "connection_failed",
+            lang_map("连接失败", "Connection failed"),
+        );
+        texts.insert("connection_testing", lang_map("正在测试...", "Testing..."));
         texts.insert(
             "large_file_threshold",
             lang_map("大文件提醒阈值", "Large File Warning Threshold"),

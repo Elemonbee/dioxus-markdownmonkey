@@ -50,7 +50,7 @@ fn get_sanitizer() -> &'static Builder<'static> {
         ]);
         builder.add_generic_attributes(["id", "class", "style"]);
         builder.add_tag_attributes("a", ["href", "title"]);
-        builder.add_tag_attributes("img", ["src", "alt", "title", "width", "height"]);
+        builder.add_tag_attributes("img", ["src", "alt", "title", "width", "height", "loading"]);
         builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
         builder.add_tag_attributes("td", ["align", "valign"]);
         builder.add_tag_attributes("th", ["align", "valign"]);
@@ -441,7 +441,7 @@ pub fn mermaid_script() -> &'static str {
     // 初始化 Mermaid / Initialize Mermaid
     function initMermaid() {
         if (typeof mermaid !== 'undefined') {
-            mermaid.initialize({ 
+            mermaid.initialize({
                 startOnLoad: true,
                 theme: 'dark',
                 securityLevel: 'strict'

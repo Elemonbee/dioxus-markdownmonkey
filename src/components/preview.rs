@@ -68,7 +68,26 @@ pub fn Preview() -> Element {
                 r#"
             (function() {
                 if (typeof mermaid !== 'undefined' && mermaid.run) {
-                    try { mermaid.run(); } catch(e) {}
+                    try {
+                        mermaid.run({
+                            querySelector: '.mermaid:not([data-mermaid-error])',
+                            postRenderCallback: function(id) {
+                                // 成功渲染后标记 / Mark as successfully rendered
+                                var el = document.getElementById(id);
+                                if (el) el.dataset.rendered = 'true';
+                            }
+                        });
+                    } catch(e) {
+                        // 对未渲染的 mermaid 块显示错误提示 / Show error for unrendered mermaid blocks
+                        var mermaidDivs = document.querySelectorAll('.mermaid:not([data-mermaid-error])');
+                        mermaidDivs.forEach(function(div) {
+                            if (!div.dataset.rendered && !div.querySelector('svg')) {
+                                div.dataset.mermaidError = 'true';
+                                div.style.cssText = 'font-family:monospace;white-space:pre;background:rgba(255,100,50,0.1);padding:10px;border-radius:4px;border:1px solid rgba(255,100,50,0.3);color:#ff6432;font-size:13px;';
+                                div.textContent = '[Mermaid Error] ' + div.textContent;
+                            }
+                        });
+                    }
                 }
                 if (typeof MathJax !== 'undefined' && MathJax.typesetPromise) {
                     var preview = document.getElementById('preview-scroll');

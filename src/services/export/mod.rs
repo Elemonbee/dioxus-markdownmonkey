@@ -1,10 +1,11 @@
-#![allow(dead_code)]
 //! 导出服务 / Export Service
 //!
 //! 支持 PDF、HTML、DOCX、纯文本导出
 //! Support PDF, HTML, DOCX, plain text export
 //!
 //! PDF 导出使用系统字体支持中文 / PDF export uses system fonts for Chinese support
+
+#![allow(dead_code)]
 
 mod docx;
 mod html;

@@ -163,6 +163,22 @@ body {
 }
 
 /* ============================================
+   导出状态 / Export Status
+   ============================================ */
+
+.export-status {
+  font-style: italic;
+}
+
+.export-complete {
+  color: var(--accent-success);
+}
+
+.export-failed {
+  color: var(--accent-error);
+}
+
+/* ============================================
    响应式布局 / Responsive Layout
    ============================================ */
 

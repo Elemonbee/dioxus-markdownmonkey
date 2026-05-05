@@ -103,11 +103,19 @@ pub struct AppState {
     pub workspace_root: Signal<Option<PathBuf>>, // 工作区根目录 / Workspace Root
     pub file_list: Signal<Vec<PathBuf>>,         // 文件列表 / File List
 
+    // ========== 最近文件状态 / Recent Files State ==========
+    /// 最近打开的文件列表 / Recently opened files list
+    pub recent_files: Signal<crate::services::recent_files::RecentFiles>,
+
     // ========== 自动保存状态 / Auto Save State ==========
     /// 自动保存是否启用 / Is Auto Save Enabled
     pub auto_save_enabled: Signal<bool>,
     /// 自动保存间隔（秒）/ Auto Save Interval (seconds)
     pub auto_save_interval: Signal<u32>,
+
+    // ========== 导出状态 / Export State ==========
+    /// 导出进度状态 / Export progress status
+    pub export_status: Signal<crate::state::ExportStatus>,
 
     // ========== 文件监控状态 / File Watch State ==========
     /// 文件是否被外部修改 / Is File Externally Modified
@@ -208,9 +216,15 @@ impl AppState {
             workspace_root: Signal::new(None),
             file_list: Signal::new(Vec::new()),
 
+            // 最近文件状态 / Recent Files State
+            recent_files: Signal::new(crate::services::recent_files::RecentFiles::load()),
+
             // 自动保存状态 / Auto Save State
             auto_save_enabled: Signal::new(false),
             auto_save_interval: Signal::new(DEFAULT_AUTO_SAVE_INTERVAL_SECS),
+
+            // 导出状态 / Export State
+            export_status: Signal::new(crate::state::ExportStatus::Idle),
 
             // 文件监控状态 / File Watch State
             file_external_modified: Signal::new(false),

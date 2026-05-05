@@ -225,6 +225,20 @@
   background-color: var(--bg-hover);
 }
 
+.file-item.focused {
+  background-color: var(--bg-tertiary);
+}
+
+.file-tree-flat:focus {
+  outline: none;
+}
+
+.file-tree-flat:focus .file-item.focused {
+  background-color: var(--bg-tertiary);
+  outline: 1px solid var(--accent-primary);
+  outline-offset: -1px;
+}
+
 .file-item .arrow {
   width: 12px;
   font-size: 8px;
@@ -400,4 +414,95 @@
   font-size: 11px;
   margin-top: 12px !important;
   opacity: 0.5;
+}
+
+/* ============================================
+   Recent Files View / 最近文件视图
+   ============================================ */
+
+.recent-files-view {
+  padding: 4px;
+}
+
+.recent-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: var(--border-radius);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-size: var(--font-size-sm);
+  gap: 8px;
+}
+
+.recent-file-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.recent-file-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.recent-file-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.recent-file-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.recent-file-path {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.recent-file-time {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.recent-file-remove {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  padding: 2px;
+  border-radius: 4px;
+  color: var(--text-muted);
+}
+
+.recent-file-remove:hover {
+  color: var(--accent-error);
+}
+
+.recent-file-item:hover .recent-file-remove {
+  opacity: 1;
 }

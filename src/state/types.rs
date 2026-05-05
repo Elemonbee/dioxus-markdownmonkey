@@ -31,6 +31,23 @@ pub enum SaveStatus {
     Unsaved, // 未保存 / Unsaved
 }
 
+/// 导出状态 / Export Status
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum ExportStatus {
+    #[default]
+    Idle, // 空闲 / Idle
+    Exporting {
+        format_name: String,
+    }, // 导出中 / Exporting
+    Completed {
+        format_name: String,
+    }, // 导出完成 / Export completed
+    Failed {
+        format_name: String,
+        error: String,
+    }, // 导出失败 / Export failed
+}
+
 /// 标签信息 / Tab Information
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabInfo {
@@ -135,7 +152,8 @@ impl Default for AIConfig {
 pub enum SidebarTab {
     #[default]
     Outline, // 大纲 / Outline
-    Files, // 文件 / Files
+    Files,  // 文件 / Files
+    Recent, // 最近 / Recent
 }
 
 /// 历史记录最大容量 / History Maximum Capacity

@@ -1,8 +1,9 @@
-#![allow(dead_code)]
 //! 设置持久化服务 / Settings Persistence Service
 //!
 //! 注意：部分功能为预留功能，暂未使用
 //! Note: Some functions are reserved for future use, not yet used
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::fs;

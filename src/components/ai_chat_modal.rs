@@ -139,6 +139,7 @@ pub fn AiChatModal() -> Element {
                         div { class: "ai-input-section",
                             textarea {
                                 class: "ai-input",
+                                autofocus: true,
                                 placeholder: "{placeholder_t}",
                                 value: "{input_text}",
                                 oninput: move |e| {

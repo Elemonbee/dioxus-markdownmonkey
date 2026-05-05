@@ -5,8 +5,7 @@
 use crate::actions::{AppActions, EditorActions, FileActions};
 use crate::components::icons::*;
 use crate::services::export::ExportService;
-use crate::services::recent_files::RecentFiles;
-use crate::state::AppState;
+use crate::state::{AppState, ExportStatus};
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
 use rfd::AsyncFileDialog;
@@ -26,6 +25,8 @@ pub fn Toolbar() -> Element {
     let save_file_t = t("save_file", lang);
     let export_html_t = t("export_html", lang);
     let export_pdf_t = t("export_pdf", lang);
+    let export_docx_t = t("export_docx", lang);
+    let export_txt_t = t("export_txt", lang);
     let undo_t = t("undo", lang);
     let redo_t = t("redo", lang);
     let bold_t = t("bold", lang);
@@ -116,9 +117,13 @@ pub fn Toolbar() -> Element {
                             if let Some(file) = file {
                                 let path = file.path().to_path_buf();
                                 if FileActions::open_file(&mut state, path.clone()).is_ok() {
-                                    let mut recent = RecentFiles::load();
-                                    recent.add(path);
-                                    let _ = recent.save();
+                                    // 更新最近文件（通过 AppState Signal）
+                                    // Update recent files (via AppState Signal)
+                                    {
+                                        let mut rf = state.recent_files.write();
+                                        rf.add(path);
+                                        let _ = rf.save();
+                                    }
                                 }
                             }
                         });
@@ -160,6 +165,7 @@ pub fn Toolbar() -> Element {
                     title: "{export_html_t}",
                     onclick: move |_| {
                         let content = state.content.read().clone();
+                        let mut export_status = state.export_status;
                         spawn(async move {
                             let file = AsyncFileDialog::new()
                                 .add_filter("HTML", &["html"])
@@ -173,8 +179,22 @@ pub fn Toolbar() -> Element {
                                     p
                                 } else { path };
 
-                                if let Err(e) = ExportService::export_to_html(&content, &path) {
-                                    tracing::error!("Export failed: {}", e);
+                                *export_status.write() = ExportStatus::Exporting {
+                                    format_name: "HTML".to_string(),
+                                };
+                                match ExportService::export_to_html(&content, &path) {
+                                    Ok(()) => {
+                                        *export_status.write() = ExportStatus::Completed {
+                                            format_name: "HTML".to_string(),
+                                        };
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Export failed: {}", e);
+                                        *export_status.write() = ExportStatus::Failed {
+                                            format_name: "HTML".to_string(),
+                                            error: e.to_string(),
+                                        };
+                                    }
                                 }
                             }
                         });
@@ -186,6 +206,7 @@ pub fn Toolbar() -> Element {
                     title: "{export_pdf_t}",
                     onclick: move |_| {
                         let content = state.content.read().clone();
+                        let mut export_status = state.export_status;
                         spawn(async move {
                             let file = AsyncFileDialog::new()
                                 .add_filter("PDF", &["pdf"])
@@ -199,13 +220,109 @@ pub fn Toolbar() -> Element {
                                     p
                                 } else { path };
 
-                                if let Err(e) = ExportService::export_to_pdf(&content, &path) {
-                                    tracing::error!("Export failed: {}", e);
+                                *export_status.write() = ExportStatus::Exporting {
+                                    format_name: "PDF".to_string(),
+                                };
+                                match ExportService::export_to_pdf(&content, &path) {
+                                    Ok(()) => {
+                                        *export_status.write() = ExportStatus::Completed {
+                                            format_name: "PDF".to_string(),
+                                        };
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Export failed: {}", e);
+                                        *export_status.write() = ExportStatus::Failed {
+                                            format_name: "PDF".to_string(),
+                                            error: e.to_string(),
+                                        };
+                                    }
                                 }
                             }
                         });
                     },
                     "PDF"
+                }
+                button {
+                    class: "toolbar-btn",
+                    title: "{export_docx_t}",
+                    onclick: move |_| {
+                        let content = state.content.read().clone();
+                        let mut export_status = state.export_status;
+                        spawn(async move {
+                            let file = AsyncFileDialog::new()
+                                .add_filter("Word", &["docx"])
+                                .save_file()
+                                .await;
+                            if let Some(file) = file {
+                                let path = file.path().to_path_buf();
+                                let path = if path.extension().is_none() {
+                                    let mut p = path;
+                                    p.set_extension("docx");
+                                    p
+                                } else { path };
+
+                                *export_status.write() = ExportStatus::Exporting {
+                                    format_name: "DOCX".to_string(),
+                                };
+                                match ExportService::export_to_docx(&content, &path) {
+                                    Ok(()) => {
+                                        *export_status.write() = ExportStatus::Completed {
+                                            format_name: "DOCX".to_string(),
+                                        };
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Export failed: {}", e);
+                                        *export_status.write() = ExportStatus::Failed {
+                                            format_name: "DOCX".to_string(),
+                                            error: e.to_string(),
+                                        };
+                                    }
+                                }
+                            }
+                        });
+                    },
+                    "DOCX"
+                }
+                button {
+                    class: "toolbar-btn",
+                    title: "{export_txt_t}",
+                    onclick: move |_| {
+                        let content = state.content.read().clone();
+                        let mut export_status = state.export_status;
+                        spawn(async move {
+                            let file = AsyncFileDialog::new()
+                                .add_filter("Text", &["txt"])
+                                .save_file()
+                                .await;
+                            if let Some(file) = file {
+                                let path = file.path().to_path_buf();
+                                let path = if path.extension().is_none() {
+                                    let mut p = path;
+                                    p.set_extension("txt");
+                                    p
+                                } else { path };
+
+                                *export_status.write() = ExportStatus::Exporting {
+                                    format_name: "TXT".to_string(),
+                                };
+                                match ExportService::export_to_text(&content, &path) {
+                                    Ok(()) => {
+                                        *export_status.write() = ExportStatus::Completed {
+                                            format_name: "TXT".to_string(),
+                                        };
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Export failed: {}", e);
+                                        *export_status.write() = ExportStatus::Failed {
+                                            format_name: "TXT".to_string(),
+                                            error: e.to_string(),
+                                        };
+                                    }
+                                }
+                            }
+                        });
+                    },
+                    "TXT"
                 }
             }
 
@@ -335,7 +452,7 @@ pub fn Toolbar() -> Element {
                         let image_t = image_t.clone();
                         spawn(async move {
                             let file = AsyncFileDialog::new()
-                                .add_filter(&image_t, &["png", "jpg", "jpeg", "gif", "webp"])
+                                .add_filter(&image_t, &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "tiff", "tif"])
                                 .pick_file()
                                 .await;
                             if let Some(file) = file {

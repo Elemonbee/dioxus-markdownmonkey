@@ -5,7 +5,7 @@
 //! Support virtual scrolling line numbers for large file performance
 
 use crate::actions::shortcut_actions::ShortcutActions;
-use crate::actions::{AppActions, EditorActions};
+use crate::actions::{AppActions, EditorActions, FileActions};
 use crate::components::icons::PreviewIcon;
 use crate::config::{
     EDITOR_LINE_HEIGHT_PX, EDITOR_VIRTUAL_SCROLL_BUFFER_LINES,
@@ -14,6 +14,7 @@ use crate::config::{
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::document;
+use dioxus::html::HasFileData;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
 
 /// 编辑器滚动比例（全局信号）/ Editor scroll ratio (global signal)
@@ -132,10 +133,27 @@ pub fn Editor() -> Element {
             },
             ondrop: move |e| {
                 *is_dragging.write() = false;
-                // Dioxus Desktop 拖放事件处理
-                // Handle drag-drop events in Dioxus Desktop
-                let _ = e.data();
-                tracing::info!("文件拖放 - 使用 Ctrl+O 打开文件 / File drop - use Ctrl+O to open files");
+                e.prevent_default();
+                // 处理文件拖放 / Handle file drop
+                let files = e.data().files();
+                for i in 0..files.len() {
+                    if let Some(file) = files.get(i) {
+                        let path_str = file.name().to_string();
+                        let path = std::path::PathBuf::from(&path_str);
+                        // 检查是否为 Markdown 文件 / Check if it's a Markdown file
+                        let ext = path.extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("");
+                        if ext == "md" || ext == "markdown" || ext == "txt" || ext.is_empty() {
+                            if FileActions::open_file(&mut state, path.clone()).is_ok() {
+                                let mut rf = state.recent_files.write();
+                                rf.add(path);
+                                let _ = rf.save();
+                            }
+                            break; // 只打开第一个有效文件 / Only open first valid file
+                        }
+                    }
+                }
             },
 
             div { class: "editor-header",

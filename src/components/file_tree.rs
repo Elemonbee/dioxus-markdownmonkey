@@ -19,7 +19,9 @@ pub fn FileTree() -> Element {
     let mut search_query = use_signal(String::new);
     let mut is_searching = use_signal(|| false);
     // 折叠状态：记录哪些目录被折叠 / Collapse state: tracks which dirs are collapsed
-    let collapsed_dirs = use_signal(std::collections::HashSet::<String>::new);
+    let mut collapsed_dirs = use_signal(std::collections::HashSet::<String>::new);
+    // 键盘导航焦点索引 / Keyboard navigation focus index
+    let mut focused_index: Signal<Option<usize>> = use_signal(|| None);
 
     // 读取状态
     let workspace = state.workspace_root.read().clone();
@@ -217,7 +219,80 @@ pub fn FileTree() -> Element {
                 div {
                     class: "file-tree-flat",
                     style: "{file_tree_display}",
-                    for item in tree_items.iter() {
+                    tabindex: "0",
+                    onkeydown: move |e| {
+                        let total = tree_items.len();
+                        if total == 0 { return; }
+                        let key = e.key();
+                        let current = focused_index.read().unwrap_or(0);
+
+                        match key {
+                            Key::ArrowDown => {
+                                let next = (current + 1).min(total - 1);
+                                focused_index.set(Some(next));
+                            }
+                            Key::ArrowUp => {
+                                let prev = current.saturating_sub(1);
+                                focused_index.set(Some(prev));
+                            }
+                            Key::Enter => {
+                                if let Some(item) = tree_items.get(current) {
+                                    if item.is_dir {
+                                        let key = item.path.to_string_lossy().to_string();
+                                        let mut dirs = collapsed_dirs.write();
+                                        if dirs.contains(&key) {
+                                            dirs.remove(&key);
+                                        } else {
+                                            dirs.insert(key);
+                                        }
+                                    } else {
+                                        let ext = item.path.extension()
+                                            .and_then(|e| e.to_str())
+                                            .unwrap_or("");
+                                        if ext == "md" || ext == "markdown" || ext == "txt" {
+                                            if let Err(err) = FileActions::open_file(&mut state, item.path.clone()) {
+                                                tracing::error!("Failed to open file: {}", err);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Key::ArrowRight => {
+                                // 展开目录 / Expand directory
+                                if let Some(item) = tree_items.get(current) {
+                                    if item.is_dir {
+                                        let key = item.path.to_string_lossy().to_string();
+                                        let mut dirs = collapsed_dirs.write();
+                                        dirs.remove(&key);
+                                    }
+                                }
+                            }
+                            Key::ArrowLeft => {
+                                // 折叠目录或移动到父级 / Collapse dir or move to parent
+                                if let Some(item) = tree_items.get(current) {
+                                    if item.is_dir {
+                                        let key = item.path.to_string_lossy().to_string();
+                                        let mut dirs = collapsed_dirs.write();
+                                        dirs.insert(key);
+                                    } else if item.depth > 0 {
+                                        // 文件：找到父目录 / File: find parent directory
+                                        let target_depth = item.depth - 1;
+                                        for i in (0..current).rev() {
+                                            if let Some(prev) = tree_items.get(i) {
+                                                if prev.depth == target_depth && prev.is_dir {
+                                                    focused_index.set(Some(i));
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    },
+
+                    for (idx, item) in tree_items.iter().enumerate() {
                         FileTreeItemFlat {
                             key: "{item.path.display()}",
                             path: item.path.clone(),
@@ -225,6 +300,10 @@ pub fn FileTree() -> Element {
                             is_dir: item.is_dir,
                             name: item.name.clone(),
                             collapsed_dirs: collapsed_dirs,
+                            is_focused: focused_index.read().is_some_and(|fi| fi == idx),
+                            on_focus: move |_| {
+                                focused_index.set(Some(idx));
+                            },
                         }
                     }
                 }
@@ -388,6 +467,9 @@ struct FileTreeItemFlatProps {
     name: String,
     #[props(!optional)]
     collapsed_dirs: Signal<std::collections::HashSet<String>>,
+    #[props(default = false)]
+    is_focused: bool,
+    on_focus: EventHandler<()>,
 }
 
 /// 获取文件类型图标的 SVG 字符串（用于 inline 渲染）
@@ -501,13 +583,16 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
     };
 
     let indent = depth * 16;
-    let item_class = if is_dir {
-        "file-item folder"
+    let mut item_class = if is_dir {
+        "file-item folder".to_string()
     } else if is_markdown {
-        "file-item markdown"
+        "file-item markdown".to_string()
     } else {
-        "file-item"
+        "file-item".to_string()
     };
+    if props.is_focused {
+        item_class.push_str(" focused");
+    }
 
     // i18n
     let lang = *state.language.read();
@@ -538,8 +623,12 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
             class: "{item_class}",
             style: "padding-left: {indent}px;",
             role: "treeitem",
+            tabindex: "-1",
             aria_expanded: if is_dir { Some(if is_collapsed { "false" } else { "true" }) } else { None },
             "aria-label": "{name}",
+            onfocus: move |_| {
+                props.on_focus.call(());
+            },
             onclick: move |e| {
                 e.stop_propagation();
                 if *show_context_menu.read() {
