@@ -206,6 +206,8 @@ impl I18n {
         texts.insert("new_file", lang_map("新建文件", "New File"));
         texts.insert("export_html", lang_map("导出 HTML", "Export HTML"));
         texts.insert("export_pdf", lang_map("导出 PDF", "Export PDF"));
+        texts.insert("export_docx", lang_map("导出 DOCX", "Export DOCX"));
+        texts.insert("export_text", lang_map("导出纯文本", "Export Plain Text"));
         texts.insert("bold", lang_map("粗体", "Bold"));
         texts.insert("italic", lang_map("斜体", "Italic"));
         texts.insert("code", lang_map("代码", "Code"));

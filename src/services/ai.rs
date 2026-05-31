@@ -84,13 +84,27 @@ pub struct AIService {
     base_url: String, // API 基础 URL / API Base URL
     api_key: String,  // API 密钥 / API Key
     model: String,    // 模型名称 / Model Name
+    temperature: f32, // 温度参数 / Temperature
 }
 
 impl AIService {
     /// 创建新的 AI 服务（使用默认 120 秒超时）
     /// Create New AI Service (with default 120-second timeout)
+    #[allow(dead_code)]
     pub fn new(api_key: String, base_url: Option<String>, model: Option<String>) -> Self {
         Self::with_timeout(api_key, base_url, model, DEFAULT_TIMEOUT_SECS)
+    }
+
+    /// 创建新的 AI 服务，并使用指定温度 / Create AI service with a specific temperature
+    pub fn with_temperature(
+        api_key: String,
+        base_url: Option<String>,
+        model: Option<String>,
+        temperature: f32,
+    ) -> Self {
+        let mut service = Self::with_timeout(api_key, base_url, model, DEFAULT_TIMEOUT_SECS);
+        service.temperature = temperature.clamp(0.0, 1.0);
+        service
     }
 
     /// 创建新的 AI 服务（可配置超时）
@@ -101,10 +115,9 @@ impl AIService {
         model: Option<String>,
         timeout_secs: u64,
     ) -> Self {
-        let normalized_base_url = base_url
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
-            .trim_end_matches('/')
-            .to_string();
+        let normalized_base_url = Self::normalize_base_url(
+            &base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        );
 
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
@@ -115,6 +128,7 @@ impl AIService {
             base_url: normalized_base_url,
             api_key,
             model: model.unwrap_or_else(|| "gpt-4o-mini".to_string()),
+            temperature: 0.7,
         }
     }
 
@@ -127,6 +141,20 @@ impl AIService {
             AIProvider::Kimi => "https://api.moonshot.cn/v1",
             AIProvider::Ollama => "http://localhost:11434/v1",
             AIProvider::OpenRouter => "https://openrouter.ai/api/v1",
+        }
+    }
+
+    /// 归一化 API Base URL，并兼容旧设置中缺失的 /v1 后缀。
+    /// Normalize API base URLs and migrate older settings missing the /v1 suffix.
+    pub fn normalize_base_url(base_url: &str) -> String {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        match trimmed {
+            "https://api.openai.com" => "https://api.openai.com/v1".to_string(),
+            "https://api.deepseek.com" => "https://api.deepseek.com/v1".to_string(),
+            "https://api.moonshot.cn" => "https://api.moonshot.cn/v1".to_string(),
+            "https://openrouter.ai/api" => "https://openrouter.ai/api/v1".to_string(),
+            "http://localhost:11434" => "http://localhost:11434/v1".to_string(),
+            _ => trimmed.to_string(),
         }
     }
 
@@ -167,7 +195,7 @@ impl AIService {
             model: self.model.clone(),
             messages,
             stream: false,
-            temperature: Some(0.7),
+            temperature: Some(self.temperature),
             max_tokens: Some(2048),
         };
 
@@ -286,7 +314,7 @@ impl AIService {
             model: self.model.clone(),
             messages,
             stream: true,
-            temperature: Some(0.7),
+            temperature: Some(self.temperature),
             max_tokens: Some(4096),
         };
 
@@ -796,6 +824,29 @@ mod tests {
         );
 
         assert_eq!(service.base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_base_url_adds_legacy_openai_v1_suffix() {
+        let service = AIService::new(
+            "key".to_string(),
+            Some("https://api.openai.com".to_string()),
+            Some("gpt-4o-mini".to_string()),
+        );
+
+        assert_eq!(service.base_url, "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn test_temperature_is_clamped() {
+        let service = AIService::with_temperature(
+            "key".to_string(),
+            Some("https://api.openai.com/v1".to_string()),
+            Some("gpt-4o-mini".to_string()),
+            1.5,
+        );
+
+        assert_eq!(service.temperature, 1.0);
     }
 
     #[test]

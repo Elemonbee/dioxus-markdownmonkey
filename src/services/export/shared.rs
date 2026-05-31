@@ -27,12 +27,6 @@ impl From<zip::result::ZipError> for ExportError {
     }
 }
 
-impl From<printpdf::Error> for ExportError {
-    fn from(e: printpdf::Error) -> Self {
-        ExportError::Pdf(e.to_string())
-    }
-}
-
 /// PDF 导出配置 / PDF Export Configuration
 #[derive(Clone, Debug)]
 pub struct PdfExportConfig {

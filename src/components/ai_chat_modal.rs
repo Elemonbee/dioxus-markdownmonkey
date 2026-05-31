@@ -200,6 +200,7 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                 let api_key = props.config.api_key.clone();
                 let base_url = props.config.base_url.clone();
                 let model = props.config.model.clone();
+                let temperature = props.config.temperature;
                 let content = props.content.clone();
                 let input = props.input.clone();
 
@@ -226,7 +227,8 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                 *show_ai_result_signal.write() = true;
 
                 spawn(async move {
-                    let service = AIService::new(api_key, Some(base_url), Some(model));
+                    let service =
+                        AIService::with_temperature(api_key, Some(base_url), Some(model), temperature);
 
                     // 通过 AITask 统一构建消息 / Unified message building via AITask
                     let messages = task.build_messages(&content, &input);

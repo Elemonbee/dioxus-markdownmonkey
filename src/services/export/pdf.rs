@@ -3,10 +3,28 @@
 //! PDF 导出使用系统字体支持中文 / PDF export uses system fonts for Chinese support
 
 use super::shared::*;
-use printpdf::*;
+use printpdf::{
+    BuiltinFont, FontId, Mm, Op, ParsedFont, PdfDocument, PdfFontHandle, PdfPage, PdfSaveOptions,
+    PdfWarnMsg, Point, Pt, TextItem,
+};
 use std::fs::File;
 use std::io::{BufWriter, Read};
 use std::path::Path;
+
+#[derive(Clone)]
+enum ActiveFont {
+    Builtin(BuiltinFont),
+    External(FontId),
+}
+
+impl ActiveFont {
+    fn handle(&self) -> PdfFontHandle {
+        match self {
+            Self::Builtin(font) => PdfFontHandle::Builtin(*font),
+            Self::External(id) => PdfFontHandle::External(id.clone()),
+        }
+    }
+}
 
 /// 系统中文字体路径 / System Chinese Font Paths
 fn get_system_cjk_font_paths() -> Vec<std::path::PathBuf> {
@@ -93,7 +111,7 @@ fn find_available_system_font() -> Option<(std::path::PathBuf, Vec<u8>)> {
     None
 }
 
-/// 导出为 PDF（改进版）/ Export to PDF (Improved)
+/// 导出为 PDF / Export to PDF
 pub fn export_to_pdf(content: &str, output_path: &Path) -> Result<(), ExportError> {
     export_to_pdf_with_config(content, output_path, PdfExportConfig::default())
 }
@@ -106,38 +124,11 @@ pub fn export_to_pdf_with_config(
 ) -> Result<(), ExportError> {
     let page_width = Mm(config.page_width);
     let page_height = Mm(config.page_height);
+    let mut doc = PdfDocument::new("Markdown Export");
+    let font = resolve_font(&mut doc, content);
 
-    let (doc, page1, layer1) =
-        PdfDocument::new("Markdown Export", page_width, page_height, "Layer 1");
-
-    let has_cjk = contains_cjk(content);
-
-    let font = if has_cjk {
-        if let Some((_path, font_data)) = find_available_system_font() {
-            use std::io::Cursor;
-            doc.add_external_font(Cursor::new(font_data)).map_err(|e| {
-                ExportError::Font(format!(
-                    "加载系统字体失败/Failed to load system font: {}",
-                    e
-                ))
-            })?
-        } else {
-            tracing::warn!(
-                "未找到中文字体，中文可能无法正确显示 / \
-                 No Chinese font found, Chinese may not display correctly"
-            );
-            doc.add_builtin_font(BuiltinFont::Helvetica)
-                .map_err(|e| ExportError::Font(e.to_string()))?
-        }
-    } else {
-        doc.add_builtin_font(BuiltinFont::Helvetica)
-            .map_err(|e| ExportError::Font(e.to_string()))?
-    };
-
-    let line_height = config.font_size * config.line_height_multiplier;
-    let content_width_mm = config.page_width - (config.margin * 2.0);
-
-    let mut current_layer = doc.get_page(page1).get_layer(layer1);
+    let mut pages = Vec::new();
+    let mut ops = start_page_ops();
     let mut y_pos = config.page_height - config.margin;
     let mut page_count = 1;
     let mut in_code_block = false;
@@ -150,8 +141,8 @@ pub fn export_to_pdf_with_config(
                 in_code_block = false;
                 render_code_block(
                     &code_block_lines.join("\n"),
-                    &doc,
-                    &mut current_layer,
+                    &mut pages,
+                    &mut ops,
                     &font,
                     &mut y_pos,
                     &mut page_count,
@@ -160,7 +151,7 @@ pub fn export_to_pdf_with_config(
                     page_height,
                 );
                 code_block_lines.clear();
-                y_pos -= line_height * 0.5;
+                y_pos -= config.font_size * config.line_height_multiplier * 0.5;
             } else {
                 in_code_block = true;
                 code_block_lines.clear();
@@ -173,50 +164,30 @@ pub fn export_to_pdf_with_config(
             continue;
         }
 
+        let line_height = config.font_size * config.line_height_multiplier;
         if line.is_empty() {
             y_pos -= line_height;
+            ensure_page_space(
+                &mut pages,
+                &mut ops,
+                &mut y_pos,
+                &mut page_count,
+                line_height,
+                &config,
+                page_width,
+                page_height,
+            );
             continue;
         }
 
         let (text, font_size_override, _is_bold) = process_markdown_line_v2(line);
         let current_font_size = font_size_override.unwrap_or(config.font_size);
-
-        let wrapped_lines = wrap_text_by_width(&text, content_width_mm, current_font_size);
-
-        for wrapped_line in wrapped_lines {
-            if y_pos < config.margin + current_font_size {
-                let (new_page, new_layer) = doc.add_page(page_width, page_height, "Layer 1");
-                current_layer = doc.get_page(new_page).get_layer(new_layer);
-                y_pos = config.page_height - config.margin;
-                page_count += 1;
-
-                let page_text = format!("- {} -", page_count);
-                current_layer.use_text(
-                    &page_text,
-                    9.0,
-                    Mm((config.page_width - 20.0) / 2.0),
-                    Mm(config.margin / 2.0),
-                    &font,
-                );
-            }
-
-            current_layer.use_text(
-                &wrapped_line,
-                current_font_size,
-                Mm(config.margin),
-                Mm(y_pos),
-                &font,
-            );
-
-            y_pos -= current_font_size * config.line_height_multiplier;
-        }
-    }
-
-    if in_code_block && !code_block_lines.is_empty() {
-        render_code_block(
-            &code_block_lines.join("\n"),
-            &doc,
-            &mut current_layer,
+        write_wrapped_text(
+            &text,
+            config.margin,
+            current_font_size,
+            &mut pages,
+            &mut ops,
             &font,
             &mut y_pos,
             &mut page_count,
@@ -226,7 +197,29 @@ pub fn export_to_pdf_with_config(
         );
     }
 
-    doc.save(&mut BufWriter::new(File::create(output_path)?))?;
+    if in_code_block && !code_block_lines.is_empty() {
+        render_code_block(
+            &code_block_lines.join("\n"),
+            &mut pages,
+            &mut ops,
+            &font,
+            &mut y_pos,
+            &mut page_count,
+            &config,
+            page_width,
+            page_height,
+        );
+    }
+
+    finish_page(&mut pages, &mut ops, page_width, page_height);
+    doc.with_pages(pages);
+
+    let mut warnings: Vec<PdfWarnMsg> = Vec::new();
+    let mut writer = BufWriter::new(File::create(output_path)?);
+    doc.save_writer(&mut writer, &PdfSaveOptions::default(), &mut warnings);
+    for warning in warnings {
+        tracing::warn!("PDF export warning: {:?}", warning);
+    }
 
     tracing::info!(
         "PDF 导出完成，共 {} 页 / PDF export completed, {} pages",
@@ -236,13 +229,115 @@ pub fn export_to_pdf_with_config(
     Ok(())
 }
 
+fn resolve_font(doc: &mut PdfDocument, content: &str) -> ActiveFont {
+    if contains_cjk(content) {
+        if let Some((path, font_data)) = find_available_system_font() {
+            let mut warnings = Vec::new();
+            if let Some(parsed) = ParsedFont::from_bytes(&font_data, 0, &mut warnings) {
+                for warning in warnings {
+                    tracing::warn!("PDF font parse warning: {:?}", warning);
+                }
+                let id = doc.add_font(&parsed);
+                return ActiveFont::External(id);
+            }
+
+            tracing::warn!(
+                "系统字体无法被 printpdf 解析，回退到 Helvetica: {:?} / \
+                 System font could not be parsed by printpdf, falling back to Helvetica: {:?}",
+                path,
+                path
+            );
+        }
+    }
+
+    ActiveFont::Builtin(BuiltinFont::Helvetica)
+}
+
+fn start_page_ops() -> Vec<Op> {
+    vec![Op::StartTextSection]
+}
+
+fn finish_page(pages: &mut Vec<PdfPage>, ops: &mut Vec<Op>, page_width: Mm, page_height: Mm) {
+    ops.push(Op::EndTextSection);
+    let page_ops = std::mem::replace(ops, start_page_ops());
+    pages.push(PdfPage::new(page_width, page_height, page_ops));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_page_space(
+    pages: &mut Vec<PdfPage>,
+    ops: &mut Vec<Op>,
+    y_pos: &mut f32,
+    page_count: &mut usize,
+    required_height: f32,
+    config: &PdfExportConfig,
+    page_width: Mm,
+    page_height: Mm,
+) {
+    if *y_pos >= config.margin + required_height {
+        return;
+    }
+
+    finish_page(pages, ops, page_width, page_height);
+    *y_pos = config.page_height - config.margin;
+    *page_count += 1;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_wrapped_text(
+    text: &str,
+    x_mm: f32,
+    font_size: f32,
+    pages: &mut Vec<PdfPage>,
+    ops: &mut Vec<Op>,
+    font: &ActiveFont,
+    y_pos: &mut f32,
+    page_count: &mut usize,
+    config: &PdfExportConfig,
+    page_width: Mm,
+    page_height: Mm,
+) {
+    let content_width_mm = config.page_width - x_mm - config.margin;
+    let wrapped_lines = wrap_text_by_width(text, content_width_mm, font_size);
+    let line_height = font_size * config.line_height_multiplier;
+
+    for wrapped_line in wrapped_lines {
+        ensure_page_space(
+            pages,
+            ops,
+            y_pos,
+            page_count,
+            line_height,
+            config,
+            page_width,
+            page_height,
+        );
+
+        ops.push(Op::SetFont {
+            font: font.handle(),
+            size: Pt(font_size),
+        });
+        ops.push(Op::SetLineHeight {
+            lh: Pt(line_height),
+        });
+        ops.push(Op::SetTextCursor {
+            pos: Point::new(Mm(x_mm), Mm(*y_pos)),
+        });
+        ops.push(Op::ShowText {
+            items: vec![TextItem::Text(wrapped_line)],
+        });
+
+        *y_pos -= line_height;
+    }
+}
+
 /// 渲染代码块（自动换行而非截断）/ Render code block (auto-wrap instead of truncate)
 #[allow(clippy::too_many_arguments)]
 fn render_code_block(
     code: &str,
-    doc: &PdfDocumentReference,
-    current_layer: &mut PdfLayerReference,
-    font: &IndirectFontRef,
+    pages: &mut Vec<PdfPage>,
+    ops: &mut Vec<Op>,
+    font: &ActiveFont,
     y_pos: &mut f32,
     page_count: &mut usize,
     config: &PdfExportConfig,
@@ -250,34 +345,22 @@ fn render_code_block(
     page_height: Mm,
 ) {
     let code_font_size = config.font_size * 0.85;
-    let line_height = code_font_size * config.line_height_multiplier;
-    let code_width_mm = config.page_width - (config.margin * 2.0) - 6.0;
 
     for code_line in code.lines() {
-        let wrapped = if code_line.is_empty() {
-            vec![" ".to_string()]
-        } else {
-            wrap_text_by_width(code_line, code_width_mm, code_font_size)
-        };
-
-        for display_line in &wrapped {
-            if *y_pos < config.margin + code_font_size {
-                let (new_page, new_layer) = doc.add_page(page_width, page_height, "Layer 1");
-                *current_layer = doc.get_page(new_page).get_layer(new_layer);
-                *y_pos = config.page_height - config.margin;
-                *page_count += 1;
-            }
-
-            current_layer.use_text(
-                display_line,
-                code_font_size,
-                Mm(config.margin + 3.0),
-                Mm(*y_pos),
-                font,
-            );
-
-            *y_pos -= line_height;
-        }
+        let display = if code_line.is_empty() { " " } else { code_line };
+        write_wrapped_text(
+            display,
+            config.margin + 3.0,
+            code_font_size,
+            pages,
+            ops,
+            font,
+            y_pos,
+            page_count,
+            config,
+            page_width,
+            page_height,
+        );
     }
 }
 

@@ -5,9 +5,20 @@
 
 #![allow(dead_code)]
 
-use keyring::Entry;
+use keyring_core::Entry;
+use std::sync::OnceLock;
 
 const KEYRING_SERVICE: &str = "markdownmonkey";
+static KEYRING_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+fn ensure_native_store() -> Result<(), String> {
+    KEYRING_INIT
+        .get_or_init(|| {
+            keyring::use_native_store(false)
+                .map_err(|e| format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e))
+        })
+        .clone()
+}
 
 /// 存储 API Key / Store API Key
 ///
@@ -15,6 +26,7 @@ const KEYRING_SERVICE: &str = "markdownmonkey";
 /// * `provider` - AI 提供商名称 / AI provider name
 /// * `api_key` - API 密钥 / API key
 pub fn store_api_key(provider: &str, api_key: &str) -> Result<(), String> {
+    ensure_native_store()?;
     let entry = Entry::new(KEYRING_SERVICE, provider)
         .map_err(|e| format!("创建密钥环条目失败 / Failed to create keyring entry: {}", e))?;
     entry
@@ -31,6 +43,7 @@ pub fn store_api_key(provider: &str, api_key: &str) -> Result<(), String> {
 /// # 返回 / Returns
 /// API 密钥，如果不存在则返回错误 / API key, or error if not exists
 pub fn get_api_key(provider: &str) -> Result<String, String> {
+    ensure_native_store()?;
     let entry = Entry::new(KEYRING_SERVICE, provider)
         .map_err(|e| format!("创建密钥环条目失败 / Failed to create keyring entry: {}", e))?;
     entry
@@ -43,6 +56,7 @@ pub fn get_api_key(provider: &str) -> Result<String, String> {
 /// # 参数 / Arguments
 /// * `provider` - AI 提供商名称 / AI provider name
 pub fn delete_api_key(provider: &str) -> Result<(), String> {
+    ensure_native_store()?;
     let entry = Entry::new(KEYRING_SERVICE, provider)
         .map_err(|e| format!("创建密钥环条目失败 / Failed to create keyring entry: {}", e))?;
     entry
@@ -56,6 +70,10 @@ pub fn delete_api_key(provider: &str) -> Result<(), String> {
 /// # 参数 / Arguments
 /// * `provider` - AI 提供商名称 / AI provider name
 pub fn has_api_key(provider: &str) -> bool {
+    if ensure_native_store().is_err() {
+        return false;
+    }
+
     Entry::new(KEYRING_SERVICE, provider)
         .ok()
         .and_then(|e| e.get_password().ok())
