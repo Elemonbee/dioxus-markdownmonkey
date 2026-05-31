@@ -70,12 +70,9 @@ pub fn Preview() -> Element {
                 if (typeof mermaid !== 'undefined' && mermaid.run) {
                     try { mermaid.run(); } catch(e) {}
                 }
-                if (typeof MathJax !== 'undefined' && MathJax.typesetPromise) {
-                    var preview = document.getElementById('preview-scroll');
-                    if (preview) {
-                        MathJax.typesetPromise([preview]).catch(function(err) {
-                            console.warn('MathJax typeset error:', err);
-                        });
+                if (window._mm_renderMath) {
+                    try { window._mm_renderMath(); } catch(e) {
+                        console.warn('KaTeX render error:', e);
                     }
                 }
             })();
@@ -90,11 +87,10 @@ pub fn Preview() -> Element {
     let mut scripts_injected = use_signal(|| false);
     if !*scripts_injected.read() {
         scripts_injected.set(true);
-        let scripts = format!("{} {}", mermaid_script(), katex_script());
-        let _ = document::eval(&format!(
-            "if (!document.getElementById('preview-scripts-done')) {{ var c = document.getElementById('preview-scripts'); if (c) {{ c.innerHTML = {}; c.id = 'preview-scripts-done'; }} }}",
-            serde_json::to_string(&scripts).unwrap_or_default()
-        ));
+        let scripts = format!("{} {}", mermaid_script(), katex_script())
+            .replace("<script>", "")
+            .replace("</script>", "");
+        let _ = document::eval(&scripts);
     }
 
     // i18n

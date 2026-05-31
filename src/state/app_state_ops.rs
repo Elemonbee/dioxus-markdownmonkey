@@ -665,7 +665,7 @@ impl AppState {
             return content.to_string();
         }
 
-        let workspace = self.get_image_output_dir();
+        let workspace = self.get_image_workspace_dir();
 
         // 匹配 data:image/xxx;base64,... 模式
         let re = match regex::Regex::new(
@@ -713,15 +713,16 @@ impl AppState {
     }
 
     /// 获取图片输出目录 / Get image output directory
-    fn get_image_output_dir(&self) -> Option<PathBuf> {
-        // 优先使用工作区目录/images / Prefer workspace/images
+    fn get_image_workspace_dir(&self) -> Option<PathBuf> {
+        // 优先使用工作区目录，由 ImageService 统一写入 images/ 子目录
+        // Prefer workspace root; ImageService appends the images/ subdirectory.
         if let Some(ref root) = *self.workspace_root.read() {
-            return Some(root.join("images"));
+            return Some(root.clone());
         }
-        // 其次使用当前文件所在目录/images / Then use current file's parent/images
+        // 其次使用当前文件所在目录 / Then use current file's parent directory
         if let Some(ref file_path) = *self.current_file.read() {
             if let Some(parent) = file_path.parent() {
-                return Some(parent.to_path_buf().join("images"));
+                return Some(parent.to_path_buf());
             }
         }
         None

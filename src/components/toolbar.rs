@@ -26,6 +26,8 @@ pub fn Toolbar() -> Element {
     let save_file_t = t("save_file", lang);
     let export_html_t = t("export_html", lang);
     let export_pdf_t = t("export_pdf", lang);
+    let export_docx_t = t("export_docx", lang);
+    let export_text_t = t("export_text", lang);
     let undo_t = t("undo", lang);
     let redo_t = t("redo", lang);
     let bold_t = t("bold", lang);
@@ -206,6 +208,58 @@ pub fn Toolbar() -> Element {
                         });
                     },
                     "PDF"
+                }
+                button {
+                    class: "toolbar-btn",
+                    title: "{export_docx_t}",
+                    onclick: move |_| {
+                        let content = state.content.read().clone();
+                        spawn(async move {
+                            let file = AsyncFileDialog::new()
+                                .add_filter("DOCX", &["docx"])
+                                .save_file()
+                                .await;
+                            if let Some(file) = file {
+                                let path = file.path().to_path_buf();
+                                let path = if path.extension().is_none() {
+                                    let mut p = path;
+                                    p.set_extension("docx");
+                                    p
+                                } else { path };
+
+                                if let Err(e) = ExportService::export_to_docx(&content, &path) {
+                                    tracing::error!("Export failed: {}", e);
+                                }
+                            }
+                        });
+                    },
+                    "DOCX"
+                }
+                button {
+                    class: "toolbar-btn",
+                    title: "{export_text_t}",
+                    onclick: move |_| {
+                        let content = state.content.read().clone();
+                        spawn(async move {
+                            let file = AsyncFileDialog::new()
+                                .add_filter("Text", &["txt"])
+                                .save_file()
+                                .await;
+                            if let Some(file) = file {
+                                let path = file.path().to_path_buf();
+                                let path = if path.extension().is_none() {
+                                    let mut p = path;
+                                    p.set_extension("txt");
+                                    p
+                                } else { path };
+
+                                if let Err(e) = ExportService::export_to_text(&content, &path) {
+                                    tracing::error!("Export failed: {}", e);
+                                }
+                            }
+                        });
+                    },
+                    "TXT"
                 }
             }
 

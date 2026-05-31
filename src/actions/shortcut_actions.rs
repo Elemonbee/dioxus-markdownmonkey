@@ -6,8 +6,10 @@
 //! Note: Some functions are reserved for future use, not yet used
 
 use crate::actions::{AppActions, FileActions};
+use crate::services::recent_files::RecentFiles;
 use crate::state::AppState;
 use dioxus::prelude::*;
+use rfd::AsyncFileDialog;
 
 /// 快捷键定义 / Shortcut Definition
 pub struct Shortcut {
@@ -22,6 +24,7 @@ pub struct Shortcut {
 #[derive(Clone, Copy, Debug)]
 pub enum ShortcutAction {
     NewFile,
+    OpenFile,
     SaveFile,
     Undo,
     Redo,
@@ -53,6 +56,13 @@ impl ShortcutActions {
                 shift: false,
                 alt: false,
                 action: ShortcutAction::NewFile,
+            },
+            Shortcut {
+                key: "o",
+                ctrl: true,
+                shift: false,
+                alt: false,
+                action: ShortcutAction::OpenFile,
             },
             Shortcut {
                 key: "s",
@@ -207,6 +217,23 @@ impl ShortcutActions {
         match action {
             ShortcutAction::NewFile => {
                 state.new_tab();
+            }
+            ShortcutAction::OpenFile => {
+                let mut state = *state;
+                spawn(async move {
+                    let file = AsyncFileDialog::new()
+                        .add_filter("Markdown", &["md", "markdown", "txt"])
+                        .pick_file()
+                        .await;
+                    if let Some(file) = file {
+                        let path = file.path().to_path_buf();
+                        if FileActions::open_file(&mut state, path.clone()).is_ok() {
+                            let mut recent = RecentFiles::load();
+                            recent.add(path);
+                            let _ = recent.save();
+                        }
+                    }
+                });
             }
             ShortcutAction::SaveFile => {
                 if let Err(e) = FileActions::save_current_file(state) {

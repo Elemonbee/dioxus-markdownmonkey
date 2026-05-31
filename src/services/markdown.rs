@@ -573,6 +573,8 @@ pub fn katex_script() -> &'static str {
             }
         });
     }
+
+    window._mm_renderMath = renderMath;
     
     function loadFromCache() {
         try {

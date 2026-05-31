@@ -113,7 +113,7 @@ impl Default for AISettings {
             provider: "openai".to_string(),
             model: "gpt-4o-mini".to_string(),
             api_key: None,
-            base_url: "https://api.openai.com".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
             system_prompt: "You are a helpful assistant for markdown writing.".to_string(),
             temperature: 0.7,
         }
@@ -257,7 +257,7 @@ mod tests {
                 "enabled": false,
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "base_url": "https://api.openai.com",
+                "base_url": "https://api.openai.com/v1",
                 "system_prompt": "test",
                 "temperature": 0.7
             }

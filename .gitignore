@@ -42,5 +42,8 @@ reports/
 .kilo/
 .kilocodemodes
 
+# Claude local config (may contain machine-specific tool permissions)
+.claude/
+
 # Git debug temp files
 git_config*.txt
