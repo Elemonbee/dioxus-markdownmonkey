@@ -5,6 +5,7 @@
 
 use crate::actions::FileActions;
 use crate::components::icons::*;
+use crate::services::recent_files::RecentFiles;
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
@@ -16,14 +17,30 @@ use std::path::{Path, PathBuf};
 pub fn FileTree() -> Element {
     // 所有 hooks 在顶部
     let mut state = use_context::<AppState>();
+    let ui = state.ui();
+    let doc = state.document();
     let mut search_query = use_signal(String::new);
     let mut is_searching = use_signal(|| false);
     // 折叠状态：记录哪些目录被折叠 / Collapse state: tracks which dirs are collapsed
     let collapsed_dirs = use_signal(std::collections::HashSet::<String>::new);
+    let mut recent_files = use_signal(|| {
+        let mut recent = RecentFiles::load();
+        recent.prune_missing();
+        recent.files
+    });
 
-    // 读取状态
-    let workspace = state.workspace_root.read().clone();
-    let file_list = state.file_list.read().clone();
+    // 读取状态（领域视图）/ Read via domain views
+    let workspace = ui.workspace_root.read().clone();
+    let file_list = ui.file_list.read().clone();
+    let current_file = doc.current_file.read().clone();
+
+    // 当前文件变化时刷新最近列表 / Refresh recent list when current file changes
+    use_effect(move || {
+        let _ = doc.current_file.read().clone();
+        let mut recent = RecentFiles::load();
+        recent.prune_missing();
+        recent_files.set(recent.files);
+    });
 
     // 预先克隆用于闭包
     let workspace_for_new_file = workspace.clone();
@@ -74,8 +91,9 @@ pub fn FileTree() -> Element {
     };
 
     // i18n
-    let lang = *state.language.read();
+    let lang = *ui.language.read();
     let files_t = t("files", lang);
+    let aria_file_tree_t = t("aria_file_tree", lang);
     let new_file_t = t("new_file_btn", lang);
     let new_folder_t = t("new_folder", lang);
     let select_folder_t = t("select_folder", lang);
@@ -84,6 +102,13 @@ pub fn FileTree() -> Element {
     let files_found_t = t("files_found", lang);
     let no_match_t = t("no_matching_files", lang);
     let click_select_t = t("click_to_select", lang);
+    let recent_files_t = t("recent_files", lang);
+    let no_recent_t = t("no_recent_files", lang);
+    let aria_recent_t = t("aria_recent_files", lang);
+    let clear_recent_t = t("clear_recent", lang);
+
+    let recent_list = recent_files.read().clone();
+    let show_recent = !show_search;
 
     let tree_items = if let Some(ref root) = workspace {
         build_tree_from_files(root, &file_list, 0, &collapsed_dirs)
@@ -92,7 +117,7 @@ pub fn FileTree() -> Element {
     };
 
     rsx! {
-        div { class: "file-tree", role: "tree", "aria-label": "File tree",
+        div { class: "file-tree", role: "tree", "aria-label": "{aria_file_tree_t}",
             // 文件树头部
             div { class: "file-tree-header",
                 span { "{files_t}" }
@@ -156,6 +181,47 @@ pub fn FileTree() -> Element {
                 }
             }
 
+            // 最近打开 / Recent files
+            if show_recent {
+                div {
+                    class: "recent-files",
+                    role: "list",
+                    "aria-label": "{aria_recent_t}",
+                    div { class: "recent-files-header",
+                        span { "{recent_files_t}" }
+                        if !recent_list.is_empty() {
+                            button {
+                                class: "btn-icon recent-clear-btn",
+                                title: "{clear_recent_t}",
+                                onclick: move |_| {
+                                    let mut recent = RecentFiles::load();
+                                    recent.clear();
+                                    if let Err(e) = recent.save() {
+                                        tracing::warn!("Failed to clear recent files: {}", e);
+                                    }
+                                    recent_files.set(Vec::new());
+                                },
+                                "×"
+                            }
+                        }
+                    }
+                    if recent_list.is_empty() {
+                        div { class: "recent-files-empty", "{no_recent_t}" }
+                    } else {
+                        for (idx, item) in recent_list.iter().enumerate() {
+                            RecentFileItem {
+                                key: "{idx}-{item.path.display()}",
+                                path: item.path.clone(),
+                                name: item.name.clone(),
+                                active: current_file
+                                    .as_ref()
+                                    .is_some_and(|current| paths_equal(current, &item.path)),
+                            }
+                        }
+                    }
+                }
+            }
+
             // 文件搜索框
             div { class: "file-search",
                 input {
@@ -201,7 +267,8 @@ pub fn FileTree() -> Element {
                     for (idx, file) in search_results.iter().enumerate() {
                         SearchResultItem {
                             key: "{idx}",
-                            path: file.clone()
+                            path: file.clone(),
+                            workspace: workspace.clone(),
                         }
                     }
                 }
@@ -224,6 +291,9 @@ pub fn FileTree() -> Element {
                             depth: item.depth,
                             is_dir: item.is_dir,
                             name: item.name.clone(),
+                            active: current_file
+                                .as_ref()
+                                .is_some_and(|current| paths_equal(current, &item.path)),
                             collapsed_dirs: collapsed_dirs,
                         }
                     }
@@ -351,12 +421,13 @@ fn build_tree_recursive(
 #[derive(Props, Clone, PartialEq)]
 struct SearchResultItemProps {
     path: PathBuf,
+    workspace: Option<PathBuf>,
 }
 
 /// 搜索结果项组件
 #[component]
 fn SearchResultItem(props: SearchResultItemProps) -> Element {
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
     let path = props.path.clone();
 
     let name = path
@@ -364,17 +435,67 @@ fn SearchResultItem(props: SearchResultItemProps) -> Element {
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
+    let parent_label = search_result_parent_label(&path, props.workspace.as_deref());
 
     rsx! {
         div {
             class: "search-result-item",
             onclick: move |_| {
-                if let Err(e) = FileActions::open_file(&mut state, path.clone()) {
-                    tracing::error!("Failed to open file: {}", e);
-                }
+                let mut state = state;
+                let path = path.clone();
+                spawn(async move {
+                    if let Err(e) = FileActions::open_file_flushed(&mut state, path).await {
+                        tracing::error!("Failed to open file: {}", e);
+                    }
+                });
             },
             FileIcon { size: 14, class: "icon".to_string() }
-            span { class: "name", "{name}" }
+            div { class: "search-result-text",
+                span { class: "name", "{name}" }
+                if let Some(parent) = parent_label {
+                    span { class: "path", "{parent}" }
+                }
+            }
+        }
+    }
+}
+
+/// 最近文件项属性 / Recent file item props
+#[derive(Props, Clone, PartialEq)]
+struct RecentFileItemProps {
+    path: PathBuf,
+    name: String,
+    active: bool,
+}
+
+/// 最近文件列表项 / Recent file list item
+fn RecentFileItem(props: RecentFileItemProps) -> Element {
+    let state = use_context::<AppState>();
+    let path = props.path.clone();
+    let path_display = path.display().to_string();
+    let item_class = if props.active {
+        "recent-file-item active"
+    } else {
+        "recent-file-item"
+    };
+
+    rsx! {
+        button {
+            class: "{item_class}",
+            role: "listitem",
+            title: "{path_display}",
+            onclick: move |_| {
+                let mut state = state;
+                let path = path.clone();
+                spawn(async move {
+                    if let Err(e) =
+                        FileActions::open_file_and_track_recent_flushed(&mut state, path).await
+                    {
+                        tracing::warn!("Open recent file failed: {}", e);
+                    }
+                });
+            },
+            span { class: "recent-file-name", "{props.name}" }
         }
     }
 }
@@ -386,8 +507,35 @@ struct FileTreeItemFlatProps {
     depth: usize,
     is_dir: bool,
     name: String,
+    active: bool,
     #[props(!optional)]
     collapsed_dirs: Signal<std::collections::HashSet<String>>,
+}
+
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    a == b
+}
+
+fn search_result_parent_label(path: &Path, workspace: Option<&Path>) -> Option<String> {
+    let parent = path.parent()?;
+    let relative = workspace.and_then(|root| parent.strip_prefix(root).ok());
+    let display_path = relative.unwrap_or(parent);
+    if display_path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(display_path.to_string_lossy().to_string())
+    }
+}
+
+fn file_item_class(is_dir: bool, is_markdown: bool, is_active: bool) -> &'static str {
+    match (is_dir, is_markdown, is_active) {
+        (true, _, true) => "file-item folder active",
+        (true, _, false) => "file-item folder",
+        (false, true, true) => "file-item markdown active",
+        (false, true, false) => "file-item markdown",
+        (false, false, true) => "file-item active",
+        (false, false, false) => "file-item",
+    }
 }
 
 /// 获取文件类型图标的 SVG 字符串（用于 inline 渲染）
@@ -483,6 +631,7 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
     let depth = props.depth;
     let is_dir = props.is_dir;
     let name = props.name.clone();
+    let is_active = props.active;
 
     let ext = path
         .extension()
@@ -501,16 +650,10 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
     };
 
     let indent = depth * 16;
-    let item_class = if is_dir {
-        "file-item folder"
-    } else if is_markdown {
-        "file-item markdown"
-    } else {
-        "file-item"
-    };
+    let item_class = file_item_class(is_dir, is_markdown, is_active);
 
     // i18n
-    let lang = *state.language.read();
+    let lang = *state.ui().language.read();
     let rename_t = t("rename_file", lang);
     let delete_t = t("delete_file", lang);
     let new_file_t = t("new_file_btn", lang);
@@ -559,9 +702,15 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
                         dirs.insert(key);
                     }
                 } else if is_markdown {
-                    if let Err(err) = FileActions::open_file(&mut state, path_for_click.clone()) {
-                        tracing::error!("Failed to open file: {}", err);
-                    }
+                    let mut state = state;
+                    let path_for_click = path_for_click.clone();
+                    spawn(async move {
+                        if let Err(err) =
+                            FileActions::open_file_flushed(&mut state, path_for_click).await
+                        {
+                            tracing::error!("Failed to open file: {}", err);
+                        }
+                    });
                 }
             },
             oncontextmenu: move |e| {
@@ -769,5 +918,38 @@ fn search_files_recursive(dir: &Path, query: &str, results: &mut Vec<PathBuf>, d
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_result_parent_label_uses_relative_workspace_path() {
+        let root = PathBuf::from("workspace");
+        let path = root.join("docs").join("guide.md");
+
+        assert_eq!(
+            search_result_parent_label(&path, Some(&root)),
+            Some("docs".to_string())
+        );
+    }
+
+    #[test]
+    fn search_result_parent_label_hides_workspace_root() {
+        let root = PathBuf::from("workspace");
+        let path = root.join("README.md");
+
+        assert_eq!(search_result_parent_label(&path, Some(&root)), None);
+    }
+
+    #[test]
+    fn file_item_class_marks_active_markdown_file() {
+        assert_eq!(
+            file_item_class(false, true, true),
+            "file-item markdown active"
+        );
+        assert_eq!(file_item_class(true, false, false), "file-item folder");
     }
 }

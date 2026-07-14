@@ -77,6 +77,62 @@
   font-weight: 500;
 }
 
+.toolbar-dropdown {
+  position: relative;
+}
+
+.toolbar-export-trigger {
+  width: auto !important;
+  gap: 4px;
+  padding: 0 8px !important;
+  font-size: var(--font-size-sm);
+}
+
+.toolbar-export-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.toolbar-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toolbar-dropdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: transparent;
+}
+
+.toolbar-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.toolbar-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+
 /* ============================================
    标签栏 / Tab Bar
    ============================================ */

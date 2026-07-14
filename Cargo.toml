@@ -1,6 +1,6 @@
 [package]
 name = "markdownmonkey"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "A modern Markdown editor built with Dioxus"
 authors = ["MarkdownMonkey Team"]
@@ -59,8 +59,9 @@ encoding_rs = "0.8"
 # 文件系统事件监控
 notify = "8"
 
-# PDF 导出
-printpdf = "0.9"
+# PDF 导出（启用 png/jpeg 以嵌入本地图片）
+# PDF export (png/jpeg features for local image embedding)
+printpdf = { version = "0.9", features = ["png", "jpeg"] }
 
 # Word/Docx 导出 (使用 zip + xml)
 zip = "8"

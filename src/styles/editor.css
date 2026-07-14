@@ -186,6 +186,30 @@
   padding: 16px 24px;
   overflow-y: auto;
   background-color: var(--bg-primary);
+  position: relative;
+}
+
+.preview-rendering {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 24px 8px;
+  text-align: center;
+}
+
+.preview-rendering-banner {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -8px 0 12px;
+  padding: 6px 10px;
+  border-radius: var(--border-radius);
+  background: color-mix(in srgb, var(--bg-tertiary) 88%, var(--accent-primary));
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.preview-html-root {
+  min-height: 1em;
 }
 
 /* Markdown 预览样式 / Markdown Preview Styles */

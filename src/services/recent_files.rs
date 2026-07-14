@@ -1,7 +1,4 @@
 //! 最近文件服务 / Recent Files Service
-//!
-//! 注意：部分功能为预留功能，暂未使用
-//! Note: Some functions are reserved for future use, not yet used
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -32,16 +29,38 @@ impl RecentFiles {
     }
 
     /// 获取配置文件路径 / Get Config File Path
+    ///
+    /// 优先使用 MarkdownMonkey 配置目录；若仅有旧版 lowercase 路径则迁移一次。
+    /// Prefer MarkdownMonkey config dir; one-time migrate from legacy lowercase path.
     fn config_path() -> PathBuf {
-        let config_dir = dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("markdownmonkey");
+        let preferred = crate::services::settings::SettingsService::get_config_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("recent_files.json");
 
-        if !config_dir.exists() {
-            let _ = fs::create_dir_all(&config_dir);
+        if preferred.exists() {
+            return preferred;
         }
 
-        config_dir.join("recent_files.json")
+        let legacy = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("markdownmonkey")
+            .join("recent_files.json");
+
+        if legacy.exists() {
+            if let Some(parent) = preferred.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if fs::copy(&legacy, &preferred).is_ok() {
+                tracing::info!("Migrated recent_files.json to {:?}", preferred);
+                return preferred;
+            }
+            return legacy;
+        }
+
+        if let Some(parent) = preferred.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        preferred
     }
 
     /// 从文件加载 / Load from File
@@ -104,5 +123,44 @@ impl RecentFiles {
         while self.files.len() > self.max_count {
             self.files.pop();
         }
+    }
+
+    /// 清空最近文件列表 / Clear recent files list
+    pub fn clear(&mut self) {
+        self.files.clear();
+    }
+
+    /// 仅保留仍然存在的文件 / Keep only paths that still exist on disk
+    pub fn prune_missing(&mut self) {
+        self.files.retain(|f| f.path.exists());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn clear_empties_list() {
+        let mut recent = RecentFiles::new();
+        recent.add(PathBuf::from("a.md"));
+        recent.add(PathBuf::from("b.md"));
+        recent.clear();
+        assert!(recent.files.is_empty());
+    }
+
+    #[test]
+    fn prune_missing_keeps_existing_only() {
+        let temp = TempDir::new().unwrap();
+        let existing = temp.path().join("keep.md");
+        fs::write(&existing, "x").unwrap();
+        let mut recent = RecentFiles::new();
+        recent.add(existing.clone());
+        recent.add(temp.path().join("gone.md"));
+        recent.prune_missing();
+        assert_eq!(recent.files.len(), 1);
+        assert_eq!(recent.files[0].path, existing);
     }
 }

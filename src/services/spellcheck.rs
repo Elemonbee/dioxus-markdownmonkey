@@ -266,12 +266,6 @@ impl SpellCheckService {
         }
     }
 
-    /// 设置启用状态 / Set enabled status
-    #[allow(dead_code)]
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
     /// 检查单词拼写 / Check word spelling
     pub fn check_word(&self, word: &str) -> SpellCheckResult {
         if !self.enabled {
@@ -507,18 +501,6 @@ impl SpellCheckService {
 
         words
     }
-
-    /// 检查是否包含中文字符 / Check if contains Chinese characters
-    #[allow(dead_code)]
-    pub fn contains_chinese(&self, text: &str) -> bool {
-        text.chars().any(Self::is_chinese_char)
-    }
-
-    /// 检查是否是中文字符 / Check if is Chinese character
-    #[allow(dead_code)]
-    fn is_chinese_char(c: char) -> bool {
-        matches!(c, '\u{4E00}'..='\u{9FFF}')
-    }
 }
 
 impl Default for SpellCheckService {
@@ -602,8 +584,8 @@ mod tests {
 
     #[test]
     fn test_chinese_detection() {
-        let service = SpellCheckService::new();
-        assert!(service.contains_chinese("你好"));
-        assert!(!service.contains_chinese("hello"));
+        let has_chinese = |text: &str| text.chars().any(|c| matches!(c, '\u{4E00}'..='\u{9FFF}'));
+        assert!(has_chinese("你好"));
+        assert!(!has_chinese("hello"));
     }
 }

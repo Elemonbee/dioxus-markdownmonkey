@@ -32,42 +32,103 @@ pub enum SaveStatus {
 }
 
 /// 标签信息 / Tab Information
+///
+/// `content` 使用 `Arc<str>` 共享只读正文；`None` 表示已驱逐（未修改且已有路径时可从磁盘重载）
+/// `content` is an `Arc<str>` shared body; `None` means evicted (reload from disk when unmodified)
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabInfo {
     pub path: Option<PathBuf>, // 文件路径 / File Path
     pub title: String,         // 标签标题 / Tab Title
-    pub content: String,       // 标签内容 / Tab Content
     pub modified: bool,        // 是否修改 / Is Modified
-    pub history: History,      // 撤销/重做历史 / Undo/Redo History
+    /// 驻留正文；驱逐后为 None / Resident body; None after eviction
+    pub content: Option<std::sync::Arc<str>>,
+    pub history: History, // 撤销/重做历史 / Undo/Redo History
+    /// LRU 访问时钟（越大越新）/ LRU access clock (higher = more recent)
+    pub last_accessed: u64,
+    /// 按文档隔离的 AI 会话键 / Per-document AI session key
+    pub ai_session_key: String,
 }
 
 impl TabInfo {
     /// 创建新标签 / Create New Tab
     pub fn new(title: &str) -> Self {
+        let mut history = History::default();
+        history.reset_with_content("");
         Self {
             path: None,
             title: title.to_string(),
-            content: String::new(),
+            content: Some(std::sync::Arc::from("")),
             modified: false,
-            history: History::default(),
+            history,
+            last_accessed: 0,
+            ai_session_key: new_untitled_ai_session_key(),
         }
     }
 
-    /// 从文件创建标签 / Create Tab from File
-    pub fn from_file(path: PathBuf, content: String) -> Self {
+    /// 从文件创建标签（内容以 Arc 共享，避免额外 String 拷贝）
+    /// Create tab from file (share body via Arc to avoid an extra String copy)
+    pub fn from_file(path: PathBuf, content: &str) -> Self {
         let title = path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("未命名")
+            .unwrap_or("Untitled")
             .to_string();
+        let ai_session_key = ai_session_key_for_path(&path);
+        let mut history = History::default();
+        history.reset_with_content(content);
         Self {
             path: Some(path),
             title,
-            content,
+            content: Some(std::sync::Arc::from(content)),
             modified: false,
-            history: History::default(),
+            history,
+            last_accessed: 0,
+            ai_session_key,
         }
     }
+
+    /// 是否已被驱逐出内存 / Whether the tab body was evicted from memory
+    pub fn is_evicted(&self) -> bool {
+        self.content.is_none()
+    }
+
+    /// 读取正文（驱逐后返回空串）/ Read body text (empty string if evicted)
+    #[allow(dead_code)] // 测试与调试辅助 / Helper for tests and debugging
+    pub fn content_str(&self) -> &str {
+        self.content.as_deref().unwrap_or("")
+    }
+
+    /// 用 Arc 设置驻留正文 / Set resident body from an Arc
+    pub fn set_content_arc(&mut self, content: std::sync::Arc<str>) {
+        self.content = Some(content);
+    }
+
+    /// 在可安全重载时驱逐正文与历史 / Evict body and history when safe to reload
+    pub fn try_evict(&mut self) -> bool {
+        if self.modified || self.path.is_none() || self.content.is_none() {
+            return false;
+        }
+        self.content = None;
+        self.history = History::default();
+        true
+    }
+}
+
+/// 为未命名标签生成稳定 AI 会话键 / Generate a stable AI session key for untitled tabs
+pub fn new_untitled_ai_session_key() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    format!("untitled-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+}
+
+/// 由文件路径派生 AI 会话键 / Derive AI session key from a file path
+pub fn ai_session_key_for_path(path: &std::path::Path) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let normalized = path.to_string_lossy().to_lowercase().replace('\\', "/");
+    let mut hasher = DefaultHasher::new();
+    normalized.hash(&mut hasher);
+    format!("path-{:016x}", hasher.finish())
 }
 
 /// 大纲项 / Outline Item
@@ -130,6 +191,33 @@ impl Default for AIConfig {
     }
 }
 
+/// AI 会话轮次（不含 system）/ AI conversation turn (excluding system)
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ChatTurn {
+    /// 角色：user 或 assistant / Role: user or assistant
+    pub role: String,
+    /// 文本内容 / Text content
+    pub content: String,
+}
+
+impl ChatTurn {
+    /// 创建用户轮次 / Create a user turn
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+        }
+    }
+
+    /// 创建助手轮次 / Create an assistant turn
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+        }
+    }
+}
+
 /// 侧边栏标签 / Sidebar Tab
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SidebarTab {
@@ -144,6 +232,10 @@ pub(crate) const MAX_HISTORY_SIZE: usize = 50;
 pub(crate) const LARGE_FILE_HISTORY_THRESHOLD: usize = 100 * 1024; // 100KB
 /// 大文件时减少历史容量 / Reduced history capacity for large files
 pub(crate) const LARGE_FILE_MAX_HISTORY: usize = 10;
+/// 超大文件阈值 (字节) / Huge-file threshold (bytes)
+pub(crate) const HUGE_FILE_HISTORY_THRESHOLD: usize = 1024 * 1024; // 1MB
+/// 超大文件历史容量 / History capacity for huge files
+pub(crate) const HUGE_FILE_MAX_HISTORY: usize = 5;
 
 /// 历史记录（用于撤销/重做）/ History (for Undo/Redo)
 /// 使用 Arc<str> 共享不可变字符串，避免多标签切换时重复克隆内容
@@ -187,6 +279,14 @@ impl Default for History {
 }
 
 impl History {
+    /// 清空历史并用当前正文种子化哈希（打开/切换文件后避免误标未保存）
+    /// Clear history and seed hash from current body (avoids false unsaved after open/switch)
+    pub fn reset_with_content(&mut self, content: &str) {
+        self.past.clear();
+        self.future.clear();
+        self.last_hash = Self::hash(content);
+    }
+
     /// 计算字符串的简单哈希 / Calculate simple hash of string
     /// 结合长度和哈希值降低碰撞风险 / Combine length and hash to reduce collision risk
     fn hash(s: &str) -> u64 {
@@ -223,7 +323,9 @@ impl History {
             .max()
             .unwrap_or(0);
 
-        let max_size = if largest_snapshot_len > LARGE_FILE_HISTORY_THRESHOLD {
+        let max_size = if largest_snapshot_len > HUGE_FILE_HISTORY_THRESHOLD {
+            HUGE_FILE_MAX_HISTORY
+        } else if largest_snapshot_len > LARGE_FILE_HISTORY_THRESHOLD {
             LARGE_FILE_MAX_HISTORY
         } else {
             MAX_HISTORY_SIZE

@@ -306,6 +306,18 @@ mod tests {
         assert!(html.contains("<p>ok</p>") || html.contains("ok"));
     }
 
+    #[test]
+    fn test_markdown_strips_javascript_urls_and_style() {
+        use crate::services::markdown::render_markdown;
+
+        let html = render_markdown(
+            r#"[click](javascript:alert(1)) <p style="position:fixed;top:0">x</p> ![x](data:text/html,<script>alert(1)</script>)"#,
+        );
+        assert!(!html.to_lowercase().contains("javascript:"));
+        assert!(!html.contains("position:fixed"));
+        assert!(!html.to_lowercase().contains("data:text/html"));
+    }
+
     // ========== 数学公式预处理测试 / Math Formula Preprocess Tests ==========
 
     #[test]
@@ -414,5 +426,71 @@ mod tests {
         assert!(html.contains("<h1>Title</h1>") || html.contains("<h1"));
         assert!(html.contains("<strong>bold</strong>") || html.contains("bold"));
         assert!(html.contains("<table>"));
+    }
+
+    #[test]
+    fn test_export_html_includes_mermaid_and_katex_runtime() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("diagram.html");
+        let md = "```mermaid\ngraph TD; A-->B;\n```\n\n$$E=mc^2$$\n";
+
+        ExportService::export_to_html(md, &path).unwrap();
+        let html = std::fs::read_to_string(path).unwrap();
+
+        assert!(html.contains("class=\"mermaid\"") || html.contains("class='mermaid'"));
+        assert!(html.contains("data-formula-block") || html.contains("katex"));
+        assert!(html.contains("mermaid.min.js"));
+        assert!(html.contains("katex.min.js"));
+        assert!(html.contains("katex.min.css"));
+        assert!(html.contains("markdown-body"));
+        assert!(!html.contains("cdn.jsdelivr.net"));
+        let assets = temp.path().join("diagram_files");
+        assert!(assets.join("mermaid.min.js").exists());
+        assert!(assets.join("katex.min.js").exists());
+        assert!(assets.join("katex.min.css").exists());
+    }
+
+    #[test]
+    fn test_export_html_bundles_local_images() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let img = temp.path().join("shot.png");
+        std::fs::write(&img, b"fake-png").unwrap();
+        let path = temp.path().join("doc.html");
+        let md = "![alt](shot.png)\n";
+
+        ExportService::export_to_html_with_assets(md, &path, Some(temp.path())).unwrap();
+        let html = std::fs::read_to_string(&path).unwrap();
+        assert!(html.contains("doc_files/"));
+        assert!(html.contains("shot.png"));
+        let assets = temp.path().join("doc_files");
+        assert!(assets.is_dir());
+        assert!(std::fs::read_dir(&assets).unwrap().next().is_some());
+    }
+
+    #[test]
+    fn test_export_docx_embeds_local_png() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // Minimal valid-enough PNG with IHDR (8 signature + IHDR chunk)
+        let mut png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0, 0, 0, 13]); // IHDR length
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&10u32.to_be_bytes()); // width
+        png.extend_from_slice(&10u32.to_be_bytes()); // height
+        png.extend_from_slice(&[8, 2, 0, 0, 0]); // bit depth etc
+        png.extend_from_slice(&[0, 0, 0, 0]); // crc placeholder
+        let img = temp.path().join("pic.png");
+        std::fs::write(&img, &png).unwrap();
+
+        let path = temp.path().join("with-img.docx");
+        let md = "# Title\n\n![diagram](pic.png)\n\nHello\n";
+        ExportService::export_to_docx_with_assets(md, &path, Some(temp.path())).unwrap();
+
+        let file = std::fs::File::open(&path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        assert!(archive.by_name("word/media/image1.png").is_ok());
+        let mut doc = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut doc)
+            .unwrap();
+        assert!(doc.contains("w:drawing") || doc.contains("a:blip"));
     }
 }

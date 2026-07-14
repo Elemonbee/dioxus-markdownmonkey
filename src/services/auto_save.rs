@@ -58,17 +58,6 @@ impl AutoSaveService {
         self.last_save = Instant::now();
     }
 
-    /// 获取距离下次保存的剩余秒数 / Get Remaining Seconds Until Next Save
-    #[allow(dead_code)]
-    pub fn remaining_secs(&self) -> u32 {
-        if !self.enabled {
-            return 0;
-        }
-
-        let elapsed = self.last_save.elapsed().as_secs() as u32;
-        self.interval_secs.saturating_sub(elapsed)
-    }
-
     /// 执行自动保存 / Perform Auto Save
     pub async fn auto_save(&mut self, path: Option<&PathBuf>, content: &str) -> Result<(), String> {
         if let Some(path) = path {

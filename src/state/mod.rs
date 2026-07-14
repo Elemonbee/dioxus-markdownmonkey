@@ -4,6 +4,7 @@
 
 mod app_state;
 mod app_state_ops;
+mod domains;
 mod types;
 
 #[cfg(test)]
@@ -11,4 +12,6 @@ mod app_state_tests;
 
 // 重新导出 / Re-exports
 pub use app_state::AppState;
+#[allow(unused_imports)]
+pub use domains::{AiState, DocumentState, UiState};
 pub use types::*;

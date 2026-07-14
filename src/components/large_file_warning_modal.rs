@@ -26,9 +26,11 @@ fn format_size(bytes: usize) -> String {
 #[component]
 pub fn LargeFileWarningModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_large_file_warning.read();
-    let file_size = *state.file_size_bytes.read();
-    let lang = *state.language.read();
+    let mut doc = state.document();
+    let ui = state.ui();
+    let show = *doc.show_large_file_warning.read();
+    let file_size = *doc.file_size_bytes.read();
+    let lang = *ui.language.read();
 
     if !show {
         return rsx! {};
@@ -46,7 +48,7 @@ pub fn LargeFileWarningModal() -> Element {
         div {
             class: "modal-overlay",
             onclick: move |_| {
-                *state.show_large_file_warning.write() = false;
+                *doc.show_large_file_warning.write() = false;
             },
 
             div {
@@ -61,7 +63,7 @@ pub fn LargeFileWarningModal() -> Element {
                     button {
                         class: "modal-close",
                         onclick: move |_| {
-                            *state.show_large_file_warning.write() = false;
+                            *doc.show_large_file_warning.write() = false;
                         },
                         CloseIcon { size: 20 }
                     }
@@ -94,10 +96,18 @@ pub fn LargeFileWarningModal() -> Element {
                         class: "btn-primary",
                         style: "background: #f0ad4e; border-color: #f0ad4e;",
                         onclick: move |_| {
-                            // 确认加载 - 读取文件内容 / Confirm loading - read file content
-                            if let Err(e) = FileActions::confirm_load_large_file(&mut state) {
-                                tracing::error!("加载大文件失败 / Failed to load large file: {}", e);
-                            }
+                            // 确认加载 - 先 flush 再读取文件 / Confirm: flush then read file
+                            let mut state = state;
+                            spawn(async move {
+                                if let Err(e) =
+                                    FileActions::confirm_load_large_file_flushed(&mut state).await
+                                {
+                                    tracing::error!(
+                                        "加载大文件失败 / Failed to load large file: {}",
+                                        e
+                                    );
+                                }
+                            });
                         },
                         "{continue_text}"
                     }

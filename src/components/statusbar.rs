@@ -2,6 +2,7 @@
 //!
 //! 遵循 PAL 架构：使用 Actions 处理业务逻辑
 
+use crate::actions::EditorActions;
 use crate::state::{AppState, SaveStatus};
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, *};
@@ -10,13 +11,15 @@ use dioxus::prelude::{ReadableExt, *};
 #[component]
 pub fn StatusBar() -> Element {
     // 所有 hooks 在顶部
-    let state = use_context::<AppState>();
+    let mut state = use_context::<AppState>();
+    let doc = state.document();
+    let ui = state.ui();
 
-    // 读取状态
-    let modified = *state.modified.read();
-    let save_status_val = *state.save_status.read();
-    let theme_val = *state.theme.read();
-    let lang = *state.language.read();
+    // 读取状态（领域视图）/ Read state via domain views
+    let modified = *doc.modified.read();
+    let save_status_val = *doc.save_status.read();
+    let theme_val = *ui.theme.read();
+    let lang = *ui.language.read();
 
     // 计算统计数据
     let char_count = state.char_count();
@@ -42,11 +45,12 @@ pub fn StatusBar() -> Element {
     let read_label = t("read", lang);
     let theme_label = t("theme", lang);
     let min_label = t("min", lang);
-    let encoding_text = state.file_encoding.read();
+    let encoding_text = doc.file_encoding.read();
     let filetype_text = t("file_type_markdown", lang);
 
-    let spell_enabled = *state.spell_check_enabled.read();
-    let spell_count = state.spell_check_results.read().len();
+    let spell_enabled = *doc.spell_check_enabled.read();
+    let spell_count = doc.spell_check_results.read().len();
+    let spell_idx = *doc.spell_error_index.read();
     let spell_text = t("spell_errors", lang);
 
     // CSS 计算
@@ -71,17 +75,26 @@ pub fn StatusBar() -> Element {
                 span { class: "status-item", "{words_label}: {word_count}" }
                 span { class: "status-item", "{read_label}: {read_time}{min_label}" }
                 if spell_enabled && spell_count > 0 {
-                    span { class: "status-item spell-errors",
-                        "{spell_count} {spell_text}"
+                    button {
+                        class: "status-item spell-errors",
+                        title: "{t(\"spell_nav_tooltip\", lang)}",
+                        onclick: move |_| {
+                            EditorActions::next_spell_error(&mut state);
+                        },
+                        oncontextmenu: move |e| {
+                            e.prevent_default();
+                            EditorActions::prev_spell_error(&mut state);
+                        },
+                        "{spell_idx + 1}/{spell_count} {spell_text}"
                     }
                 }
             }
 
             // 右侧设置
             div { class: "statusbar-right",
-                span { class: "status-item", "{theme_label}: {theme_text}" }
                 span { class: "status-item", "{encoding_text}" }
                 span { class: "status-item", "{filetype_text}" }
+                span { class: "status-item", "{theme_label}: {theme_text}" }
             }
         }
     }

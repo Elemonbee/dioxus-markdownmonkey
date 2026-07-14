@@ -1,8 +1,4 @@
-#![allow(dead_code)]
 //! 设置持久化服务 / Settings Persistence Service
-//!
-//! 注意：部分功能为预留功能，暂未使用
-//! Note: Some functions are reserved for future use, not yet used
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -41,6 +37,12 @@ pub struct AppSettings {
     /// 拼写检查启用 / Spell Check Enabled
     #[serde(default)]
     pub spell_check_enabled: bool,
+    /// PDF 导出中文字体路径（可选）/ Optional PDF CJK font path
+    #[serde(default)]
+    pub pdf_cjk_font_path: Option<String>,
+    /// 启动时恢复上次会话（标签/工作区）/ Restore last session (tabs/workspace) on launch
+    #[serde(default = "default_session_restore_enabled")]
+    pub session_restore_enabled: bool,
     /// 窗口宽度 / Window Width
     #[serde(default = "default_window_width")]
     pub window_width: f64,
@@ -75,6 +77,10 @@ fn default_auto_save_interval() -> u32 {
     30
 }
 
+fn default_session_restore_enabled() -> bool {
+    true
+}
+
 fn default_window_width() -> f64 {
     1200.0
 }
@@ -99,6 +105,8 @@ impl Default for AppSettings {
             auto_save_enabled: false,
             auto_save_interval: 30,
             spell_check_enabled: false,
+            pdf_cjk_font_path: None,
+            session_restore_enabled: true,
             window_width: 1200.0,
             window_height: 800.0,
             ai: AISettings::default(),
@@ -136,7 +144,7 @@ impl SettingsService {
     }
 
     /// 获取配置目录 / Get Config Directory
-    fn get_config_dir() -> io::Result<PathBuf> {
+    pub fn get_config_dir() -> io::Result<PathBuf> {
         // 尝试使用标准配置目录 / Try to use standard config directory
         if let Some(home) = dirs::config_dir() {
             return Ok(home.join("MarkdownMonkey"));
@@ -172,13 +180,6 @@ impl SettingsService {
         fs::write(&self.config_path, content)?;
         Ok(())
     }
-
-    /// 重置为默认设置 / Reset to Default Settings
-    pub fn reset(&self) -> io::Result<AppSettings> {
-        let settings = AppSettings::default();
-        self.save(&settings)?;
-        Ok(settings)
-    }
 }
 
 impl Default for SettingsService {
@@ -211,9 +212,150 @@ pub fn save_window_size(width: f64, height: f64) -> io::Result<()> {
     service.save(&settings)
 }
 
+/// AI 历史文件名（旧版全局）/ Legacy global AI history filename
+const AI_HISTORY_FILENAME: &str = "ai_history.json";
+/// 按文档隔离的 AI 历史目录 / Per-document AI history directory
+const AI_HISTORY_DIRNAME: &str = "ai_history";
+/// 持久化历史上限（与内存一致：10 轮 / 20 条）
+/// Persisted history cap (matches in-memory: 10 turns / 20 messages)
+pub const AI_HISTORY_MAX_MESSAGES: usize = 20;
+
+/// 按文档键解析历史文件路径 / Resolve history file path for a document key
+pub fn ai_history_path_for_key(key: &str) -> io::Result<PathBuf> {
+    let dir = SettingsService::get_config_dir()?.join(AI_HISTORY_DIRNAME);
+    fs::create_dir_all(&dir)?;
+    let safe = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    Ok(dir.join(format!("{safe}.json")))
+}
+
+/// 一次性把旧版全局历史迁移到指定文档键 / One-time migrate legacy global history into a document key
+fn migrate_legacy_ai_history_once(target_key: &str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static MIGRATED: AtomicBool = AtomicBool::new(false);
+    if MIGRATED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Ok(root) = SettingsService::get_config_dir() else {
+        return;
+    };
+    let legacy = root.join(AI_HISTORY_FILENAME);
+    if !legacy.exists() {
+        return;
+    }
+    let Ok(dest) = ai_history_path_for_key(target_key) else {
+        return;
+    };
+    if dest.exists() {
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match fs::rename(&legacy, &dest) {
+        Ok(()) => tracing::info!("Migrated legacy AI history to {:?}", dest),
+        Err(_) => {
+            if fs::copy(&legacy, &dest).is_ok() {
+                let _ = fs::remove_file(&legacy);
+                tracing::info!("Copied legacy AI history to {:?}", dest);
+            }
+        }
+    }
+}
+
+/// 加载指定文档的 AI 会话历史 / Load AI conversation history for a document key
+pub fn load_ai_history_for_key(key: &str) -> Vec<crate::state::ChatTurn> {
+    if key.is_empty() {
+        return Vec::new();
+    }
+    migrate_legacy_ai_history_once(key);
+    let Ok(path) = ai_history_path_for_key(key) else {
+        return Vec::new();
+    };
+    load_ai_history_from(&path)
+}
+
+/// 保存指定文档的 AI 会话历史 / Save AI conversation history for a document key
+pub fn save_ai_history_for_key(key: &str, history: &[crate::state::ChatTurn]) -> io::Result<()> {
+    let path = ai_history_path_for_key(key)?;
+    save_ai_history_to(&path, history)
+}
+
+/// 加载 AI 会话历史（兼容旧 API：无键时读旧全局文件）
+/// Load AI history (compat: no key reads legacy global file)
+#[allow(dead_code)] // 兼容旧调用与迁移路径 / Kept for legacy callers / migration
+pub fn load_ai_history() -> Vec<crate::state::ChatTurn> {
+    let Ok(dir) = SettingsService::get_config_dir() else {
+        return Vec::new();
+    };
+    load_ai_history_from(&dir.join(AI_HISTORY_FILENAME))
+}
+
+/// 从指定路径加载 AI 历史（测试可注入临时路径）
+/// Load AI history from a path (tests may inject a temp path)
+pub fn load_ai_history_from(path: &std::path::Path) -> Vec<crate::state::ChatTurn> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    match fs::read_to_string(path) {
+        Ok(content) => match serde_json::from_str::<Vec<crate::state::ChatTurn>>(&content) {
+            Ok(mut turns) => {
+                if turns.len() > AI_HISTORY_MAX_MESSAGES {
+                    let excess = turns.len() - AI_HISTORY_MAX_MESSAGES;
+                    turns.drain(0..excess);
+                }
+                turns
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse AI history: {}", e);
+                Vec::new()
+            }
+        },
+        Err(e) => {
+            tracing::warn!("Failed to read AI history: {}", e);
+            Vec::new()
+        }
+    }
+}
+
+/// 保存 AI 会话历史（兼容旧 API）/ Save AI history (legacy API)
+#[allow(dead_code)] // 兼容旧调用 / Kept for legacy callers
+pub fn save_ai_history(history: &[crate::state::ChatTurn]) -> io::Result<()> {
+    let dir = SettingsService::get_config_dir()?;
+    fs::create_dir_all(&dir)?;
+    save_ai_history_to(&dir.join(AI_HISTORY_FILENAME), history)
+}
+
+/// 保存 AI 历史到指定路径 / Save AI history to a specific path
+pub fn save_ai_history_to(
+    path: &std::path::Path,
+    history: &[crate::state::ChatTurn],
+) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let slice = if history.len() > AI_HISTORY_MAX_MESSAGES {
+        &history[history.len() - AI_HISTORY_MAX_MESSAGES..]
+    } else {
+        history
+    };
+    let content = serde_json::to_string_pretty(slice)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    fs::write(path, content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::ChatTurn;
 
     #[test]
     fn test_settings_default_values() {
@@ -226,6 +368,7 @@ mod tests {
         assert!(!settings.word_wrap);
         assert!(settings.line_numbers);
         assert!(settings.sync_scroll);
+        assert!(settings.pdf_cjk_font_path.is_none());
     }
 
     #[test]
@@ -268,6 +411,7 @@ mod tests {
         // 新字段应该使用默认值 / New fields should use defaults
         assert!(!settings.auto_save_enabled);
         assert_eq!(settings.auto_save_interval, 30);
+        assert!(settings.pdf_cjk_font_path.is_none());
     }
 
     #[test]
@@ -285,5 +429,56 @@ mod tests {
         let json = serde_json::to_string(&ai).unwrap();
         // API Key 为 None 时不应该出现在 JSON 中 / API Key should not appear in JSON when None
         assert!(!json.contains("api_key"));
+    }
+
+    #[test]
+    fn test_ai_history_serde_roundtrip() {
+        let turns = vec![
+            ChatTurn::user("hello"),
+            ChatTurn::assistant("world"),
+        ];
+        let json = serde_json::to_string(&turns).unwrap();
+        let back: Vec<ChatTurn> = serde_json::from_str(&json).unwrap();
+        assert_eq!(turns, back);
+    }
+
+    #[test]
+    fn test_save_ai_history_trims_to_max() {
+        let dir = std::env::temp_dir().join(format!(
+            "mm_ai_hist_trim_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ai_history.json");
+
+        let mut turns = Vec::new();
+        for i in 0..AI_HISTORY_MAX_MESSAGES + 4 {
+            turns.push(ChatTurn::user(format!("u{i}")));
+        }
+        save_ai_history_to(&path, &turns).unwrap();
+        let loaded = load_ai_history_from(&path);
+        assert_eq!(loaded.len(), AI_HISTORY_MAX_MESSAGES);
+        assert_eq!(loaded[0].content, format!("u{}", 4));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_ai_history_corrupt_returns_empty() {
+        let dir = std::env::temp_dir().join(format!(
+            "mm_ai_hist_bad_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ai_history.json");
+        fs::write(&path, "{not-json").unwrap();
+        let loaded = load_ai_history_from(&path);
+        assert!(loaded.is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

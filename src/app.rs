@@ -1,6 +1,6 @@
 //! 主应用组件 / Main Application Component
 
-use crate::actions::AppActions;
+use crate::actions::{AppActions, EditorActions};
 use crate::components::*;
 use crate::config::{
     AUTO_SAVE_ACTIVE_POLL_SECS, AUTO_SAVE_IDLE_POLL_SECS, FILE_WATCH_ACTIVE_INTERVAL_MS,
@@ -10,6 +10,7 @@ use crate::services::auto_save::AutoSaveService;
 use crate::services::file_watcher::FileModificationChecker;
 use crate::services::keyring_service;
 use crate::services::settings::load_settings;
+use crate::services::session::SessionService;
 use crate::services::theme_detector::ThemeDetector;
 use crate::state::AppState;
 use crate::state::{AIProvider, Language, Theme};
@@ -34,40 +35,45 @@ pub fn App() -> Element {
         // 加载保存的设置 / Load saved settings
         let settings = load_settings();
         {
+            let mut ui = state.ui();
+            let mut doc = state.document();
+            let mut ai = state.ai();
+
             // 应用主题 / Apply theme
-            *state.theme.write() = match settings.theme.as_str() {
+            *ui.theme.write() = match settings.theme.as_str() {
                 "light" => Theme::Light,
                 "system" => Theme::System,
                 _ => Theme::Dark,
             };
 
             // 应用语言 / Apply language
-            *state.language.write() = match settings.language.as_str() {
+            *ui.language.write() = match settings.language.as_str() {
                 "en-US" => Language::EnUS,
                 _ => Language::ZhCN,
             };
 
             // 应用编辑器设置 / Apply editor settings
-            *state.font_size.write() = settings.font_size;
-            *state.preview_font_size.write() = settings.preview_font_size;
-            *state.word_wrap.write() = settings.word_wrap;
-            *state.line_numbers.write() = settings.line_numbers;
-            *state.sync_scroll.write() = settings.sync_scroll;
-            *state.sidebar_visible.write() = settings.sidebar_visible;
-            *state.show_preview.write() = settings.show_preview;
+            *ui.font_size.write() = settings.font_size;
+            *ui.preview_font_size.write() = settings.preview_font_size;
+            *ui.word_wrap.write() = settings.word_wrap;
+            *ui.line_numbers.write() = settings.line_numbers;
+            *ui.sync_scroll.write() = settings.sync_scroll;
+            *ui.sidebar_visible.write() = settings.sidebar_visible;
+            *ui.show_preview.write() = settings.show_preview;
             AppActions::set_sidebar_width(&mut state, settings.sidebar_width);
-            *state.auto_save_enabled.write() = settings.auto_save_enabled;
-            *state.auto_save_interval.write() = settings.auto_save_interval;
+            *ui.auto_save_enabled.write() = settings.auto_save_enabled;
+            *ui.auto_save_interval.write() = settings.auto_save_interval;
+            *ui.pdf_cjk_font_path.write() = settings.pdf_cjk_font_path.clone();
 
             // 应用拼写检查设置 / Apply spell check settings
-            *state.spell_check_enabled.write() = settings.spell_check_enabled;
+            *doc.spell_check_enabled.write() = settings.spell_check_enabled;
             if settings.spell_check_enabled {
                 state.run_spell_check();
             }
 
             // 应用 AI 设置 / Apply AI settings
             {
-                let mut config = state.ai_config.write();
+                let mut config = ai.ai_config.write();
                 config.enabled = settings.ai.enabled;
                 config.provider = match settings.ai.provider.as_str() {
                     "claude" => AIProvider::Claude,
@@ -115,13 +121,39 @@ pub fn App() -> Element {
                 config.system_prompt = settings.ai.system_prompt;
                 config.temperature = settings.ai.temperature;
             }
+
+            // 恢复 AI 会话历史 / Restore AI conversation history for active tab
+            let key = state.current_ai_session_key();
+            *ai.ai_history.write() =
+                crate::services::settings::load_ai_history_for_key(&key);
+        }
+
+        // 恢复上次编辑会话（标签 / 工作区）/ Restore previous editing session (tabs / workspace)
+        if settings.session_restore_enabled {
+            if let Some(snapshot) = SessionService::load() {
+                let report = SessionService::restore(&mut state, &snapshot);
+                if report.restored > 0 {
+                    tracing::info!(
+                        "Session restored: {} tab(s), missing={}, skipped_large={}",
+                        report.restored,
+                        report.missing,
+                        report.skipped_large
+                    );
+                } else if report.missing > 0 || report.skipped_large > 0 {
+                    tracing::warn!(
+                        "Session restore incomplete: missing={}, skipped_large={}",
+                        report.missing,
+                        report.skipped_large
+                    );
+                }
+            }
         }
 
         state
     });
 
     // 获取当前主题 / Get current theme
-    let theme = *state.theme.read();
+    let theme = *state.ui().theme.read();
     let theme_str = match theme {
         Theme::Light => "light",
         Theme::System => ThemeDetector::detect(),
@@ -133,12 +165,14 @@ pub fn App() -> Element {
         let state_clone = state;
         use_future(move || {
             let mut state = state_clone;
+            let ui = state.ui();
+            let mut doc = state.document();
             let mut auto_saver = AutoSaveService::new();
             async move {
                 loop {
                     // 检查自动保存状态 / Check auto-save status
-                    let enabled = *state.auto_save_enabled.read();
-                    let has_file = state.current_file.read().is_some();
+                    let enabled = *ui.auto_save_enabled.read();
+                    let has_file = doc.current_file.read().is_some();
 
                     // 动态调整休眠时间：活跃时 5s，空闲时 60s，减少 CPU 唤醒
                     // Dynamic sleep: 5s when active, 60s when idle, reduce CPU wakeups
@@ -155,23 +189,53 @@ pub fn App() -> Element {
                     }
 
                     // 同步设置到 AutoSaveService / Sync settings to AutoSaveService
-                    let interval = *state.auto_save_interval.read();
-                    let modified = *state.modified.read();
+                    let interval = *ui.auto_save_interval.read();
+                    let modified = *doc.modified.read();
 
                     auto_saver.set_enabled(enabled);
                     auto_saver.set_interval(interval);
 
                     // 检查是否需要保存 / Check if save is needed
                     if auto_saver.should_save(modified) {
-                        let path = state.current_file.read().clone();
-                        let content = state.content.read().clone();
+                        // 非受控编辑器：先 flush DOM，避免自动保存过期内容
+                        // Uncontrolled editor: flush DOM first so auto-save is not stale
+                        EditorActions::flush_from_dom(&mut state).await;
+                        let path = doc.current_file.read().clone();
+                        let content = doc.content.read().clone();
+                        let revision = *doc.content_revision.read();
 
                         match auto_saver.auto_save(path.as_ref(), &content).await {
                             Ok(_) => {
-                                tracing::info!("自动保存成功 / Auto save successful");
-                                // 使用 mark_saved 确保同步 file_watch_refresh_seq，防止误报外部修改
-                                // Use mark_saved to sync file_watch_refresh_seq, preventing false external-modification alerts
-                                state.mark_saved();
+                                if *doc.content_revision.read() == revision {
+                                    tracing::info!("自动保存成功 / Auto save successful");
+                                    // 使用 mark_saved 确保同步 file_watch_refresh_seq，防止误报外部修改
+                                    // Use mark_saved to sync file_watch_refresh_seq, preventing false external-modification alerts
+                                    state.mark_saved();
+                                } else {
+                                    // 过期写入：用最新内容再写一次 / Stale write: rewrite with latest content
+                                    tracing::warn!(
+                                        "自动保存内容已过期，重新写入最新内容 / Auto-save stale; rewriting latest content"
+                                    );
+                                    let latest = doc.content.read().clone();
+                                    let latest_rev = *doc.content_revision.read();
+                                    let latest_path = doc.current_file.read().clone();
+                                    match auto_saver.auto_save(latest_path.as_ref(), &latest).await
+                                    {
+                                        Ok(_) if *doc.content_revision.read() == latest_rev => {
+                                            state.mark_saved();
+                                        }
+                                        Ok(_) => {
+                                            *doc.modified.write() = true;
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "自动保存重试失败 / Auto save retry failed: {}",
+                                                e
+                                            );
+                                            *doc.modified.write() = true;
+                                        }
+                                    }
+                                }
                             }
                             Err(e) => {
                                 tracing::error!("自动保存失败 / Auto save failed: {}", e);
@@ -187,7 +251,7 @@ pub fn App() -> Element {
     {
         let state_clone = state;
         use_future(move || {
-            let mut state = state_clone;
+            let mut doc = state_clone.document();
             let mut checker = FileModificationChecker::new();
             let mut last_file: Option<std::path::PathBuf> = None;
             let mut last_refresh_seq = 0_u64;
@@ -196,7 +260,7 @@ pub fn App() -> Element {
                 loop {
                     // 动态调整检测频率：有文件时快速检查，无文件时低频轮询
                     // Dynamic check interval: fast checks with open file, low-frequency when idle
-                    let has_file = state.current_file.read().is_some();
+                    let has_file = doc.current_file.read().is_some();
                     let check_interval = if has_file {
                         std::time::Duration::from_millis(FILE_WATCH_ACTIVE_INTERVAL_MS)
                     } else {
@@ -204,14 +268,14 @@ pub fn App() -> Element {
                     };
                     tokio::time::sleep(check_interval).await;
 
-                    let current_file = state.current_file.read().clone();
-                    let refresh_seq = *state.file_watch_refresh_seq.read();
+                    let current_file = doc.current_file.read().clone();
+                    let refresh_seq = *doc.file_watch_refresh_seq.read();
 
                     // 如果文件改变，更新检测器 / If file changed, update checker
                     if current_file != last_file {
                         if let Some(ref path) = current_file {
                             checker.set_file(path);
-                            *state.file_external_modified.write() = false;
+                            *doc.file_external_modified.write() = false;
                         } else {
                             checker.clear();
                         }
@@ -224,14 +288,14 @@ pub fn App() -> Element {
                     // Refresh watcher baseline after internal save, ignore, or reload actions
                     if refresh_seq != last_refresh_seq {
                         checker.update();
-                        *state.file_external_modified.write() = false;
+                        *doc.file_external_modified.write() = false;
                         last_refresh_seq = refresh_seq;
                         continue;
                     }
 
                     // 最近刚保存时跳过一次外部变更提示，避免自写入误报
                     // Skip notifications shortly after internal save to avoid false positives
-                    let recently_saved = state.last_saved.read().as_ref().is_some_and(|saved_at| {
+                    let recently_saved = doc.last_saved.read().as_ref().is_some_and(|saved_at| {
                         saved_at.elapsed()
                             < std::time::Duration::from_millis(FILE_WATCH_INTERNAL_WRITE_GRACE_MS)
                     });
@@ -243,10 +307,10 @@ pub fn App() -> Element {
 
                     // 检查文件是否被外部修改 / Check if file was externally modified
                     if checker.check_modified() {
-                        let already_notified = *state.file_external_modified.read();
+                        let already_notified = *doc.file_external_modified.read();
                         if !already_notified {
                             tracing::warn!("文件被外部修改/File was externally modified");
-                            *state.file_external_modified.write() = true;
+                            *doc.file_external_modified.write() = true;
                             // FileModifiedModal 会显示提示 / FileModifiedModal will show the prompt
                         }
                     }
@@ -274,6 +338,30 @@ pub fn App() -> Element {
 
                     if let Err(e) = crate::services::settings::save_window_size(w, h) {
                         tracing::warn!("窗口尺寸保存失败 / Failed to save window size: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    // 会话快照周期保存（标签 / 工作区 / 未保存草稿）
+    // Periodic session snapshot (tabs / workspace / unsaved drafts)
+    {
+        let state_clone = state;
+        use_future(move || {
+            let mut state = state_clone;
+            async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    let enabled = crate::services::settings::load_settings().session_restore_enabled;
+                    if !enabled {
+                        continue;
+                    }
+                    // 尽量先 flush 非受控编辑器，避免草稿过期
+                    // Flush uncontrolled editor first so drafts are not stale
+                    EditorActions::flush_from_dom(&mut state).await;
+                    if let Err(e) = SessionService::save(&state) {
+                        tracing::warn!("会话保存失败 / Failed to save session: {}", e);
                     }
                 }
             }

@@ -1,10 +1,18 @@
 //! 应用全局状态容器 / Application global state container
 //!
-//! 类型定义见 `types.rs`；业务方法见 `app_state_ops.rs`
-//! See `types.rs` for data shapes; see `app_state_ops.rs` for behavior
+//! 类型定义见 `types.rs`；业务方法见 `app_state_ops.rs`；领域视图见 `domains.rs`
+//! See `types.rs` for data shapes, `app_state_ops.rs` for behavior, `domains.rs` for domain views
+//!
+//! 访问方式：
+//! - 扁平字段：`state.content`（兼容现有代码）
+//! - 领域视图：`state.document()` / `state.ui()` / `state.ai()`
+//!
+//! Access: flat fields for compatibility; domain views via `document()` / `ui()` / `ai()`.
 
 use super::types::History as DocumentHistory;
-use super::types::{AIConfig, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme};
+use super::types::{
+    AIConfig, ChatTurn, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme,
+};
 use crate::config::{
     DEFAULT_AUTO_SAVE_INTERVAL_SECS, DEFAULT_FONT_SIZE, DEFAULT_PREVIEW_FONT_SIZE,
     DEFAULT_SIDEBAR_WIDTH,
@@ -108,12 +116,18 @@ pub struct AppState {
     pub auto_save_enabled: Signal<bool>,
     /// 自动保存间隔（秒）/ Auto Save Interval (seconds)
     pub auto_save_interval: Signal<u32>,
+    /// PDF 导出中文字体路径 / PDF CJK font path for export
+    pub pdf_cjk_font_path: Signal<Option<String>>,
 
     // ========== 文件监控状态 / File Watch State ==========
     /// 文件是否被外部修改 / Is File Externally Modified
     pub file_external_modified: Signal<bool>,
     /// 文件监控刷新序列号（内部保存/确认后递增）/ File watch refresh sequence
     pub file_watch_refresh_seq: Signal<u64>,
+    /// 内容修订号（用于保存竞态检测）/ Content revision (for save race detection)
+    pub content_revision: Signal<u64>,
+    /// 标签 LRU 访问时钟 / Tab LRU access clock
+    pub tab_access_clock: Signal<u64>,
 
     // ========== 关闭标签确认状态 / Close Tab Confirmation State ==========
     /// 是否显示关闭未保存标签确认弹窗 / Show close unsaved tab confirmation modal
@@ -136,22 +150,29 @@ pub struct AppState {
     pub(crate) last_outline_update: Signal<Option<std::time::Instant>>,
 
     // ========== AI 状态 / AI State ==========
-    pub ai_config: Signal<AIConfig>, // AI 配置 / AI Config
-    pub ai_loading: Signal<bool>,    // AI 加载中 / AI Loading
-    pub ai_result: Signal<String>,   // AI 结果 / AI Result
-    pub ai_title: Signal<String>,    // AI 标题 / AI Title
-    pub ai_input: Signal<String>,    // AI 输入 / AI Input
+    pub ai_config: Signal<AIConfig>,    // AI 配置 / AI Config
+    pub ai_loading: Signal<bool>,       // AI 加载中 / AI Loading
+    pub ai_result: Signal<String>,      // AI 结果 / AI Result
+    pub ai_title: Signal<String>,       // AI 标题 / AI Title
+    pub ai_input: Signal<String>,       // AI 输入 / AI Input
+    pub ai_use_selection: Signal<bool>, // AI 是否只使用选区 / Use selected text as AI context
+    /// AI 多轮会话历史（不含 system）/ Multi-turn AI chat history (no system turns)
+    pub ai_history: Signal<Vec<ChatTurn>>,
+    /// AI 生成世代号（递增以取消过期流）/ AI generation epoch (bump to cancel stale streams)
+    pub ai_generation_id: Signal<u64>,
 }
 
 impl AppState {
     /// 创建新的应用状态 / Create New Application State
     pub fn new() -> Self {
+        let mut seeded_history = DocumentHistory::default();
+        seeded_history.reset_with_content("");
         let mut state = Self {
             // 文档状态 / Document State
             current_file: Signal::new(None),
             content: Signal::new(String::new()),
             modified: Signal::new(false),
-            history: Signal::new(DocumentHistory::default()),
+            history: Signal::new(seeded_history),
             save_status: Signal::new(SaveStatus::Saved),
             last_saved: Signal::new(None),
 
@@ -211,10 +232,13 @@ impl AppState {
             // 自动保存状态 / Auto Save State
             auto_save_enabled: Signal::new(false),
             auto_save_interval: Signal::new(DEFAULT_AUTO_SAVE_INTERVAL_SECS),
+            pdf_cjk_font_path: Signal::new(None),
 
             // 文件监控状态 / File Watch State
             file_external_modified: Signal::new(false),
             file_watch_refresh_seq: Signal::new(0),
+            content_revision: Signal::new(0),
+            tab_access_clock: Signal::new(0),
 
             // 关闭标签确认状态 / Close Tab Confirmation State
             show_close_confirm: Signal::new(false),
@@ -237,11 +261,18 @@ impl AppState {
             ai_result: Signal::new(String::new()),
             ai_title: Signal::new(String::new()),
             ai_input: Signal::new(String::new()),
+            ai_use_selection: Signal::new(false),
+            ai_history: Signal::new(Vec::new()),
+            ai_generation_id: Signal::new(0),
         };
 
         // 确保至少有一个初始标签页（否则 TabBar 调用 init_first_tab 时才能显示）
         // Ensure at least one initial tab exists for proper tab/outline functionality
-        state.tabs.write().push(TabInfo::new("未命名"));
+        let lang = *state.language.read();
+        state
+            .tabs
+            .write()
+            .push(TabInfo::new(&crate::utils::i18n::untitled_tab_title(lang)));
 
         state
     }

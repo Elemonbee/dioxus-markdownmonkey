@@ -32,22 +32,22 @@ Versions reflect the current `Cargo.lock` resolution and may change after `cargo
 
 | Category | Technology | Version |
 |----------|-----------|---------|
-| **UI Framework** | Dioxus (desktop) | 0.7.6 |
+| **UI Framework** | Dioxus (desktop) | 0.7.9 |
 | **Language** | Rust | Edition 2021 |
-| **Markdown Parsing** | pulldown-cmark | 0.12.2 |
-| **HTML Sanitization** | ammonia | 4.1.2 |
-| **Syntax Highlighting** | syntect | 5.3.0 |
-| **HTTP** | reqwest (rustls-tls) | 0.12.28 |
-| **Async Runtime** | tokio | 1.50.0 |
-| **Key Storage** | keyring | 3.6.3 |
+| **Markdown Parsing** | pulldown-cmark | 0.13 |
+| **HTML Sanitization** | ammonia | 4 |
+| **Syntax Highlighting** | syntect | 5 |
+| **HTTP** | reqwest (rustls-tls) | 0.138 |
+| **Async Runtime** | tokio | 1 |
+| **Key Storage** | keyring | 4 |
 | **Serialization** | serde + serde_json | 1.x |
-| **File Dialogs** | rfd | 0.15.4 |
-| **User directories** | dirs | 6.0.0 |
-| **Logging** | tracing + tracing-subscriber (env-filter) | 0.1 / 0.3.23 |
-| **PDF Export** | printpdf | 0.7.0 |
-| **DOCX Export** | zip (OOXML) | 4.6.1 |
-| **File Watching** | notify | 7.0.0 |
-| **Clipboard** | arboard | 3.6.1 |
+| **File Dialogs** | rfd | 0.17 |
+| **User directories** | dirs | 6 |
+| **Logging** | tracing + tracing-subscriber (env-filter) | 0.1 / 0.3 |
+| **PDF Export** | printpdf | 0.9 |
+| **DOCX Export** | zip (OOXML) | 8 |
+| **File Watching** | notify | 8 |
+| **Clipboard** | arboard | 3 |
 
 ## 🏗️ Architecture
 

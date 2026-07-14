@@ -2,23 +2,24 @@
 
 use crate::actions::{AppActions, EditorActions};
 use crate::components::icons::{CloseIcon, RefreshIcon};
-use crate::config::{
-    AUTO_SAVE_INTERVAL_MAX_SECS, AUTO_SAVE_INTERVAL_MIN_SECS, LARGE_FILE_THRESHOLD_BYTES,
-    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
-};
+use crate::config::{LARGE_FILE_THRESHOLD_BYTES, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use crate::services::ai::{fetch_available_models, AIService};
 use crate::services::keyring_service;
-use crate::services::settings::{save_settings, AISettings, AppSettings};
+use crate::services::settings::{load_settings, save_settings, AISettings, AppSettings};
 use crate::state::{AIProvider, AppState};
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
+use rfd::AsyncFileDialog;
 
 /// 设置弹窗 / Settings Modal
 #[component]
 pub fn SettingsModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_settings.read();
-    let lang = *state.language.read();
+    let mut ui = state.ui();
+    let mut doc = state.document();
+    let mut ai = state.ai();
+    let show = *ui.show_settings.read();
+    let lang = *ui.language.read();
 
     // i18n
     let settings_t = t("settings", lang);
@@ -30,6 +31,7 @@ pub fn SettingsModal() -> Element {
     let sync_scroll_t = t("sync_scroll", lang);
     let auto_save_t = t("auto_save", lang);
     let auto_save_interval_t = t("auto_save_interval", lang);
+    let session_restore_t = t("session_restore", lang);
     let appearance_t = t("appearance", lang);
     let theme_t = t("theme", lang);
     let dark_t = t("dark", lang);
@@ -53,6 +55,10 @@ pub fn SettingsModal() -> Element {
     let provider_kimi_t = t("provider_kimi", lang);
     let provider_openrouter_t = t("provider_openrouter", lang);
     let large_file_threshold_t = t("large_file_threshold", lang);
+    let pdf_cjk_font_path_t = t("pdf_cjk_font_path", lang);
+    let pdf_cjk_font_path_hint_t = t("pdf_cjk_font_path_hint", lang);
+    let browse_t = t("browse", lang);
+    let clear_path_t = t("clear_path", lang);
     let reset_default_t = t("reset_default", lang);
     let save_close_t = t("save_close", lang);
     let spell_check_t = t("spell_check", lang);
@@ -69,8 +75,11 @@ pub fn SettingsModal() -> Element {
     let mut models_loading: Signal<bool> = use_signal(|| false);
     let mut models_error: Signal<Option<String>> = use_signal(|| None);
     let mut use_custom_model: Signal<bool> = use_signal(|| false);
+    let mut session_restore_enabled: Signal<bool> =
+        use_signal(|| load_settings().session_restore_enabled);
 
     let display_class = if show { "" } else { "hidden" };
+    let pdf_font_value = ui.pdf_cjk_font_path.read().clone().unwrap_or_default();
 
     // 预克隆 i18n 字符串（避免跨闭包 move）/ Pre-clone i18n strings (avoid cross-closure move)
     let no_models_for_effect = no_models_found_t.clone();
@@ -79,15 +88,15 @@ pub fn SettingsModal() -> Element {
 
     // 弹窗打开时自动获取 / Auto-fetch when modal opens
     let _ = use_effect(move || {
-        let show_now = *state.show_settings.read();
+        let show_now = *ui.show_settings.read();
         if show_now {
-            let provider = state.ai_config.read().provider.clone();
+            let provider = ai.ai_config.read().provider.clone();
             if matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter)
                 && available_models.read().is_empty()
                 && !*models_loading.read()
             {
-                let base_url = state.ai_config.read().base_url.clone();
-                let api_key = state.ai_config.read().api_key.clone();
+                let base_url = ai.ai_config.read().base_url.clone();
+                let api_key = ai.ai_config.read().api_key.clone();
                 *models_loading.write() = true;
                 *models_error.write() = None;
                 let no_models_t = no_models_for_effect.clone();
@@ -149,7 +158,7 @@ pub fn SettingsModal() -> Element {
                                 r#type: "number",
                                 min: "10",
                                 max: "32",
-                                value: "{*state.font_size.read()}",
+                                value: "{*ui.font_size.read()}",
                                 oninput: move |e| {
                                     if let Ok(size) = e.value().parse::<u32>() {
                                         EditorActions::set_font_size(&mut state, size);
@@ -164,7 +173,7 @@ pub fn SettingsModal() -> Element {
                                 r#type: "number",
                                 min: "10",
                                 max: "32",
-                                value: "{*state.preview_font_size.read()}",
+                                value: "{*ui.preview_font_size.read()}",
                                 oninput: move |e| {
                                     if let Ok(size) = e.value().parse::<u32>() {
                                         EditorActions::set_preview_font_size(&mut state, size);
@@ -177,7 +186,7 @@ pub fn SettingsModal() -> Element {
                             label { "{word_wrap_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: *state.word_wrap.read(),
+                                checked: *ui.word_wrap.read(),
                                 onchange: move |_| {
                                     EditorActions::toggle_word_wrap(&mut state);
                                 },
@@ -188,7 +197,7 @@ pub fn SettingsModal() -> Element {
                             label { "{line_numbers_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: *state.line_numbers.read(),
+                                checked: *ui.line_numbers.read(),
                                 onchange: move |_| {
                                     EditorActions::toggle_line_numbers(&mut state);
                                 },
@@ -199,7 +208,7 @@ pub fn SettingsModal() -> Element {
                             label { "{sync_scroll_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: *state.sync_scroll.read(),
+                                checked: *ui.sync_scroll.read(),
                                 onchange: move |_| {
                                     EditorActions::toggle_sync_scroll(&mut state);
                                 },
@@ -210,9 +219,12 @@ pub fn SettingsModal() -> Element {
                             label { "{spell_check_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: *state.spell_check_enabled.read(),
+                                checked: *doc.spell_check_enabled.read(),
                                 onchange: move |_| {
-                                    EditorActions::toggle_spell_check(&mut state);
+                                    let mut state = state;
+                                    spawn(async move {
+                                        EditorActions::toggle_spell_check_flushed(&mut state).await;
+                                    });
                                 },
                             }
                         }
@@ -221,10 +233,21 @@ pub fn SettingsModal() -> Element {
                             label { "{auto_save_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: *state.auto_save_enabled.read(),
+                                checked: *ui.auto_save_enabled.read(),
                                 onchange: move |_| {
-                                    let current = *state.auto_save_enabled.read();
-                                    *state.auto_save_enabled.write() = !current;
+                                    AppActions::toggle_auto_save(&mut state);
+                                },
+                            }
+                        }
+
+                        div { class: "settings-row",
+                            label { "{session_restore_t}" }
+                            input {
+                                r#type: "checkbox",
+                                checked: *session_restore_enabled.read(),
+                                onchange: move |_| {
+                                    let next = !*session_restore_enabled.read();
+                                    session_restore_enabled.set(next);
                                 },
                             }
                         }
@@ -235,10 +258,10 @@ pub fn SettingsModal() -> Element {
                                 r#type: "number",
                                 min: "10",
                                 max: "300",
-                                value: "{*state.auto_save_interval.read()}",
+                                value: "{*ui.auto_save_interval.read()}",
                                 oninput: move |e| {
                                     if let Ok(secs) = e.value().parse::<u32>() {
-                                        *state.auto_save_interval.write() = secs.clamp(AUTO_SAVE_INTERVAL_MIN_SECS, AUTO_SAVE_INTERVAL_MAX_SECS);
+                                        AppActions::set_auto_save_interval(&mut state, secs);
                                     }
                                 },
                             }
@@ -262,17 +285,17 @@ pub fn SettingsModal() -> Element {
                                 },
                                 option {
                                     value: "dark",
-                                    selected: *state.theme.read() == crate::state::Theme::Dark,
+                                    selected: *ui.theme.read() == crate::state::Theme::Dark,
                                     "{dark_t}"
                                 }
                                 option {
                                     value: "light",
-                                    selected: *state.theme.read() == crate::state::Theme::Light,
+                                    selected: *ui.theme.read() == crate::state::Theme::Light,
                                     "{light_t}"
                                 }
                                 option {
                                     value: "system",
-                                    selected: *state.theme.read() == crate::state::Theme::System,
+                                    selected: *ui.theme.read() == crate::state::Theme::System,
                                     "{follow_system_t}"
                                 }
                             }
@@ -290,12 +313,12 @@ pub fn SettingsModal() -> Element {
                                 },
                                 option {
                                     value: "zh-CN",
-                                    selected: *state.language.read() == crate::state::Language::ZhCN,
+                                    selected: *ui.language.read() == crate::state::Language::ZhCN,
                                     "中文"
                                 }
                                 option {
                                     value: "en-US",
-                                    selected: *state.language.read() == crate::state::Language::EnUS,
+                                    selected: *ui.language.read() == crate::state::Language::EnUS,
                                     "English"
                                 }
                             }
@@ -307,7 +330,7 @@ pub fn SettingsModal() -> Element {
                                 r#type: "range",
                                 min: "200",
                                 max: "400",
-                                value: "{*state.sidebar_width.read()}",
+                                value: "{*ui.sidebar_width.read()}",
                                 oninput: move |e| {
                                     if let Ok(width) = e.value().parse::<u32>() {
                                         AppActions::set_sidebar_width(&mut state, width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH));
@@ -320,6 +343,52 @@ pub fn SettingsModal() -> Element {
                             label { "{large_file_threshold_t}" }
                             span { "{LARGE_FILE_THRESHOLD_BYTES / 1024 / 1024} MB" }
                         }
+
+                        div { class: "settings-row",
+                            label { "{pdf_cjk_font_path_t}" }
+                            div { class: "settings-path-row",
+                                input {
+                                    r#type: "text",
+                                    class: "settings-path-input",
+                                    placeholder: "C:\\\\Windows\\\\Fonts\\\\msyh.ttc",
+                                    value: "{pdf_font_value}",
+                                    oninput: move |e| {
+                                        let v = e.value();
+                                        *ui.pdf_cjk_font_path.write() = if v.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(v)
+                                        };
+                                    },
+                                }
+                                button {
+                                    class: "btn-secondary settings-browse-btn",
+                                    onclick: move |_| {
+                                        let mut ui = ui;
+                                        spawn(async move {
+                                            let file = AsyncFileDialog::new()
+                                                .add_filter("Fonts", &["ttf", "ttc", "otf"])
+                                                .pick_file()
+                                                .await;
+                                            if let Some(file) = file {
+                                                let path = file.path().to_string_lossy().to_string();
+                                                *ui.pdf_cjk_font_path.write() = Some(path);
+                                            }
+                                        });
+                                    },
+                                    "{browse_t}"
+                                }
+                                button {
+                                    class: "btn-secondary settings-browse-btn",
+                                    disabled: pdf_font_value.is_empty(),
+                                    onclick: move |_| {
+                                        *ui.pdf_cjk_font_path.write() = None;
+                                    },
+                                    "{clear_path_t}"
+                                }
+                            }
+                        }
+                        p { class: "settings-hint", "{pdf_cjk_font_path_hint_t}" }
                     }
 
                     // AI 设置 / AI Settings
@@ -330,10 +399,10 @@ pub fn SettingsModal() -> Element {
                             label { "{enable_ai_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: state.ai_config.read().enabled,
+                                checked: ai.ai_config.read().enabled,
                                 onchange: move |_| {
-                                    let current = state.ai_config.read().enabled;
-                                    let mut config = state.ai_config.write();
+                                    let current = ai.ai_config.read().enabled;
+                                    let mut config = ai.ai_config.write();
                                     config.enabled = !current;
                                     if config.base_url.is_empty() {
                                         config.base_url = AIService::default_base_url(&config.provider).to_string();
@@ -348,7 +417,7 @@ pub fn SettingsModal() -> Element {
                         div { class: "settings-row",
                             label { "{provider_t}" }
                             select {
-                                value: "{state.ai_config.read().provider.as_str()}",
+                                value: "{ai.ai_config.read().provider.as_str()}",
                                 onchange: move |e| {
                                     let provider = match e.value().as_str() {
                                         "claude" => AIProvider::Claude,
@@ -364,8 +433,8 @@ pub fn SettingsModal() -> Element {
                                     models_error.set(None);
                                     use_custom_model.set(false);
                                     if matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter) {
-                                        let base_url = state.ai_config.read().base_url.clone();
-                                        let api_key = state.ai_config.read().api_key.clone();
+                                        let base_url = ai.ai_config.read().base_url.clone();
+                                        let api_key = ai.ai_config.read().api_key.clone();
                                         *models_loading.write() = true;
                                         *models_error.write() = None;
                                         let no_models_t = no_models_for_provider.clone();
@@ -404,9 +473,9 @@ pub fn SettingsModal() -> Element {
                             input {
                                 r#type: "password",
                                 placeholder: "{enter_api_key_t}",
-                                value: "{state.ai_config.read().api_key}",
+                                value: "{ai.ai_config.read().api_key}",
                                 oninput: move |e| {
-                                    let mut config = state.ai_config.write();
+                                    let mut config = ai.ai_config.write();
                                     config.api_key = e.value();
                                 },
                             }
@@ -417,9 +486,9 @@ pub fn SettingsModal() -> Element {
                             input {
                                 r#type: "text",
                                 placeholder: "{api_base_url_placeholder_t}",
-                                value: "{state.ai_config.read().base_url}",
+                                value: "{ai.ai_config.read().base_url}",
                                 oninput: move |e| {
-                                    let mut config = state.ai_config.write();
+                                    let mut config = ai.ai_config.write();
                                     config.base_url = e.value();
                                 },
                             }
@@ -430,8 +499,8 @@ pub fn SettingsModal() -> Element {
 
                             div { class: "settings-model-select",
                                 {
-                                    let provider = state.ai_config.read().provider.clone();
-                                    let current_model = state.ai_config.read().model.clone();
+                                    let provider = ai.ai_config.read().provider.clone();
+                                    let current_model = ai.ai_config.read().model.clone();
                                     let is_dropdown_provider = matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter);
                                     let models = available_models.read().clone();
                                     let loading = *models_loading.read();
@@ -448,7 +517,7 @@ pub fn SettingsModal() -> Element {
                                                     if val == "__custom__" {
                                                         use_custom_model.set(true);
                                                     } else {
-                                                        let mut config = state.ai_config.write();
+                                                        let mut config = ai.ai_config.write();
                                                         config.model = val;
                                                     }
                                                 },
@@ -479,9 +548,9 @@ pub fn SettingsModal() -> Element {
                                             input {
                                                 r#type: "text",
                                                 placeholder: "{model_name_t}",
-                                                value: "{state.ai_config.read().model}",
+                                                value: "{ai.ai_config.read().model}",
                                                 oninput: move |e| {
-                                                    let mut config = state.ai_config.write();
+                                                    let mut config = ai.ai_config.write();
                                                     config.model = e.value();
                                                 },
                                             }
@@ -491,7 +560,7 @@ pub fn SettingsModal() -> Element {
 
                                 // 刷新按钮（仅 Ollama/OpenRouter）/ Refresh button (Ollama/OpenRouter only)
                                 {
-                                    let provider = state.ai_config.read().provider.clone();
+                                    let provider = ai.ai_config.read().provider.clone();
                                     let is_dropdown_provider = matches!(provider, AIProvider::Ollama | AIProvider::OpenRouter);
                                     if is_dropdown_provider {
                                         rsx! {
@@ -500,9 +569,9 @@ pub fn SettingsModal() -> Element {
                                                 title: "{fetch_models_t}",
                                                 disabled: *models_loading.read(),
                                                 onclick: move |_| {
-                                                    let provider = state.ai_config.read().provider.clone();
-                                                    let base_url = state.ai_config.read().base_url.clone();
-                                                    let api_key = state.ai_config.read().api_key.clone();
+                                                    let provider = ai.ai_config.read().provider.clone();
+                                                    let base_url = ai.ai_config.read().base_url.clone();
+                                                    let api_key = ai.ai_config.read().api_key.clone();
                                                     *models_loading.write() = true;
                                                     *models_error.write() = None;
                                                     let no_models_t = no_models_for_refresh.clone();
@@ -555,10 +624,10 @@ pub fn SettingsModal() -> Element {
                                 min: "0",
                                 max: "1",
                                 step: "0.1",
-                                value: "{state.ai_config.read().temperature}",
+                                value: "{ai.ai_config.read().temperature}",
                                 oninput: move |e| {
                                     if let Ok(temp) = e.value().parse::<f32>() {
-                                        let mut config = state.ai_config.write();
+                                        let mut config = ai.ai_config.write();
                                         config.temperature = temp.clamp(0.0, 1.0);
                                     }
                                 },
@@ -576,8 +645,10 @@ pub fn SettingsModal() -> Element {
                             EditorActions::set_word_wrap(&mut state, false);
                             EditorActions::set_line_numbers(&mut state, true);
                             EditorActions::set_sync_scroll(&mut state, true);
-                            *state.spell_check_enabled.write() = false;
-                            *state.spell_check_results.write() = Vec::new();
+                            *doc.spell_check_enabled.write() = false;
+                            *doc.spell_check_results.write() = Vec::new();
+                            *ui.pdf_cjk_font_path.write() = None;
+                            session_restore_enabled.set(true);
                             AppActions::set_sidebar_width(&mut state, 280);
                         },
                         "{reset_default_t}"
@@ -586,7 +657,7 @@ pub fn SettingsModal() -> Element {
                         class: "btn-primary",
                         onclick: move |_| {
                             let (ai_enabled, ai_provider, ai_model, api_key, base_url, system_prompt, temperature) = {
-                                let config = state.ai_config.read();
+                                let config = ai.ai_config.read();
                                 (
                                     config.enabled,
                                     config.provider.as_str().to_string(),
@@ -603,29 +674,37 @@ pub fn SettingsModal() -> Element {
                                 if let Err(e) = keyring_service::store_api_key(provider_name, &api_key) {
                                     tracing::warn!("Cannot use keyring, falling back to file: {}", e);
                                 }
+                            } else {
+                                // 空密钥：从密钥环删除该提供商条目 / Empty key: remove provider entry from keyring
+                                let provider_name = ai_provider.as_str();
+                                if let Err(e) = keyring_service::delete_api_key(provider_name) {
+                                    tracing::debug!("No keyring entry to delete for {}: {}", provider_name, e);
+                                }
                             }
 
                             let settings = AppSettings {
-                                theme: match *state.theme.read() {
+                                theme: match *ui.theme.read() {
                                     crate::state::Theme::Dark => "dark".to_string(),
                                     crate::state::Theme::Light => "light".to_string(),
                                     crate::state::Theme::System => "system".to_string(),
                                 },
-                                language: match *state.language.read() {
+                                language: match *ui.language.read() {
                                     crate::state::Language::ZhCN => "zh-CN".to_string(),
                                     crate::state::Language::EnUS => "en-US".to_string(),
                                 },
-                                font_size: *state.font_size.read(),
-                                preview_font_size: *state.preview_font_size.read(),
-                                word_wrap: *state.word_wrap.read(),
-                                line_numbers: *state.line_numbers.read(),
-                                sync_scroll: *state.sync_scroll.read(),
-                                sidebar_visible: *state.sidebar_visible.read(),
-                                show_preview: *state.show_preview.read(),
-                                sidebar_width: *state.sidebar_width.read(),
-                                auto_save_enabled: *state.auto_save_enabled.read(),
-                                auto_save_interval: *state.auto_save_interval.read(),
-                                spell_check_enabled: *state.spell_check_enabled.read(),
+                                font_size: *ui.font_size.read(),
+                                preview_font_size: *ui.preview_font_size.read(),
+                                word_wrap: *ui.word_wrap.read(),
+                                line_numbers: *ui.line_numbers.read(),
+                                sync_scroll: *ui.sync_scroll.read(),
+                                sidebar_visible: *ui.sidebar_visible.read(),
+                                show_preview: *ui.show_preview.read(),
+                                sidebar_width: *ui.sidebar_width.read(),
+                                auto_save_enabled: *ui.auto_save_enabled.read(),
+                                auto_save_interval: *ui.auto_save_interval.read(),
+                                spell_check_enabled: *doc.spell_check_enabled.read(),
+                                pdf_cjk_font_path: ui.pdf_cjk_font_path.read().clone(),
+                                session_restore_enabled: *session_restore_enabled.read(),
                                 // 窗口尺寸持久化 / Window size persistence
                                 window_width: {
                                     let desktop = dioxus::desktop::use_window();

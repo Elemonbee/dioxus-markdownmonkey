@@ -35,6 +35,9 @@ pub enum AIError {
 
     #[error("解析错误/Parse Error: {0}")]
     Parse(String),
+
+    #[error("生成已取消/Generation cancelled")]
+    Cancelled,
 }
 
 /// AI 请求 / AI Request
@@ -54,6 +57,44 @@ struct AIRequest {
 pub struct Message {
     role: String,    // 角色 (system/user/assistant) / Role
     content: String, // 内容 / Content
+}
+
+impl Message {
+    /// 系统 system 消息 / Create a system message
+    pub fn system(content: impl Into<String>) -> Self {
+        Self {
+            role: "system".to_string(),
+            content: content.into(),
+        }
+    }
+
+    /// 创建 user 消息 / Create a user message
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+        }
+    }
+
+    /// 创建 assistant 消息 / Create an assistant message
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+        }
+    }
+
+    /// 角色字符串 / Role string
+    #[allow(dead_code)]
+    pub fn role(&self) -> &str {
+        &self.role
+    }
+
+    /// 内容字符串 / Content string
+    #[allow(dead_code)]
+    pub fn content(&self) -> &str {
+        &self.content
+    }
 }
 
 /// AI 响应 / AI Response
@@ -200,10 +241,11 @@ impl AIService {
         };
 
         let response = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+            .apply_bearer_auth(
+                self.client
+                    .post(format!("{}/chat/completions", self.base_url))
+                    .header("Content-Type", "application/json"),
+            )
             .json(&request)
             .send()
             .await
@@ -292,13 +334,36 @@ impl AIService {
     ///
     /// 通过 `on_chunk` 回调逐步返回内容，适合实时显示 AI 响应
     /// Returns content incrementally via `on_chunk` callback for real-time display
+    #[allow(dead_code)] // 测试与无取消场景的便捷入口 / Convenience for tests / non-cancellable callers
     pub async fn chat_stream<F>(
         &self,
         messages: Vec<Message>,
-        mut on_chunk: F,
+        on_chunk: F,
     ) -> Result<String, AIError>
     where
         F: FnMut(&str),
+    {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        self.chat_stream_cancellable(messages, on_chunk, || true, rx)
+            .await
+    }
+
+    /// 可取消的流式聊天 / Cancellable streaming chat
+    ///
+    /// `should_continue` 返回 false 或 `cancel_rx` 变为 true 时提前结束；
+    /// 已收到内容则返回 Ok(部分结果)，并通过 drop stream 中止 HTTP 读。
+    /// Stops early when `should_continue` is false or `cancel_rx` is true;
+    /// returns Ok(partial) if any content, and drops the stream to abort HTTP reads.
+    pub async fn chat_stream_cancellable<F, C>(
+        &self,
+        messages: Vec<Message>,
+        mut on_chunk: F,
+        should_continue: C,
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<String, AIError>
+    where
+        F: FnMut(&str),
+        C: FnMut() -> bool,
     {
         self.validate_config()?;
 
@@ -307,7 +372,9 @@ impl AIService {
         let is_claude = self.base_url.contains("anthropic.com");
 
         if is_claude {
-            return self.chat_stream_claude(messages, on_chunk).await;
+            return self
+                .chat_stream_claude_cancellable(messages, on_chunk, should_continue, cancel_rx)
+                .await;
         }
 
         let request = AIRequest {
@@ -319,10 +386,11 @@ impl AIService {
         };
 
         let response = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
+            .apply_bearer_auth(
+                self.client
+                    .post(format!("{}/chat/completions", self.base_url))
+                    .header("Content-Type", "application/json"),
+            )
             .json(&request)
             .send()
             .await
@@ -337,6 +405,8 @@ impl AIService {
         Self::collect_sse_content(
             response.bytes_stream(),
             &mut on_chunk,
+            should_continue,
+            cancel_rx,
             Self::parse_openai_sse_data,
             "No response content received from stream",
         )
@@ -344,13 +414,16 @@ impl AIService {
     }
 
     /// Claude SSE 流式响应 / Claude SSE streaming response
-    async fn chat_stream_claude<F>(
+    async fn chat_stream_claude_cancellable<F, C>(
         &self,
         messages: Vec<Message>,
         mut on_chunk: F,
+        should_continue: C,
+        cancel_rx: tokio::sync::watch::Receiver<bool>,
     ) -> Result<String, AIError>
     where
         F: FnMut(&str),
+        C: FnMut() -> bool,
     {
         use serde_json::json;
 
@@ -399,15 +472,21 @@ impl AIService {
         Self::collect_sse_content(
             response.bytes_stream(),
             &mut on_chunk,
+            should_continue,
+            cancel_rx,
             Self::parse_claude_sse_data,
             "No response content received from Claude stream",
         )
         .await
     }
 
-    async fn collect_sse_content<S, B, F, P>(
+    /// 收集 SSE 内容；`cancel_rx` 可在等待下一 chunk 时中止 HTTP 读
+    /// Collect SSE content; `cancel_rx` aborts the HTTP body while awaiting the next chunk
+    pub(crate) async fn collect_sse_content<S, B, F, C, P>(
         mut stream: S,
         on_chunk: &mut F,
+        mut should_continue: C,
+        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
         mut parse_data: P,
         empty_message: &str,
     ) -> Result<String, AIError>
@@ -415,20 +494,57 @@ impl AIService {
         S: Stream<Item = Result<B, reqwest::Error>> + Unpin,
         B: AsRef<[u8]>,
         F: FnMut(&str),
+        C: FnMut() -> bool,
         P: FnMut(&str) -> Option<String>,
     {
         let mut full_content = String::new();
         let mut line_buffer = String::new();
 
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(Self::map_reqwest_error)?;
-            line_buffer.push_str(&String::from_utf8_lossy(chunk.as_ref()));
-            Self::drain_sse_lines(
-                &mut line_buffer,
-                &mut full_content,
-                on_chunk,
-                &mut parse_data,
-            );
+        if *cancel_rx.borrow() || !should_continue() {
+            return if full_content.is_empty() {
+                Err(AIError::Cancelled)
+            } else {
+                Ok(full_content)
+            };
+        }
+
+        loop {
+            tokio::select! {
+                biased;
+                changed = cancel_rx.changed() => {
+                    if changed.is_err() || *cancel_rx.borrow() {
+                        drop(stream);
+                        return if full_content.is_empty() {
+                            Err(AIError::Cancelled)
+                        } else {
+                            Ok(full_content)
+                        };
+                    }
+                }
+                chunk_result = stream.next() => {
+                    match chunk_result {
+                        None => break,
+                        Some(Err(e)) => return Err(Self::map_reqwest_error(e)),
+                        Some(Ok(chunk)) => {
+                            if !should_continue() || *cancel_rx.borrow() {
+                                drop(stream);
+                                return if full_content.is_empty() {
+                                    Err(AIError::Cancelled)
+                                } else {
+                                    Ok(full_content)
+                                };
+                            }
+                            line_buffer.push_str(&String::from_utf8_lossy(chunk.as_ref()));
+                            Self::drain_sse_lines(
+                                &mut line_buffer,
+                                &mut full_content,
+                                on_chunk,
+                                &mut parse_data,
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         Self::process_sse_line(
@@ -507,7 +623,8 @@ impl AIService {
     }
 
     fn validate_config(&self) -> Result<(), AIError> {
-        if self.api_key.trim().is_empty() {
+        // Ollama 本地服务通常不需要 API Key / Local Ollama usually needs no API key
+        if self.api_key.trim().is_empty() && !self.is_local_ollama() {
             return Err(AIError::Config(
                 "缺少 API Key，请先在设置中配置 / Missing API key; configure it in settings"
                     .to_string(),
@@ -527,6 +644,22 @@ impl AIService {
         }
 
         Ok(())
+    }
+
+    /// 是否为本地 Ollama 端点 / Whether base URL points at local Ollama
+    fn is_local_ollama(&self) -> bool {
+        let url = self.base_url.to_ascii_lowercase();
+        url.contains("localhost:11434") || url.contains("127.0.0.1:11434")
+    }
+
+    /// 为请求附加 Authorization（无 key 时跳过，兼容 Ollama）
+    /// Attach Authorization header (skip when empty for Ollama compatibility)
+    fn apply_bearer_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.api_key.trim().is_empty() {
+            request
+        } else {
+            request.header("Authorization", format!("Bearer {}", self.api_key))
+        }
     }
 
     fn map_reqwest_error(error: reqwest::Error) -> AIError {
@@ -585,6 +718,35 @@ impl AIService {
 // AI 任务类型 / AI Task Types
 // ============================================
 
+/// 从文档中提取安全的选区上下文 / Extract a safe selected context from a document
+pub fn selected_ai_context(content: &str, start: usize, end: usize) -> Option<String> {
+    let (mut from, mut to) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+
+    from = from.min(content.len());
+    to = to.min(content.len());
+    if from == to {
+        return None;
+    }
+
+    while from > 0 && !content.is_char_boundary(from) {
+        from -= 1;
+    }
+    while to < content.len() && !content.is_char_boundary(to) {
+        to += 1;
+    }
+
+    let selected = &content[from..to];
+    if selected.trim().is_empty() {
+        None
+    } else {
+        Some(selected.to_string())
+    }
+}
+
 /// AI 任务类型枚举 / AI Task Type Enum
 ///
 /// 将 6 个独立的 builder 函数统一为一个枚举，
@@ -637,18 +799,54 @@ impl AITask {
     ///
     /// - `content`: 编辑器当前文档内容
     /// - `input`: 用户自定义输入（大纲主题、自定义提示词等）
+    #[allow(dead_code)] // 测试与无历史调用的便捷入口 / Convenience for tests / no-history callers
     pub fn build_messages(&self, content: &str, input: &str) -> Vec<Message> {
-        let (system_prompt, user_content) = self.build_prompts(content, input);
-        vec![
-            Message {
-                role: "system".to_string(),
-                content: system_prompt,
-            },
-            Message {
-                role: "user".to_string(),
-                content: user_content,
-            },
-        ]
+        self.build_messages_with_history(content, input, &[], "")
+    }
+
+    /// 构建带会话历史与可选全局 system 的消息列表
+    /// Build messages with conversation history and optional global system prompt
+    ///
+    /// `history` 仅含 user/assistant；`global_system` 会拼到任务 system 前缀
+    /// `history` is user/assistant only; `global_system` is prefixed onto the task system prompt
+    pub fn build_messages_with_history(
+        &self,
+        content: &str,
+        input: &str,
+        history: &[crate::state::ChatTurn],
+        global_system: &str,
+    ) -> Vec<Message> {
+        const MAX_HISTORY_TURNS: usize = 10;
+
+        let (task_system, user_content) = self.build_prompts(content, input);
+        let system_prompt = if global_system.trim().is_empty() {
+            task_system
+        } else {
+            format!("{}\n\n{}", global_system.trim(), task_system)
+        };
+
+        let mut messages = Vec::with_capacity(2 + history.len().min(MAX_HISTORY_TURNS));
+        messages.push(Message::system(system_prompt));
+
+        // 只保留最近 N 轮 / Keep only the most recent N turns
+        let start = history.len().saturating_sub(MAX_HISTORY_TURNS);
+        for turn in &history[start..] {
+            let role = turn.role.as_str();
+            if role == "assistant" {
+                messages.push(Message::assistant(turn.content.clone()));
+            } else if role == "user" {
+                messages.push(Message::user(turn.content.clone()));
+            }
+        }
+
+        messages.push(Message::user(user_content));
+        messages
+    }
+
+    /// 生成本轮写入历史的用户文本摘要 / User-turn text stored into history
+    pub fn history_user_summary(&self, content: &str, input: &str) -> String {
+        let (_, user_content) = self.build_prompts(content, input);
+        user_content
     }
 
     /// 生成 system prompt 和 user content / Generate system prompt and user content
@@ -700,6 +898,7 @@ pub fn format_ai_error(error: &AIError, prefix: &str) -> String {
             "{}: 网络请求失败，请检查连接后重试 / Network request failed: {}",
             prefix, err
         ),
+        AIError::Cancelled => format!("{}: 已取消生成 / Generation cancelled", prefix),
     }
 }
 
@@ -861,6 +1060,17 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_config_allows_ollama_without_api_key() {
+        let service = AIService::new(
+            String::new(),
+            Some("http://localhost:11434/v1".to_string()),
+            Some("llama3".to_string()),
+        );
+
+        assert!(service.validate_config().is_ok());
+    }
+
+    #[test]
     fn test_map_http_error_authentication() {
         let err = AIService::map_http_error(401, "bad key".to_string());
         assert!(matches!(err, AIError::Authentication(_)));
@@ -876,6 +1086,18 @@ mod tests {
     fn test_map_http_error_service_unavailable() {
         let err = AIService::map_http_error(503, "busy".to_string());
         assert!(matches!(err, AIError::ServiceUnavailable(_)));
+    }
+
+    #[test]
+    fn test_selected_ai_context_extracts_selection() {
+        let selected = selected_ai_context("Hello 世界", 6, 12).unwrap();
+        assert_eq!(selected, "世界");
+    }
+
+    #[test]
+    fn test_selected_ai_context_ignores_empty_selection() {
+        assert_eq!(selected_ai_context("Hello", 2, 2), None);
+        assert_eq!(selected_ai_context("Hello   world", 5, 8), None);
     }
 
     // --- AITask tests ---
@@ -939,6 +1161,32 @@ mod tests {
         assert!(msgs[1].content.contains("fallback content"));
     }
 
+    /// 多轮历史会插入到 system 与最新 user 之间
+    /// Multi-turn history is inserted between system and the latest user message
+    #[test]
+    fn test_ai_task_build_messages_with_history() {
+        use crate::state::ChatTurn;
+        let history = vec![
+            ChatTurn::user("first question"),
+            ChatTurn::assistant("first answer"),
+        ];
+        let msgs = AITask::Custom.build_messages_with_history(
+            "doc",
+            "Summarize",
+            &history,
+            "Be concise.",
+        );
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[0].role, "system");
+        assert!(msgs[0].content.contains("Be concise."));
+        assert_eq!(msgs[1].role, "user");
+        assert_eq!(msgs[1].content, "first question");
+        assert_eq!(msgs[2].role, "assistant");
+        assert_eq!(msgs[2].content, "first answer");
+        assert_eq!(msgs[3].role, "user");
+        assert_eq!(msgs[3].content, "doc");
+    }
+
     #[test]
     fn test_format_ai_error_api() {
         let err = AIError::Api("test error".to_string());
@@ -958,5 +1206,36 @@ mod tests {
         let err = AIError::Authentication("invalid key".to_string());
         let msg = format_ai_error(&err, "Error");
         assert!(msg.contains("Error: invalid key"));
+    }
+
+    /// 取消信号应打断挂起的 SSE 等待 / Cancel signal must interrupt a pending SSE wait
+    #[tokio::test]
+    async fn test_sse_cancel_aborts_pending_stream() {
+        use futures_util::stream;
+        use std::time::Duration;
+
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let pending = stream::pending::<Result<Vec<u8>, reqwest::Error>>();
+
+        let task = tokio::spawn(async move {
+            AIService::collect_sse_content(
+                pending,
+                &mut |_| {},
+                || true,
+                rx,
+                |_| None,
+                "empty",
+            )
+            .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let _ = tx.send(true);
+
+        let result = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("cancel should finish promptly")
+            .expect("join ok");
+        assert!(matches!(result, Err(AIError::Cancelled)));
     }
 }

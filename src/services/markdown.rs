@@ -2,10 +2,29 @@
 
 use ammonia::{Builder, UrlRelative};
 use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// 全局缓存消毒器配置（避免每次渲染重建）/ Globally cached sanitizer config (avoids rebuilding per render)
 static SANITIZER: OnceLock<Builder<'static>> = OnceLock::new();
+
+/// 判断 URL 是否危险（XSS 载体）/ Whether a URL is a dangerous XSS vector
+fn is_dangerous_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("javascript:")
+        || lower.starts_with("vbscript:")
+        || lower.starts_with("blob:")
+    {
+        return true;
+    }
+    // 仅允许图片 data URI，拦截 data:text/html 等 / Allow image data URIs only
+    if lower.starts_with("data:") && !lower.starts_with("data:image/") {
+        return true;
+    }
+    false
+}
 
 /// 获取缓存的消毒器 / Get cached sanitizer
 fn get_sanitizer() -> &'static Builder<'static> {
@@ -48,7 +67,8 @@ fn get_sanitizer() -> &'static Builder<'static> {
             "div",
             "input",
         ]);
-        builder.add_generic_attributes(["id", "class", "style"]);
+        // 不放行 style，避免 CSS 注入叠加层/外泄 / Do not allow style (CSS injection / overlay)
+        builder.add_generic_attributes(["id", "class"]);
         builder.add_tag_attributes("a", ["href", "title"]);
         builder.add_tag_attributes("img", ["src", "alt", "title", "width", "height"]);
         builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
@@ -56,7 +76,17 @@ fn get_sanitizer() -> &'static Builder<'static> {
         builder.add_tag_attributes("th", ["align", "valign"]);
         builder.add_tag_attributes("pre", ["class"]);
         builder.add_tag_attributes("div", ["class"]);
+        builder.url_schemes(HashSet::from(["http", "https", "mailto", "data"]));
         builder.url_relative(UrlRelative::PassThrough);
+        builder.attribute_filter(|_element, attribute, value| {
+            if attribute == "style" {
+                return None;
+            }
+            if (attribute == "href" || attribute == "src") && is_dangerous_url(value) {
+                return None;
+            }
+            Some(Cow::Borrowed(value))
+        });
         builder
     })
 }
@@ -73,6 +103,7 @@ impl MarkdownService {
     /// 渲染 Markdown 为 HTML / Render Markdown to HTML
     /// 输出经过 ammonia 消毒处理，防止 XSS 攻击
     /// Output is sanitized by ammonia to prevent XSS attacks
+    #[allow(dead_code)] // 无高亮导出/测试入口 / Non-highlight export and test entry
     pub fn render(&self, content: &str) -> String {
         let mut options = Options::empty();
         options.insert(Options::ENABLE_TABLES); // 表格 / Tables
@@ -184,6 +215,7 @@ fn escape_html_for_mermaid(s: &str) -> String {
 }
 
 /// 处理 Mermaid 代码块 / Process Mermaid Code Blocks
+#[allow(dead_code)] // 由 MarkdownService::render 使用 / Used by MarkdownService::render
 fn process_mermaid_blocks(events: Vec<Event>) -> Vec<Event> {
     let mut result = Vec::new();
     let mut in_code_block = false;
@@ -408,17 +440,32 @@ fn find_closing_delimiter(chars: &[char], start: usize, is_block: bool) -> Optio
 }
 
 /// 便捷函数：渲染 Markdown / Convenience Function: Render Markdown
+#[allow(dead_code)] // 测试与无高亮场景 / Tests and non-highlight callers
 pub fn render_markdown(content: &str) -> String {
     let service = MarkdownService::new();
     service.render(content)
 }
 
-/// 获取 Mermaid CDN 脚本标签（带离线检测、缓存和降级）/ Get Mermaid CDN Script Tag (with offline detection, caching and fallback)
-pub fn mermaid_script() -> &'static str {
-    r#"<script>
+const BUNDLED_MERMAID_JS: &str = include_str!("../../assets/vendor/mermaid.min.js");
+const BUNDLED_KATEX_JS: &str = include_str!("../../assets/vendor/katex.min.js");
+const BUNDLED_KATEX_CSS: &str = include_str!("../../assets/vendor/katex.min.css");
+
+fn js_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// 获取 Mermaid 脚本标签（优先使用内置资源，带缓存和 CDN 降级）/ Get Mermaid script tag (bundled first, with cache and CDN fallback)
+pub fn mermaid_script() -> String {
+    let mut script = String::from(
+        r#"<script>
 (function() {
     const CACHE_KEY = 'md_mermaid_cache';
     const CACHE_VERSION = 'v10.9.0';
+    const BUNDLED_MERMAID_JS = "#,
+    );
+    script.push_str(&js_string_literal(BUNDLED_MERMAID_JS));
+    script.push_str(
+        r#";
     
     // 降级显示 / Fallback display
     function showFallback(showNetworkMsg) {
@@ -437,6 +484,27 @@ pub fn mermaid_script() -> &'static str {
             }
         });
     }
+
+    function injectScript(code, label) {
+        if (!code) return false;
+        try {
+            var s = document.createElement('script');
+            s.textContent = code;
+            document.head.appendChild(s);
+            initMermaid();
+            if (window._mermaidAvailable) {
+                console.log('Mermaid loaded from ' + label);
+                return true;
+            }
+        } catch(e) {
+            console.warn('Failed to load Mermaid from ' + label + ':', e);
+        }
+        return false;
+    }
+
+    function loadBundled() {
+        return injectScript(BUNDLED_MERMAID_JS, 'bundled resource');
+    }
     
     // 初始化 Mermaid / Initialize Mermaid
     function initMermaid() {
@@ -452,20 +520,18 @@ pub fn mermaid_script() -> &'static str {
         }
     }
     
-    // 从缓存加载 / Load from cache
+    // 从缓存加载（仅接受与当前版本匹配的旧缓存；不再写入 CDN 正文，降低供应链风险）
+    // Load from cache (version-matched only; CDN bodies are no longer cached)
     function loadFromCache() {
         try {
             var cached = localStorage.getItem(CACHE_KEY);
             if (cached) {
                 var data = JSON.parse(cached);
-                if (data.version === CACHE_VERSION && data.code) {
-                    var s = document.createElement('script');
-                    s.textContent = data.code;
-                    document.head.appendChild(s);
-                    initMermaid();
-                    console.log('Mermaid loaded from cache');
-                    return true;
+                // 拒绝无 integrity 字段的旧 CDN 缓存 / Reject legacy CDN caches without integrity
+                if (data.version === CACHE_VERSION && data.code && data.source === 'bundled') {
+                    return injectScript(data.code, 'cache');
                 }
+                localStorage.removeItem(CACHE_KEY);
             }
         } catch(e) {
             console.warn('Failed to load Mermaid from cache:', e);
@@ -473,32 +539,18 @@ pub fn mermaid_script() -> &'static str {
         return false;
     }
     
-    // 从 CDN 加载并缓存 / Load from CDN and cache
+    // 从 CDN 加载（仅用 script.src，不把远程脚本文本写入 localStorage）
+    // Load from CDN via script.src only — never persist remote script text
     function loadFromCDN() {
         var script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js';
+        script.crossOrigin = 'anonymous';
         script.onload = function() {
-            // 缓存到 localStorage / Cache to localStorage
-            try {
-                // 获取 mermaid 对象的源码（通过重新获取脚本内容）
-                fetch('https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js')
-                    .then(r => r.text())
-                    .then(code => {
-                        localStorage.setItem(CACHE_KEY, JSON.stringify({
-                            version: CACHE_VERSION,
-                            code: code,
-                            timestamp: Date.now()
-                        }));
-                        console.log('Mermaid cached for offline use');
-                    })
-                    .catch(() => {});
-            } catch(e) {}
             initMermaid();
         };
         script.onerror = function() {
             console.warn('Mermaid CDN load failed');
             window._mermaidAvailable = false;
-            // 尝试从缓存加载 / Try cache fallback
             if (!loadFromCache()) {
                 showFallback(true);
             }
@@ -509,11 +561,10 @@ pub fn mermaid_script() -> &'static str {
     // 主逻辑 / Main logic
     var isOnline = navigator.onLine;
     
-    if (isOnline) {
-        loadFromCDN();
-    } else {
-        // 离线时优先使用缓存 / Use cache when offline
-        if (!loadFromCache()) {
+    if (!loadBundled() && !loadFromCache()) {
+        if (isOnline) {
+            loadFromCDN();
+        } else {
             window._mermaidAvailable = false;
             showFallback(false);
         }
@@ -526,15 +577,28 @@ pub fn mermaid_script() -> &'static str {
         }
     });
 })();
-</script>"#
+</script>"#,
+    );
+    script
 }
 
-/// 获取 KaTeX CDN 脚本标签（用于数学公式，带离线检测和缓存）/ Get KaTeX CDN Script Tag (for math formulas, with offline detection and caching)
-pub fn katex_script() -> &'static str {
-    r#"<script>
+/// 获取 KaTeX 脚本标签（优先使用内置资源，带缓存和 CDN 降级）/ Get KaTeX script tag (bundled first, with cache and CDN fallback)
+pub fn katex_script() -> String {
+    let mut script = String::from(
+        r#"<script>
 (function() {
     const CACHE_KEY = 'md_katex_cache';
     const CACHE_VERSION = 'v0.16.9';
+    const BUNDLED_KATEX_JS = "#,
+    );
+    script.push_str(&js_string_literal(BUNDLED_KATEX_JS));
+    script.push_str(
+        r#";
+    const BUNDLED_KATEX_CSS = "#,
+    );
+    script.push_str(&js_string_literal(BUNDLED_KATEX_CSS));
+    script.push_str(
+        r#";
     
     function renderMath() {
         if (typeof katex === 'undefined') return;
@@ -575,21 +639,52 @@ pub fn katex_script() -> &'static str {
     }
 
     window._mm_renderMath = renderMath;
+
+    function injectCss(css, label) {
+        if (!css) return;
+        try {
+            var style = document.createElement('style');
+            style.textContent = css;
+            style.dataset.source = label;
+            document.head.appendChild(style);
+        } catch(e) {
+            console.warn('Failed to load KaTeX CSS from ' + label + ':', e);
+        }
+    }
+
+    function injectScript(code, label) {
+        if (!code) return false;
+        try {
+            var s = document.createElement('script');
+            s.textContent = code;
+            document.head.appendChild(s);
+            window._katexAvailable = typeof katex !== 'undefined';
+            if (window._katexAvailable) {
+                renderMath();
+                console.log('KaTeX loaded from ' + label);
+                return true;
+            }
+        } catch(e) {
+            console.warn('Failed to load KaTeX from ' + label + ':', e);
+        }
+        return false;
+    }
+
+    function loadBundled() {
+        injectCss(BUNDLED_KATEX_CSS, 'bundled resource');
+        return injectScript(BUNDLED_KATEX_JS, 'bundled resource');
+    }
     
     function loadFromCache() {
         try {
             var cached = localStorage.getItem(CACHE_KEY);
             if (cached) {
                 var data = JSON.parse(cached);
-                if (data.version === CACHE_VERSION && data.code) {
-                    var s = document.createElement('script');
-                    s.textContent = data.code;
-                    document.head.appendChild(s);
-                    window._katexAvailable = true;
-                    renderMath();
-                    console.log('KaTeX loaded from cache');
-                    return true;
+                // 拒绝无 integrity 的旧 CDN 缓存 / Reject legacy CDN caches without integrity
+                if (data.version === CACHE_VERSION && data.code && data.source === 'bundled') {
+                    return injectScript(data.code, 'cache');
                 }
+                localStorage.removeItem(CACHE_KEY);
             }
         } catch(e) {
             console.warn('Failed to load KaTeX from cache:', e);
@@ -602,27 +697,14 @@ pub fn katex_script() -> &'static str {
         var link = document.createElement('link');
         link.rel = 'stylesheet';
         link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+        link.crossOrigin = 'anonymous';
         document.head.appendChild(link);
         
-        // 加载 JS / Load JS
+        // 加载 JS（script.src，不缓存远程正文）/ Load JS via script.src; do not cache remote body
         var script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
+        script.crossOrigin = 'anonymous';
         script.onload = function() {
-            // 缓存到 localStorage / Cache to localStorage
-            try {
-                fetch('https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js')
-                    .then(r => r.text())
-                    .then(code => {
-                        localStorage.setItem(CACHE_KEY, JSON.stringify({
-                            version: CACHE_VERSION,
-                            code: code,
-                            timestamp: Date.now()
-                        }));
-                        console.log('KaTeX cached for offline use');
-                    })
-                    .catch(() => {});
-            } catch(e) {}
-            
             window._katexAvailable = true;
             renderMath();
         };
@@ -655,10 +737,10 @@ pub fn katex_script() -> &'static str {
     
     var isOnline = navigator.onLine;
     
-    if (isOnline) {
-        loadKaTeX();
-    } else {
-        if (!loadFromCache()) {
+    if (!loadBundled() && !loadFromCache()) {
+        if (isOnline) {
+            loadKaTeX();
+        } else {
             window._katexAvailable = false;
         }
     }
@@ -670,5 +752,35 @@ pub fn katex_script() -> &'static str {
         }
     });
 })();
-</script>"#
+</script>"#,
+    );
+    script
+}
+
+#[cfg(test)]
+mod preview_asset_tests {
+    use super::*;
+
+    #[test]
+    fn mermaid_loader_prefers_bundled_resource() {
+        let script = mermaid_script();
+        let bundled_pos = script.find("loadBundled()").unwrap();
+        let cdn_pos = script.find("loadFromCDN()").unwrap();
+
+        assert!(script.contains("BUNDLED_MERMAID_JS"));
+        assert!(script.contains("bundled resource"));
+        assert!(bundled_pos < cdn_pos);
+    }
+
+    #[test]
+    fn katex_loader_prefers_bundled_resource() {
+        let script = katex_script();
+        let bundled_pos = script.find("loadBundled()").unwrap();
+        let cdn_pos = script.find("loadKaTeX()").unwrap();
+
+        assert!(script.contains("BUNDLED_KATEX_JS"));
+        assert!(script.contains("BUNDLED_KATEX_CSS"));
+        assert!(script.contains("bundled resource"));
+        assert!(bundled_pos < cdn_pos);
+    }
 }

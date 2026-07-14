@@ -7,7 +7,8 @@ use crate::state::app_state::AppState;
 use crate::state::types::History as UndoHistory;
 use crate::state::types::{
     AIConfig, AIProvider, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme,
-    LARGE_FILE_HISTORY_THRESHOLD, LARGE_FILE_MAX_HISTORY, MAX_HISTORY_SIZE,
+    HUGE_FILE_HISTORY_THRESHOLD, HUGE_FILE_MAX_HISTORY, LARGE_FILE_HISTORY_THRESHOLD,
+    LARGE_FILE_MAX_HISTORY, MAX_HISTORY_SIZE,
 };
 
 // ========== History 测试 / History Tests ==========
@@ -17,6 +18,18 @@ fn test_history_default() {
     let history = UndoHistory::default();
     assert!(history.past.is_empty());
     assert!(history.future.is_empty());
+}
+
+#[test]
+fn test_reset_with_content_clears_undo_stack() {
+    let mut history = UndoHistory::default();
+    history.push("a".to_string());
+    history.push("b".to_string());
+    history.reset_with_content("seeded");
+    assert!(history.past.is_empty());
+    assert!(history.future.is_empty());
+    assert!(!history.is_different("seeded"));
+    assert!(history.is_different("changed"));
 }
 
 #[test]
@@ -69,6 +82,20 @@ fn test_history_large_file_memory_optimization() {
 }
 
 #[test]
+fn test_history_huge_file_memory_optimization() {
+    // 超大文件进一步压缩历史深度 / Further shrink history for huge files
+    let mut history = UndoHistory::default();
+    let huge_content: String = "y".repeat(HUGE_FILE_HISTORY_THRESHOLD + 1);
+
+    for _ in 0..(HUGE_FILE_MAX_HISTORY + 5) {
+        history.push(huge_content.clone());
+    }
+
+    assert_eq!(history.past.len(), HUGE_FILE_MAX_HISTORY);
+    assert!(history.past.len() < LARGE_FILE_MAX_HISTORY);
+}
+
+#[test]
 fn test_history_small_file_full_capacity() {
     // 测试小文件时历史容量保持最大 / Test that small files keep full history capacity
     let mut history = UndoHistory::default();
@@ -93,25 +120,38 @@ fn test_tab_info_new() {
     let tab = TabInfo::new("Test Tab");
     assert_eq!(tab.title, "Test Tab");
     assert!(tab.path.is_none());
-    assert!(tab.content.is_empty());
+    assert_eq!(tab.content_str(), "");
     assert!(!tab.modified);
 }
 
 #[test]
 fn test_tab_info_from_file() {
     let path = PathBuf::from("/docs/test.md");
-    let tab = TabInfo::from_file(path.clone(), "# Hello".to_string());
+    let tab = TabInfo::from_file(path.clone(), "# Hello");
     assert_eq!(tab.title, "test");
     assert_eq!(tab.path, Some(path));
-    assert_eq!(tab.content, "# Hello");
+    assert_eq!(tab.content_str(), "# Hello");
     assert!(!tab.modified);
 }
 
 #[test]
 fn test_tab_info_from_file_no_extension() {
     let path = PathBuf::from("/docs/README");
-    let tab = TabInfo::from_file(path, "content".to_string());
+    let tab = TabInfo::from_file(path, "content");
     assert_eq!(tab.title, "README");
+}
+
+#[test]
+fn test_tab_info_try_evict() {
+    let mut tab = TabInfo::from_file(PathBuf::from("/docs/doc.md"), "body");
+    assert!(!tab.is_evicted());
+    assert!(tab.try_evict());
+    assert!(tab.is_evicted());
+    assert_eq!(tab.content_str(), "");
+
+    let mut dirty = TabInfo::from_file(PathBuf::from("/docs/a.md"), "x");
+    dirty.modified = true;
+    assert!(!dirty.try_evict());
 }
 
 // ========== OutlineItem 测试 / OutlineItem Tests ==========
@@ -202,6 +242,22 @@ fn with_runtime<F: FnOnce()>(f: F) {
     });
     let scope_id = dioxus::prelude::ScopeId::ROOT;
     vdom.in_scope(scope_id, f);
+}
+
+#[test]
+fn test_domain_views_share_signals() {
+    with_runtime(|| {
+        let state = AppState::new();
+        let mut doc = state.document();
+        let mut ui = state.ui();
+        let mut ai = state.ai();
+        *doc.content.write() = "hello".to_string();
+        assert_eq!(state.content.read().as_str(), "hello");
+        *ui.show_preview.write() = false;
+        assert!(!*state.show_preview.read());
+        *ai.ai_input.write() = "q".to_string();
+        assert_eq!(state.ai_input.read().as_str(), "q");
+    });
 }
 
 #[test]
@@ -336,5 +392,59 @@ fn test_update_content_heading_line_numbers() {
         let items = state.outline_items.read();
         assert_eq!(items[0].line, 2);
         assert_eq!(items[1].line, 4);
+    });
+}
+
+/// LRU：超过驻留上限时优先驱逐最久未访问的未修改标签
+/// LRU: prefer evicting least-recently-accessed unmodified tabs past the resident cap
+#[test]
+fn test_evict_inactive_tabs_lru_order() {
+    with_runtime(|| {
+        use crate::config::MAX_RESIDENT_INACTIVE_TABS;
+
+        let mut state = AppState::new();
+        // 当前标签 index=0，再放 4 个可驱逐标签（合计 4 个非当前候选里保留 3 个）
+        // Current tab at 0; add 4 more evictable tabs (keep 3 of inactive residents)
+        {
+            let mut tabs = state.tabs.write();
+            tabs.clear();
+            tabs.push(TabInfo::from_file(
+                PathBuf::from("/docs/current.md"),
+                "current",
+            ));
+            for i in 1..=(MAX_RESIDENT_INACTIVE_TABS + 1) {
+                let mut tab = TabInfo::from_file(
+                    PathBuf::from(format!("/docs/old{i}.md")),
+                    &format!("body{i}"),
+                );
+                // 访问时钟：1 最旧，数字越大越新 / Access clock: 1 oldest, higher = newer
+                tab.last_accessed = i as u64;
+                tabs.push(tab);
+            }
+            // 当前标签最新访问 / Current tab is most recently accessed
+            tabs[0].last_accessed = 100;
+        }
+        *state.current_tab_index.write() = 0;
+        *state.document().tab_access_clock.write() = 100;
+        *state.content.write() = "current".to_string();
+
+        state.evict_inactive_tabs();
+
+        let tabs = state.tabs.read();
+        // 应驱逐最旧的 inactive（last_accessed=1，即 index=1）
+        // Should evict oldest inactive (last_accessed=1 → index 1)
+        assert!(tabs[1].is_evicted(), "oldest inactive tab should be evicted");
+        let resident_inactive = tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| *i != 0 && !t.is_evicted())
+            .count();
+        assert_eq!(resident_inactive, MAX_RESIDENT_INACTIVE_TABS);
+        // 较新的 inactive 应仍驻留 / Newer inactive tabs should remain resident
+        for i in 2..=(MAX_RESIDENT_INACTIVE_TABS + 1) {
+            assert!(!tabs[i].is_evicted(), "tab {i} should remain resident");
+            assert!(!tabs[i].content_str().is_empty());
+        }
+        assert!(!tabs[0].is_evicted());
     });
 }

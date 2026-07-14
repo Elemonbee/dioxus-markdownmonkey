@@ -1,0 +1,214 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version label, for example v0.5.0"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: MarkdownMonkey
+
+jobs:
+  windows:
+    name: Build Windows package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = "${{ github.ref_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "main" -or $version -eq "master") {
+            $version = "dev-${{ github.run_number }}"
+          }
+          $safeVersion = $version -replace '[^A-Za-z0-9._-]', '-'
+
+          $packageName = "${env:APP_NAME}-$safeVersion-windows-x64"
+          $packageDir = Join-Path "dist" $packageName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item "target/release/markdownmonkey.exe" (Join-Path $packageDir "${env:APP_NAME}.exe")
+          Copy-Item "README.md" (Join-Path $packageDir "README.md")
+          Copy-Item "README_EN.md" (Join-Path $packageDir "README_EN.md")
+
+          $zipPath = Join-Path "dist" "$packageName.zip"
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath
+          }
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath
+
+          $hash = Get-FileHash -Algorithm SHA256 $zipPath
+          $shaPath = "$zipPath.sha256"
+          "$($hash.Hash)  $(Split-Path $zipPath -Leaf)" | Set-Content -Path $shaPath -Encoding ascii
+
+          "PACKAGE_VERSION=$safeVersion" >> $env:GITHUB_ENV
+          "PACKAGE_ZIP=$zipPath" >> $env:GITHUB_ENV
+          "PACKAGE_SHA=$shaPath" >> $env:GITHUB_ENV
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.PACKAGE_VERSION }}-windows-x64
+          path: |
+            ${{ env.PACKAGE_ZIP }}
+            ${{ env.PACKAGE_SHA }}
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.PACKAGE_ZIP }}
+            ${{ env.PACKAGE_SHA }}
+          generate_release_notes: true
+
+  linux:
+    name: Build Linux package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libxtst-dev libxdo-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Prepare package
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${{ github.ref_name }}"
+          fi
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
+            VERSION="dev-${{ github.run_number }}"
+          fi
+          SAFE_VERSION=$(echo "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')
+          PACKAGE_NAME="${APP_NAME}-${SAFE_VERSION}-linux-x64"
+          PACKAGE_DIR="dist/${PACKAGE_NAME}"
+          mkdir -p "$PACKAGE_DIR"
+          cp target/release/markdownmonkey "$PACKAGE_DIR/${APP_NAME}"
+          cp README.md README_EN.md "$PACKAGE_DIR/"
+          chmod +x "$PACKAGE_DIR/${APP_NAME}"
+          (
+            cd dist
+            tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_NAME"
+            sha256sum "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
+          )
+          echo "PACKAGE_VERSION=${SAFE_VERSION}" >> "$GITHUB_ENV"
+          echo "PACKAGE_TAR=dist/${PACKAGE_NAME}.tar.gz" >> "$GITHUB_ENV"
+          echo "PACKAGE_SHA=dist/${PACKAGE_NAME}.tar.gz.sha256" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.PACKAGE_VERSION }}-linux-x64
+          path: |
+            ${{ env.PACKAGE_TAR }}
+            ${{ env.PACKAGE_SHA }}
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.PACKAGE_TAR }}
+            ${{ env.PACKAGE_SHA }}
+          generate_release_notes: true
+
+  macos:
+    name: Build macOS package
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Prepare package
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="${{ github.ref_name }}"
+          fi
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
+            VERSION="dev-${{ github.run_number }}"
+          fi
+          SAFE_VERSION=$(echo "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')
+          PACKAGE_NAME="${APP_NAME}-${SAFE_VERSION}-macos-universal"
+          PACKAGE_DIR="dist/${PACKAGE_NAME}"
+          mkdir -p "$PACKAGE_DIR"
+          cp target/release/markdownmonkey "$PACKAGE_DIR/${APP_NAME}"
+          cp README.md README_EN.md "$PACKAGE_DIR/"
+          chmod +x "$PACKAGE_DIR/${APP_NAME}"
+          (
+            cd dist
+            tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_NAME"
+            shasum -a 256 "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
+          )
+          echo "PACKAGE_VERSION=${SAFE_VERSION}" >> "$GITHUB_ENV"
+          echo "PACKAGE_TAR=dist/${PACKAGE_NAME}.tar.gz" >> "$GITHUB_ENV"
+          echo "PACKAGE_SHA=dist/${PACKAGE_NAME}.tar.gz.sha256" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ env.PACKAGE_VERSION }}-macos
+          path: |
+            ${{ env.PACKAGE_TAR }}
+            ${{ env.PACKAGE_SHA }}
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.PACKAGE_TAR }}
+            ${{ env.PACKAGE_SHA }}
+          generate_release_notes: true

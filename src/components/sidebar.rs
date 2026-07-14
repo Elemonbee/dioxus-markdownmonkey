@@ -18,23 +18,34 @@ use dioxus::prelude::*;
 pub fn Sidebar() -> Element {
     // 所有 hooks 必须在组件顶部无条件调用
     let mut state = use_context::<AppState>();
+    let ui = state.ui();
 
-    // 读取状态 - 在顶部完成所有读取
-    let sidebar_visible = *state.sidebar_visible.read();
-    let sidebar_tab = *state.sidebar_tab.read();
-    let sidebar_width = *state.sidebar_width.read();
-    let lang = *state.language.read();
+    // 读取状态 - 在顶部完成所有读取（领域视图）
+    // Read state via domain view
+    let sidebar_visible = *ui.sidebar_visible.read();
+    let sidebar_tab = *ui.sidebar_tab.read();
+    let sidebar_width = *ui.sidebar_width.read();
+    let lang = *ui.language.read();
 
     let outline_text = t("outline", lang);
     let files_text = t("files", lang);
     let close_t = t("close", lang);
-    let sidebar_width_text = t("sidebar_width", lang);
+    let resize_t = t("sidebar_resize", lang);
+    let aria_sidebar_t = t("aria_sidebar", lang);
+    let aria_sidebar_content_t = t("aria_sidebar_content", lang);
+
+    // 边缘拖拽调整宽度 / Edge-drag to resize width
+    let mut resizing = use_signal(|| false);
+    let mut drag_start_x = use_signal(|| 0.0_f64);
+    let mut drag_start_width = use_signal(|| SIDEBAR_MIN_WIDTH);
 
     // 计算 CSS 类 - 纯计算，不涉及 hooks
-    let container_class = if sidebar_visible {
-        "sidebar"
-    } else {
+    let container_class = if !sidebar_visible {
         "sidebar sidebar-collapsed"
+    } else if *resizing.read() {
+        "sidebar sidebar-resizing"
+    } else {
+        "sidebar"
     };
     let tab_outline_class = if sidebar_tab == SidebarTab::Outline {
         "sidebar-tab active"
@@ -48,38 +59,28 @@ pub fn Sidebar() -> Element {
     };
     let is_outline = sidebar_tab == SidebarTab::Outline;
     let is_files = sidebar_tab == SidebarTab::Files;
+    let header_title = if is_outline {
+        outline_text.clone()
+    } else {
+        files_text.clone()
+    };
 
     rsx! {
         div {
             class: "{container_class}",
             style: "width: {sidebar_width}px; min-width: {sidebar_width}px;",
             role: "complementary",
-            "aria-label": "Sidebar",
+            "aria-label": "{aria_sidebar_t}",
 
             div { class: "sidebar-header",
-                span { class: "sidebar-header-title", "{files_text}" }
-                div { class: "sidebar-header-actions",
-                    input {
-                        class: "sidebar-width-slider",
-                        r#type: "range",
-                        min: "{SIDEBAR_MIN_WIDTH}",
-                        max: "{SIDEBAR_MAX_WIDTH}",
-                        value: "{sidebar_width}",
-                        title: "{sidebar_width_text}",
-                        oninput: move |e| {
-                            if let Ok(width) = e.value().parse::<u32>() {
-                                AppActions::set_sidebar_width(&mut state, width);
-                            }
-                        },
-                    }
-                    button {
-                        class: "btn-icon",
-                        title: "{close_t}",
-                        onclick: move |_| {
-                            AppActions::set_sidebar_visible(&mut state, false);
-                        },
-                        CloseIcon { size: 14 }
-                    }
+                span { class: "sidebar-header-title", "{header_title}" }
+                button {
+                    class: "btn-icon",
+                    title: "{close_t}",
+                    onclick: move |_| {
+                        AppActions::set_sidebar_visible(&mut state, false);
+                    },
+                    CloseIcon { size: 14 }
                 }
             }
 
@@ -107,13 +108,67 @@ pub fn Sidebar() -> Element {
 
             // 内容区域 - 条件渲染当前活动的视图
             // Content area - conditionally render the active view
-            div { class: "sidebar-content", role: "region", "aria-label": "Sidebar content",
+            div { class: "sidebar-content", role: "region", "aria-label": "{aria_sidebar_content_t}",
                 if is_outline {
                     OutlineView {}
                 }
                 if is_files {
                     FileTree {}
                 }
+            }
+
+            // 右侧边缘拖拽把手（类似 IDE 分隔条）/ Right-edge drag handle (IDE-style splitter)
+            div {
+                class: "sidebar-resize-handle",
+                role: "separator",
+                "aria-orientation": "vertical",
+                "aria-valuenow": "{sidebar_width}",
+                "aria-valuemin": "{SIDEBAR_MIN_WIDTH}",
+                "aria-valuemax": "{SIDEBAR_MAX_WIDTH}",
+                title: "{resize_t}",
+                onmousedown: move |e: Event<MouseData>| {
+                    e.stop_propagation();
+                    drag_start_x.set(e.client_coordinates().x);
+                    drag_start_width.set(sidebar_width);
+                    resizing.set(true);
+                },
+            }
+        }
+
+        // 全屏捕获层：拖拽时跟踪鼠标并更新宽度
+        // Fullscreen capture layer: track mouse and update width while dragging
+        if *resizing.read() {
+            div {
+                class: "sidebar-resize-overlay",
+                onmousemove: move |e: Event<MouseData>| {
+                    let dx = e.client_coordinates().x - *drag_start_x.read();
+                    let next = (*drag_start_width.read() as f64 + dx)
+                        .round()
+                        .clamp(SIDEBAR_MIN_WIDTH as f64, SIDEBAR_MAX_WIDTH as f64)
+                        as u32;
+                    AppActions::set_sidebar_width(&mut state, next);
+                },
+                onmouseup: move |_| {
+                    resizing.set(false);
+                    // 拖拽结束时持久化宽度 / Persist width when drag ends
+                    let width = *state.ui().sidebar_width.read();
+                    let mut settings = crate::services::settings::load_settings();
+                    settings.sidebar_width = width;
+                    if let Err(err) = crate::services::settings::save_settings(&settings) {
+                        tracing::warn!("Failed to persist sidebar width: {}", err);
+                    }
+                },
+                onmouseleave: move |_| {
+                    // 鼠标离开窗口时结束拖拽，避免卡住
+                    // End drag if pointer leaves the window to avoid stuck resize
+                    if *resizing.read() {
+                        resizing.set(false);
+                        let width = *state.ui().sidebar_width.read();
+                        let mut settings = crate::services::settings::load_settings();
+                        settings.sidebar_width = width;
+                        let _ = crate::services::settings::save_settings(&settings);
+                    }
+                },
             }
         }
     }
@@ -123,10 +178,12 @@ pub fn Sidebar() -> Element {
 #[component]
 fn OutlineView() -> Element {
     let state = use_context::<AppState>();
+    let doc = state.document();
+    let ui = state.ui();
 
-    let outline_items = state.outline_items.read().clone();
+    let outline_items = doc.outline_items.read().clone();
     let is_empty = outline_items.is_empty();
-    let lang = *state.language.read();
+    let lang = *ui.language.read();
 
     let no_outline_text = t("no_outline", lang);
     let add_headings_text = t("add_headings", lang);

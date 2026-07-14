@@ -1,5 +1,6 @@
 //! 搜索替换弹窗组件 / Search and Replace Modal Component
 
+use crate::actions::EditorActions;
 use crate::components::icons::{CloseIcon, SearchIcon};
 use crate::state::AppState;
 use crate::utils::i18n::t;
@@ -84,21 +85,53 @@ fn replace_nth_match(
         content.to_string()
     }
 }
+
+/// 大小写不敏感的全部字面替换 / Case-insensitive replace-all for literal queries
+fn replace_all_case_insensitive(content: &str, query: &str, replacement: &str) -> String {
+    if query.is_empty() {
+        return content.to_string();
+    }
+    let lower_content = content.to_lowercase();
+    let lower_query = query.to_lowercase();
+    let mut result = String::with_capacity(content.len());
+    let mut pos = 0;
+    while let Some(idx) = lower_content[pos..].find(&lower_query) {
+        let abs = pos + idx;
+        result.push_str(&content[pos..abs]);
+        result.push_str(replacement);
+        pos = abs + query.len();
+    }
+    result.push_str(&content[pos..]);
+    result
+}
+
 /// 搜索替换弹窗 / Search and Replace Modal
 #[component]
 pub fn SearchModal() -> Element {
-    let mut state = use_context::<AppState>();
-    let show = *state.show_search.read();
-    let lang = *state.language.read();
+    let state = use_context::<AppState>();
+    let mut ui = state.ui();
+    let doc = state.document();
+    let show = *ui.show_search.read();
+    let lang = *ui.language.read();
 
     let display_class = if show { "" } else { "hidden" };
 
-    let search_query = state.search_query.read().clone();
-    let replace_query = state.replace_query.read().clone();
-    let search_index = *state.search_index.read();
-    let search_total = *state.search_total.read();
-    let case_insensitive = *state.search_case_insensitive.read();
-    let use_regex = *state.search_regex.read();
+    // 打开时 flush，保证非受控模式下匹配计数准确
+    // Flush on open so match counts are accurate in uncontrolled mode
+    let mut state_for_flush = state;
+    use_effect(move || {
+        if show {
+            spawn(async move {
+                EditorActions::flush_from_dom(&mut state_for_flush).await;
+            });
+        }
+    });
+
+    let search_query = ui.search_query.read().clone();
+    let replace_query = ui.replace_query.read().clone();
+    let search_index = *ui.search_index.read();
+    let search_total = *ui.search_total.read();
+    let case_insensitive = *ui.search_case_insensitive.read();
 
     let find_text = t("find", lang);
     let replace_text = t("replace", lang);
@@ -124,17 +157,17 @@ pub fn SearchModal() -> Element {
                         placeholder: "{find_text}...",
                         value: "{search_query}",
                         oninput: move |e| {
-                            *state.search_query.write() = e.value();
+                            *ui.search_query.write() = e.value();
                             // 执行搜索
-                            let content = state.content.read().clone();
+                            let content = doc.content.read().clone();
                             let query = e.value();
                             if query.is_empty() {
-                                *state.search_total.write() = 0;
-                                *state.search_index.write() = 0;
+                                *ui.search_total.write() = 0;
+                                *ui.search_index.write() = 0;
                             } else {
-                                let count = count_matches(&content, &query, *state.search_case_insensitive.read(), *state.search_regex.read());
-                                *state.search_total.write() = count;
-                                *state.search_index.write() = if count > 0 { 1 } else { 0 };
+                                let count = count_matches(&content, &query, *ui.search_case_insensitive.read(), *ui.search_regex.read());
+                                *ui.search_total.write() = count;
+                                *ui.search_index.write() = if count > 0 { 1 } else { 0 };
                             }
                         },
                     }
@@ -153,15 +186,15 @@ pub fn SearchModal() -> Element {
                         class: if case_insensitive { "search-option-btn active" } else { "search-option-btn" },
                         title: "{case_sensitive_text}",
                         onclick: move |_| {
-                            let new_value = !*state.search_case_insensitive.read();
-                            *state.search_case_insensitive.write() = new_value;
+                            let new_value = !*ui.search_case_insensitive.read();
+                            *ui.search_case_insensitive.write() = new_value;
                             // 重新搜索
-                            let content = state.content.read().clone();
-                            let query = state.search_query.read().clone();
+                            let content = doc.content.read().clone();
+                            let query = ui.search_query.read().clone();
                             if !query.is_empty() {
-                                let count = count_matches(&content, &query, *state.search_case_insensitive.read(), *state.search_regex.read());
-                                *state.search_total.write() = count;
-                                *state.search_index.write() = if count > 0 { 1 } else { 0 };
+                                let count = count_matches(&content, &query, *ui.search_case_insensitive.read(), *ui.search_regex.read());
+                                *ui.search_total.write() = count;
+                                *ui.search_index.write() = if count > 0 { 1 } else { 0 };
                             }
                         },
                         "Aa"
@@ -174,11 +207,11 @@ pub fn SearchModal() -> Element {
                         class: "search-nav-btn",
                         title: "{prev_text}",
                         onclick: move |_| {
-                            let total = *state.search_total.read();
-                            let current = *state.search_index.read();
+                            let total = *ui.search_total.read();
+                            let current = *ui.search_index.read();
                             if total > 0 {
                                 let new_index = if current <= 1 { total } else { current - 1 };
-                                *state.search_index.write() = new_index;
+                                *ui.search_index.write() = new_index;
                             }
                         },
                         "↑"
@@ -187,11 +220,11 @@ pub fn SearchModal() -> Element {
                         class: "search-nav-btn",
                         title: "{next_text}",
                         onclick: move |_| {
-                            let total = *state.search_total.read();
-                            let current = *state.search_index.read();
+                            let total = *ui.search_total.read();
+                            let current = *ui.search_index.read();
                             if total > 0 {
                                 let new_index = if current >= total { 1 } else { current + 1 };
-                                *state.search_index.write() = new_index;
+                                *ui.search_index.write() = new_index;
                             }
                         },
                         "↓"
@@ -200,18 +233,18 @@ pub fn SearchModal() -> Element {
 
                     // Regex toggle
                     button {
-                        class: if *state.search_regex.read() { "search-option-btn active" } else { "search-option-btn" },
+                        class: if *ui.search_regex.read() { "search-option-btn active" } else { "search-option-btn" },
                         title: "{regex_text}",
                         onclick: move |_| {
-                            let new_value = !*state.search_regex.read();
-                            *state.search_regex.write() = new_value;
+                            let new_value = !*ui.search_regex.read();
+                            *ui.search_regex.write() = new_value;
                             // Re-search
-                            let content = state.content.read().clone();
-                            let query = state.search_query.read().clone();
+                            let content = doc.content.read().clone();
+                            let query = ui.search_query.read().clone();
                             if !query.is_empty() {
-                                let count = count_matches(&content, &query, *state.search_case_insensitive.read(), *state.search_regex.read());
-                                *state.search_total.write() = count;
-                                *state.search_index.write() = if count > 0 { 1 } else { 0 };
+                                let count = count_matches(&content, &query, *ui.search_case_insensitive.read(), *ui.search_regex.read());
+                                *ui.search_total.write() = count;
+                                *ui.search_index.write() = if count > 0 { 1 } else { 0 };
                             }
                         },
                         ".*"
@@ -220,7 +253,7 @@ pub fn SearchModal() -> Element {
                     button {
                         class: "search-close-btn",
                     onclick: move |_| {
-                        *state.show_search.write() = false;
+                        *ui.show_search.write() = false;
                     },
                     CloseIcon { size: 14 }
                 }
@@ -235,7 +268,7 @@ pub fn SearchModal() -> Element {
                         placeholder: "{replace_text}...",
                         value: "{replace_query}",
                         oninput: move |e| {
-                            *state.replace_query.write() = e.value();
+                            *ui.replace_query.write() = e.value();
                         },
                     }
                 }
@@ -244,57 +277,88 @@ pub fn SearchModal() -> Element {
                     button {
                         class: "replace-btn",
                         onclick: move |_| {
-                            let content = state.content.read().clone();
-                            let query = state.search_query.read().clone();
-                            let replacement = state.replace_query.read().clone();
-                            let idx = *state.search_index.read();
+                            let mut state = state;
+                            let mut ui = ui;
+                            let doc = doc;
+                            spawn(async move {
+                                // 替换前 flush，避免非受控模式下写到过期内容
+                                // Flush before replace so uncontrolled mode is not stale
+                                EditorActions::flush_from_dom(&mut state).await;
+                                let content = doc.content.read().clone();
+                                let query = ui.search_query.read().clone();
+                                let replacement = ui.replace_query.read().clone();
+                                let idx = *ui.search_index.read();
+                                let case_insensitive = *ui.search_case_insensitive.read();
+                                let use_regex = *ui.search_regex.read();
 
-                            if !query.is_empty() && idx > 0 {
-                                let new_content = replace_nth_match(&content, &query, &replacement, idx, case_insensitive, use_regex);
-                                state.update_content(new_content);
-                                // 重新搜索以更新索引和总数 / Re-search to update index and total
-                                let updated_content = state.content.read().clone();
-                                let updated_query = state.search_query.read().clone();
-                                let updated_ci = *state.search_case_insensitive.read();
-                                let updated_rx = *state.search_regex.read();
-                                if !updated_query.is_empty() {
-                                    let count = count_matches(&updated_content, &updated_query, updated_ci, updated_rx);
-                                    *state.search_total.write() = count;
-                                    *state.search_index.write() = if count > 0 { 1 } else { 0 };
+                                if !query.is_empty() && idx > 0 {
+                                    let new_content = replace_nth_match(
+                                        &content,
+                                        &query,
+                                        &replacement,
+                                        idx,
+                                        case_insensitive,
+                                        use_regex,
+                                    );
+                                    state.update_content(new_content);
+                                    EditorActions::push_to_dom(&doc.content.read());
+                                    let updated_content = doc.content.read().clone();
+                                    if !query.is_empty() {
+                                        let count = count_matches(
+                                            &updated_content,
+                                            &query,
+                                            case_insensitive,
+                                            use_regex,
+                                        );
+                                        *ui.search_total.write() = count;
+                                        *ui.search_index.write() = if count > 0 { 1 } else { 0 };
+                                    }
                                 }
-                            }
+                            });
                         },
                         "{replace_btn_text}"
                     }
                     button {
                         class: "replace-btn",
                         onclick: move |_| {
-                            let content = state.content.read().clone();
-                            let query = state.search_query.read().clone();
-                            let replacement = state.replace_query.read().clone();
+                            let mut state = state;
+                            let mut ui = ui;
+                            let doc = doc;
+                            spawn(async move {
+                                EditorActions::flush_from_dom(&mut state).await;
+                                let content = doc.content.read().clone();
+                                let query = ui.search_query.read().clone();
+                                let replacement = ui.replace_query.read().clone();
+                                let case_insensitive = *ui.search_case_insensitive.read();
+                                let use_regex = *ui.search_regex.read();
 
-                            if !query.is_empty() {
-                                let new_content = if use_regex {
-                                    if let Ok(re) = build_regex(&query, case_insensitive) {
-                                        re.replace_all(&content, replacement.as_str()).into_owned()
+                                if !query.is_empty() {
+                                    let new_content = if use_regex {
+                                        if let Ok(re) = build_regex(&query, case_insensitive) {
+                                            re.replace_all(&content, replacement.as_str())
+                                                .into_owned()
+                                        } else {
+                                            content
+                                        }
+                                    } else if case_insensitive {
+                                        // 大小写不敏感的字面替换 / Case-insensitive literal replace
+                                        replace_all_case_insensitive(&content, &query, &replacement)
                                     } else {
-                                        content
-                                    }
-                                } else {
-                                    content.replace(&query, &replacement)
-                                };
-                                state.update_content(new_content);
-                                // 重新搜索以更新索引和总数 / Re-search to update index and total
-                                let updated_content = state.content.read().clone();
-                                let updated_query = state.search_query.read().clone();
-                                let updated_ci = *state.search_case_insensitive.read();
-                                let updated_rx = *state.search_regex.read();
-                                if !updated_query.is_empty() {
-                                    let count = count_matches(&updated_content, &updated_query, updated_ci, updated_rx);
-                                    *state.search_total.write() = count;
-                                    *state.search_index.write() = if count > 0 { 1 } else { 0 };
+                                        content.replace(&query, &replacement)
+                                    };
+                                    state.update_content(new_content);
+                                    EditorActions::push_to_dom(&doc.content.read());
+                                    let updated_content = doc.content.read().clone();
+                                    let count = count_matches(
+                                        &updated_content,
+                                        &query,
+                                        case_insensitive,
+                                        use_regex,
+                                    );
+                                    *ui.search_total.write() = count;
+                                    *ui.search_index.write() = if count > 0 { 1 } else { 0 };
                                 }
-                            }
+                            });
                         },
                         "{replace_all_text}"
                     }

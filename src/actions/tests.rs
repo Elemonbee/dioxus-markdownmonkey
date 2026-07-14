@@ -96,6 +96,26 @@ mod file_utils_tests {
         // 至少应该找到2个文件
         assert!(files.len() >= 2, "应该找到至少2个文件");
     }
+
+    /// 测试 Markdown/文本路径识别 / Test markdown/text path recognition
+    #[test]
+    fn test_is_markdown_or_text_path() {
+        use std::path::PathBuf;
+        assert!(file_utils::is_markdown_or_text_path(&PathBuf::from("a.md")));
+        assert!(file_utils::is_markdown_or_text_path(&PathBuf::from("a.MD")));
+        assert!(file_utils::is_markdown_or_text_path(&PathBuf::from(
+            "notes.markdown"
+        )));
+        assert!(file_utils::is_markdown_or_text_path(&PathBuf::from(
+            "readme.txt"
+        )));
+        assert!(!file_utils::is_markdown_or_text_path(&PathBuf::from(
+            "photo.png"
+        )));
+        assert!(!file_utils::is_markdown_or_text_path(&PathBuf::from(
+            "main.rs"
+        )));
+    }
 }
 
 mod editor_actions_tests {
@@ -846,6 +866,37 @@ mod app_actions_integration_tests {
     }
 
     #[test]
+    fn test_show_ai_chat_defaults_to_selection_context() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            *state.content.write() = "Hello selected text".to_string();
+            *state.cursor_start.write() = 6;
+            *state.cursor_end.write() = 14;
+
+            AppActions::show_ai_chat(&mut state);
+
+            assert!(*state.show_ai_chat.read());
+            assert!(*state.ai_use_selection.read());
+        });
+    }
+
+    #[test]
+    fn test_show_ai_chat_uses_full_context_without_selection() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            *state.content.write() = "Hello selected text".to_string();
+            *state.cursor_start.write() = 6;
+            *state.cursor_end.write() = 6;
+            *state.ai_use_selection.write() = true;
+
+            AppActions::show_ai_chat(&mut state);
+
+            assert!(*state.show_ai_chat.read());
+            assert!(!*state.ai_use_selection.read());
+        });
+    }
+
+    #[test]
     fn test_show_hide_ai_result() {
         with_runtime(|| {
             let mut state = AppState::new();
@@ -911,7 +962,7 @@ mod app_actions_integration_tests {
 #[cfg(test)]
 mod file_actions_integration_tests {
     use super::with_runtime;
-    use crate::actions::FileActions;
+    use crate::actions::{AppActions, FileActions};
     use crate::state::AppState;
     use dioxus::prelude::{ReadableExt, WritableExt};
     use std::fs;
@@ -1111,6 +1162,76 @@ mod file_actions_integration_tests {
         });
     }
 
+    /// 英文 UI 下新建标签标题应为 Untitled / New tab title uses Untitled in English UI
+    #[test]
+    fn test_new_tab_title_respects_language() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            *state.language.write() = crate::state::Language::EnUS;
+            FileActions::new_tab(&mut state);
+            let title = state.tabs.read().last().unwrap().title.clone();
+            assert!(
+                title.starts_with("Untitled"),
+                "expected Untitled title, got {title}"
+            );
+        });
+    }
+
+    /// 有路径时保存后再关闭应持久化内容 / Save then close persists content for pathed tabs
+    #[test]
+    fn test_save_then_close_tab_persists() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("close-me.md");
+            fs::write(&path, "old").unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, path.clone()).unwrap();
+            let file_idx = *state.current_tab_index.read();
+            FileActions::new_tab(&mut state);
+            FileActions::switch_tab(&mut state, file_idx);
+            state.update_content("saved-and-closed".to_string());
+
+            FileActions::save_current_file(&mut state).unwrap();
+            state.close_tab(file_idx);
+
+            assert_eq!(fs::read_to_string(&path).unwrap(), "saved-and-closed");
+            assert!(!state.tabs.read().is_empty());
+        });
+    }
+
+    /// 拖放 Markdown 路径应打开为标签 / Dropping markdown paths should open as tabs
+    #[test]
+    fn test_handle_editor_file_drop_opens_tab() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("dropped.md");
+            fs::write(&path, "# Dropped").unwrap();
+
+            let mut state = AppState::new();
+            FileActions::handle_editor_file_drop(&mut state, vec![path.clone()]);
+
+            assert_eq!(*state.current_file.read(), Some(path));
+            assert_eq!(*state.content.read(), "# Dropped");
+        });
+    }
+
+    /// 拖放图片路径应忽略（由 JS 处理）/ Image drop paths should be ignored (JS-handled)
+    #[test]
+    fn test_handle_editor_file_drop_skips_images() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("pic.png");
+            fs::write(&path, b"fake").unwrap();
+
+            let mut state = AppState::new();
+            let before = state.tabs.read().len();
+            FileActions::handle_editor_file_drop(&mut state, vec![path]);
+            assert_eq!(state.tabs.read().len(), before);
+            assert!(state.current_file.read().is_none());
+        });
+    }
+
     #[test]
     fn test_switch_tab() {
         with_runtime(|| {
@@ -1240,6 +1361,31 @@ mod file_actions_integration_tests {
     }
 
     #[test]
+    fn test_rename_file_rejects_path_traversal() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let old_path = temp.path().join("safe.md");
+            fs::write(&old_path, "# Safe").unwrap();
+
+            let mut state = AppState::new();
+            *state.workspace_root.write() = Some(temp.path().to_path_buf());
+
+            let result = FileActions::rename_file(&mut state, &old_path, "..\\outside.md");
+            assert!(result.is_err());
+            assert!(old_path.exists());
+        });
+    }
+
+    #[test]
+    fn test_validate_rename_name_rejects_traversal() {
+        use crate::utils::file_utils::validate_rename_name;
+        assert!(validate_rename_name("ok.md").is_ok());
+        assert!(validate_rename_name("../x.md").is_err());
+        assert!(validate_rename_name("a/b.md").is_err());
+        assert!(validate_rename_name("..").is_err());
+    }
+
+    #[test]
     fn test_refresh_workspace() {
         with_runtime(|| {
             let temp = TempDir::new().unwrap();
@@ -1271,6 +1417,191 @@ mod file_actions_integration_tests {
             // 再次打开同一文件不应创建新标签 / Re-opening same file should not create new tab
             FileActions::open_file(&mut state, path).unwrap();
             assert_eq!(state.tabs.read().len(), 2);
+        });
+    }
+
+    #[test]
+    fn test_push_ai_turn_caps_at_max() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            for i in 0..12 {
+                AppActions::push_ai_turn(
+                    &mut state,
+                    format!("user-{i}"),
+                    format!("assistant-{i}"),
+                );
+            }
+            let len = state.ai().ai_history.read().len();
+            assert_eq!(len, crate::services::settings::AI_HISTORY_MAX_MESSAGES);
+            assert!(state
+                .ai()
+                .ai_history
+                .read()
+                .iter()
+                .any(|t| t.content == "user-11"));
+            // 清理测试写入的持久化文件副作用 / Clear side-effect on persisted history file
+            AppActions::clear_ai_history(&mut state);
+        });
+    }
+
+    #[test]
+    fn test_ai_history_isolated_per_tab() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            AppActions::push_ai_turn(&mut state, "doc-a".into(), "reply-a".into());
+            assert_eq!(state.ai().ai_history.read().len(), 2);
+
+            FileActions::new_tab(&mut state);
+            assert!(
+                state.ai().ai_history.read().is_empty(),
+                "new tab should start with empty AI history"
+            );
+            AppActions::push_ai_turn(&mut state, "doc-b".into(), "reply-b".into());
+
+            FileActions::switch_tab(&mut state, 0);
+            let hist = state.ai().ai_history.read().clone();
+            assert_eq!(hist.len(), 2);
+            assert_eq!(hist[0].content, "doc-a");
+
+            FileActions::switch_tab(&mut state, 1);
+            let hist = state.ai().ai_history.read().clone();
+            assert_eq!(hist[0].content, "doc-b");
+
+            AppActions::clear_ai_history(&mut state);
+            FileActions::switch_tab(&mut state, 0);
+            AppActions::clear_ai_history(&mut state);
+        });
+    }
+
+    #[test]
+    fn test_reload_current_file_resets_history_and_modified() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("reload.md");
+            fs::write(&path, "disk-content").unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, path.clone()).unwrap();
+            state.update_content("edited-in-memory".to_string());
+            assert!(*state.document().modified.read());
+            assert!(!state.document().history.read().past.is_empty());
+
+            FileActions::reload_current_file(&mut state).unwrap();
+            let doc = state.document();
+            assert_eq!(doc.content.read().as_str(), "disk-content");
+            assert!(!*doc.modified.read());
+            assert!(doc.history.read().past.is_empty());
+            assert!(doc.history.read().future.is_empty());
+            // 同内容再写不应误标未保存 / Same body rewrite must not false-flag unsaved
+            state.update_content("disk-content".to_string());
+            assert!(!*state.document().modified.read());
+        });
+    }
+
+    #[test]
+    fn test_confirm_load_large_file_clears_pending_and_opens() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("large.md");
+            // 超过阈值的大文件 / File larger than threshold
+            let big = "x".repeat(crate::config::LARGE_FILE_THRESHOLD_BYTES + 64);
+            fs::write(&path, &big).unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, path.clone()).unwrap();
+            let doc = state.document();
+            assert!(doc.pending_large_file.read().is_some());
+            assert!(*doc.show_large_file_warning.read());
+
+            FileActions::confirm_load_large_file(&mut state).unwrap();
+            let doc = state.document();
+            assert!(doc.pending_large_file.read().is_none());
+            assert!(!*doc.show_large_file_warning.read());
+            assert_eq!(doc.content.read().len(), big.len());
+            assert_eq!(doc.current_file.read().as_ref(), Some(&path));
+        });
+    }
+
+    #[test]
+    fn test_cancel_load_large_file_clears_warning() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("large2.md");
+            let big = "y".repeat(crate::config::LARGE_FILE_THRESHOLD_BYTES + 8);
+            fs::write(&path, &big).unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, path).unwrap();
+            FileActions::cancel_load_large_file(&mut state);
+            let doc = state.document();
+            assert!(doc.pending_large_file.read().is_none());
+            assert!(!*doc.show_large_file_warning.read());
+            assert_eq!(*doc.file_size_bytes.read(), 0);
+        });
+    }
+
+    #[test]
+    fn test_request_close_tab_shows_confirm_when_modified() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("dirty".to_string());
+            assert!(*state.document().modified.read());
+
+            let idx = *state.document().current_tab_index.read();
+            FileActions::request_close_tab(&mut state, idx);
+            let doc = state.document();
+            assert!(*doc.show_close_confirm.read());
+            assert_eq!(*doc.pending_close_tab_index.read(), Some(idx));
+        });
+    }
+
+    #[test]
+    fn test_discard_and_close_tab_clears_confirm() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            FileActions::new_tab(&mut state);
+            assert_eq!(state.document().tabs.read().len(), 2);
+            state.update_content("will discard".to_string());
+            let idx = *state.document().current_tab_index.read();
+            FileActions::request_close_tab(&mut state, idx);
+            assert!(*state.document().show_close_confirm.read());
+
+            FileActions::discard_and_close_tab(&mut state, idx);
+            let doc = state.document();
+            assert!(!*doc.show_close_confirm.read());
+            assert!(doc.pending_close_tab_index.read().is_none());
+            assert_eq!(doc.tabs.read().len(), 1);
+        });
+    }
+
+    #[test]
+    fn test_transcript_window_chronological_cap() {
+        use crate::state::ChatTurn;
+        let turns: Vec<ChatTurn> = (0..12)
+            .map(|i| {
+                if i % 2 == 0 {
+                    ChatTurn::user(format!("u{i}"))
+                } else {
+                    ChatTurn::assistant(format!("a{i}"))
+                }
+            })
+            .collect();
+        let window = AppActions::transcript_window(&turns, 6);
+        assert_eq!(window.len(), 6);
+        assert_eq!(window[0].content, "u6");
+        assert_eq!(window[5].content, "a11");
+    }
+
+    #[test]
+    fn test_start_and_cancel_ai_generation() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            let (id1, _rx) = AppActions::start_ai_generation(&mut state);
+            assert!(*state.ai().ai_loading.read());
+            assert_eq!(*state.ai().ai_generation_id.read(), id1);
+            AppActions::cancel_ai_generation(&mut state);
+            assert!(!*state.ai().ai_loading.read());
+            assert!(*state.ai().ai_generation_id.read() > id1);
         });
     }
 }

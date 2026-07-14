@@ -13,9 +13,11 @@ use dioxus::prelude::{ReadableExt, *};
 pub fn TabBar() -> Element {
     // 所有 hooks 在顶部
     let mut state = use_context::<AppState>();
+    let doc = state.document();
+    let ui = state.ui();
 
     // 使用 use_effect 初始化标签，避免在渲染中修改状态
-    let tabs_empty = state.tabs.read().is_empty();
+    let tabs_empty = doc.tabs.read().is_empty();
     use_effect(move || {
         if tabs_empty {
             state.init_first_tab();
@@ -23,13 +25,14 @@ pub fn TabBar() -> Element {
     });
 
     // i18n
-    let lang = *state.language.read();
+    let lang = *ui.language.read();
     let new_tab_t = t("new_tab", lang);
+    let aria_open_tabs_t = t("aria_open_tabs", lang);
 
     // 获取标签数据
     let tabs_data: Vec<(usize, String, bool, bool)> = {
-        let tabs = state.tabs.read();
-        let current_index = *state.current_tab_index.read();
+        let tabs = doc.tabs.read();
+        let current_index = *doc.current_tab_index.read();
         tabs.iter()
             .enumerate()
             .map(|(i, tab)| (i, tab.title.clone(), tab.modified, i == current_index))
@@ -37,7 +40,7 @@ pub fn TabBar() -> Element {
     };
 
     rsx! {
-        div { class: "tabbar", role: "tablist", "aria-label": "Open tabs",
+        div { class: "tabbar", role: "tablist", "aria-label": "{aria_open_tabs_t}",
             for (index, title, modified, is_active) in tabs_data {
                 TabItem {
                     key: "{index}",
@@ -53,7 +56,10 @@ pub fn TabBar() -> Element {
                 class: "tab-new",
                 title: "{new_tab_t} (Ctrl+N)",
                 onclick: move |_| {
-                    FileActions::new_tab(&mut state);
+                    let mut state = state;
+                    spawn(async move {
+                        FileActions::new_tab_flushed(&mut state).await;
+                    });
                 },
                 PlusIcon { size: 16 }
             }
@@ -73,10 +79,11 @@ struct TabItemProps {
 /// 标签项组件
 fn TabItem(props: TabItemProps) -> Element {
     // hooks 在顶部
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
+    let ui = state.ui();
 
     // i18n
-    let lang = *state.language.read();
+    let lang = *ui.language.read();
     let close_tab_t = t("close_tab", lang);
 
     // 计算 CSS
@@ -91,7 +98,10 @@ fn TabItem(props: TabItemProps) -> Element {
             aria_selected: "{props.is_active}",
             tabindex: if props.is_active { "0" } else { "-1" },
             onclick: move |_| {
-                FileActions::switch_tab(&mut state, index);
+                let mut state = state;
+                spawn(async move {
+                    FileActions::switch_tab_flushed(&mut state, index).await;
+                });
             },
 
             span { class: "tab-title", "{props.title}" }
@@ -107,16 +117,10 @@ fn TabItem(props: TabItemProps) -> Element {
                 "aria-label": "{close_tab_t} {props.title}",
                 onclick: move |evt: Event<MouseData>| {
                     evt.stop_propagation();
-                    let should_confirm = {
-                        let tabs = state.tabs.read();
-                        tabs.get(index).map(|tab| tab.modified).unwrap_or(false)
-                    } || *state.modified.read();
-                    if should_confirm {
-                        *state.pending_close_tab_index.write() = Some(index);
-                        *state.show_close_confirm.write() = true;
-                    } else {
-                        state.close_tab(index);
-                    }
+                    let mut state = state;
+                    spawn(async move {
+                        FileActions::request_close_tab_flushed(&mut state, index).await;
+                    });
                 },
                 CloseIcon { size: 14 }
             }
