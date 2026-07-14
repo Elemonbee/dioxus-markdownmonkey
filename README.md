@@ -1,34 +1,36 @@
 # MarkdownMonkey
-<img width="3840" height="2024" alt="image" src="https://github.com/user-attachments/assets/08b034d0-bc88-4551-8116-e8bf62e91ea2" />
 
+![MarkdownMonkey 主界面](docs/screenshots/main_zh.png)
 
-
-**[English](./README_EN.md)** | 中文
+**版本 0.5.0** · **[English](./README_EN.md)** | 中文
 
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
 > 本项目为 Vibe Coding 项目，所有代码由 AI 生成。
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 实时预览、语法高亮、Mermaid 图表、数学公式 (KaTeX)
-- 📁 **文件管理** - 新建、打开、保存 Markdown 文件，文件树浏览，多编码支持 (UTF-8/GBK/UTF-16)
-- 🗂️ **多标签页** - 同时编辑多个文件，每个标签独立撤销/重做历史
+- 📝 **Markdown 编辑** - 实时预览、语法高亮、Mermaid 图表、数学公式 (KaTeX)；预览优先使用内置离线脚本，必要时回退 CDN
+- 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
+- 🗂️ **多标签页** - 同时编辑多个文件，每标签独立撤销/重做；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
-- 🤖 **AI 助手** - 集成多个 AI 提供商（OpenAI、Claude、DeepSeek、Kimi、Ollama、OpenRouter）
-- 🎨 **主题切换** - 深色/浅色/跟随系统
+- 💾 **会话恢复** - 启动时恢复标签、活动页、工作区与未保存草稿（可在设置中关闭）
+- 🤖 **AI 助手** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter；流式生成可停止；**按文档独立会话历史**
+- 📤 **多格式导出** - 工具栏下拉：HTML / PDF / DOCX / 纯文本
+  - HTML：打包本地图片与离线 Mermaid/KaTeX 到 `{文件名}_files/`
+  - PDF / DOCX：嵌入本地 PNG/JPEG（整行 `![alt](path)`）；PDF 自动探测系统中文字体，可在设置中指定字体路径
+- 🔍 **搜索替换** - 文档内搜索（大小写 / 正则）；工作区全局搜索与批量替换（优先使用已打开标签缓冲）
+- 🖼️ **图片支持** - 粘贴/拖放图片保存到工作区并插入 Markdown
+- 🎨 **主题切换** - 深色 / 浅色 / 跟随系统；窗口尺寸持久化；工具栏可快速切换语言
 - 🌐 **国际化** - 简体中文 / 美式英语
-- ⌨️ **快捷键** - 丰富的键盘快捷键支持
-- 📤 **多格式导出** - HTML / PDF / DOCX (Word) / 纯文本
-- 💾 **自动保存** - 可配置间隔的自动保存，外部修改检测
-- 🔍 **搜索替换** - 支持大小写敏感、全局搜索
-- 📊 **表格编辑器** - 可视化表格创建与编辑
+- ⌨️ **快捷键** - 见下方一览表
+- 📊 **表格编辑器** - 可视化创建与编辑
 - ✅ **拼写检查** - 英文拼写 + 中文检测
-- 🔐 **安全存储** - API Key 通过系统密钥环安全存储
-- 🖼️ **图片支持** - 粘贴/拖放图片，自动插入 Markdown 语法
+- 🔐 **安全存储** - API Key 存于系统密钥环
+- 💾 **自动保存** - 可配置间隔；外部文件修改检测；大文件（默认 1 MB）打开前提示
 
 ## 🛠️ 技术栈
 
-版本列为当前 `Cargo.lock` 解析结果，执行 `cargo update` 后可能微调。
+版本列为当前 `Cargo.lock` / `Cargo.toml` 解析结果，执行 `cargo update` 后可能微调。
 
 | 类别 | 技术 | 版本 |
 |------|------|------|
@@ -43,15 +45,15 @@
 | **序列化** | serde + serde_json | 1.x |
 | **文件对话框** | rfd | 0.17 |
 | **用户目录** | dirs | 6 |
-| **日志** | tracing + tracing-subscriber (env-filter) | 0.1 / 0.3 |
-| **PDF 导出** | printpdf | 0.9 |
+| **日志** | tracing + tracing-subscriber | 0.1 / 0.3 |
+| **PDF 导出** | printpdf (png/jpeg) | 0.9 |
 | **DOCX 导出** | zip (OOXML) | 8 |
 | **文件监控** | notify | 8 |
 | **剪贴板** | arboard | 3 |
 
 ## 🏗️ 架构
 
-项目以 **组件 + Actions + Services/State** 的分层方式组织代码，采用 PAL (Presentation-Actions-Logic) 启发式架构：部分组件仍会直接读写 `AppState`，Actions 层以轻量封装为主。
+项目以 **组件 + Actions + Services/State** 分层，采用 PAL (Presentation-Actions-Logic) 启发式架构：部分组件仍会直接读写 `AppState`，Actions 层以轻量封装为主。
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -71,7 +73,7 @@
 │  Logic (逻辑层)                                  │
 │  state/ — 全局状态 (AppState, Dioxus Signal)     │
 │  services/ — 纯逻辑服务 (可独立测试)              │
-│  utils/ — 工具函数 (i18n 等)                     │
+│  utils/ — 工具函数 (i18n、工作区搜索等)           │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -86,63 +88,50 @@
 
 ```
 src/
-├── main.rs              # 应用入口，启动 Dioxus desktop
-├── app.rs               # 主应用组件（布局、初始化、自动保存、文件监控）
+├── main.rs                 # 应用入口
+├── app.rs                  # 主布局、初始化、自动保存、会话恢复、文件监控
+├── config.rs               # 应用配置常量
 │
 ├── state/
-│   └── app_state.rs     # 全局状态 (AppState, 40+ Signal)
+│   ├── types.rs            # Theme、TabInfo、History 等类型
+│   ├── domains.rs          # 按领域拆分的状态视图
+│   ├── app_state.rs        # AppState 结构与初始化
+│   ├── app_state_ops.rs    # 文档 / 标签 / 大纲业务逻辑
+│   └── app_state_tests.rs  # 状态单元测试
 │
-├── components/          # UI 组件 (17 个)
-│   ├── editor.rs        # Markdown 编辑器 (textarea + 虚拟行号)
-│   ├── preview.rs       # 实时预览面板 (防抖渲染)
-│   ├── sidebar.rs       # 侧边栏 (大纲 + 文件树)
-│   ├── toolbar.rs       # 格式化工具栏
-│   ├── tabbar.rs        # 多标签页栏
-│   ├── statusbar.rs     # 状态栏 (字数/行数/保存状态)
-│   ├── file_tree.rs     # 文件树浏览
-│   ├── table_editor_modal.rs  # 表格编辑器弹窗
-│   ├── ai_chat_modal.rs       # AI 聊天弹窗
-│   ├── ai_result_modal.rs     # AI 结果弹窗
-│   ├── settings_modal.rs      # 设置弹窗
-│   ├── shortcuts_modal.rs     # 快捷键弹窗
-│   ├── search_modal.rs        # 搜索替换弹窗
-│   ├── global_search_modal.rs # 全局搜索弹窗
-│   ├── file_modified_modal.rs # 文件修改提示弹窗
-│   ├── large_file_warning_modal.rs # 大文件警告弹窗
-│   ├── close_confirm_modal.rs # 关闭未保存确认弹窗
-│   └── icons.rs         # SVG 图标组件
+├── components/             # UI 组件
+│   ├── editor.rs / preview.rs / sidebar.rs / toolbar.rs
+│   ├── tabbar.rs / statusbar.rs / file_tree.rs / icons.rs
+│   └── *_modal.rs          # 设置、搜索、AI、表格、确认等弹窗
 │
-├── actions/             # 交互逻辑层
-│   ├── app_actions.rs   # 应用级 Actions (主题、弹窗、侧边栏)
-│   ├── editor_actions.rs # 编辑器 Actions (格式化、文本操作)
-│   ├── file_actions.rs  # 文件操作 Actions (打开、保存、编码检测)
-│   └── shortcut_actions.rs # 快捷键分发
+├── actions/                # 交互逻辑
+│   ├── app_actions.rs / editor_actions.rs
+│   ├── file_actions.rs / shortcut_actions.rs
+│   └── tests.rs
 │
-├── services/            # 服务层 (纯逻辑，可独立测试)
-│   ├── markdown.rs      # Markdown 渲染 (pulldown-cmark + 代码高亮)
-│   ├── ai.rs            # AI API 调用 (多提供商，流式/非流式)
-│   ├── export.rs        # 导出服务 (HTML/PDF/DOCX/TXT)
-│   ├── auto_save.rs     # 自动保存服务
-│   ├── image.rs         # 图片处理 (Base64)
-│   ├── settings.rs      # 设置持久化
-│   ├── recent_files.rs  # 最近文件记录
-│   ├── file_watcher.rs  # 文件外部修改检测
-│   ├── spellcheck.rs    # 拼写检查
-│   ├── syntax_highlight.rs # 语法高亮
-│   └── keyring_service.rs  # 密钥管理
+├── services/
+│   ├── markdown.rs / ai.rs / auto_save.rs / image.rs
+│   ├── settings.rs / session.rs / recent_files.rs
+│   ├── file_watcher.rs / spellcheck.rs / syntax_highlight.rs
+│   ├── keyring_service.rs / theme_detector.rs
+│   └── export/             # HTML / PDF / DOCX / TXT
+│       ├── mod.rs / shared.rs
+│       ├── html.rs / pdf.rs / docx.rs / text.rs
 │
 ├── utils/
-│   ├── i18n.rs          # 国际化 (中/英)
-│   └── file_utils.rs    # 文件扫描工具 (带深度/数量限制)
+│   ├── i18n.rs / file_utils.rs
+│   ├── workspace_search.rs # 工作区搜索（含打开标签缓冲）
+│   └── replace.rs          # 替换工具
 │
-└── styles/              # CSS 样式
-    ├── variables.css    # CSS 变量 (主题色)
-    ├── base.css         # 基础样式
-    ├── editor.css       # 编辑器样式
-    ├── toolbar.css      # 工具栏样式
-    ├── sidebar.css      # 侧边栏样式
-    └── modals.css       # 弹窗样式
+└── styles/                 # CSS（variables / base / editor / toolbar / sidebar / modals）
+
+assets/
+├── editor_enhance.js
+├── dictionaries/
+└── vendor/                 # 离线 Mermaid + KaTeX
 ```
+
+配置与会话数据默认位于用户配置目录下的 `MarkdownMonkey/`（如 `settings.json`、`session.json`、`session_drafts/`、`ai_history/`）。
 
 ## 🚀 开发
 
@@ -151,59 +140,49 @@ src/
 - Rust 1.80+
 - Cargo
 
-### 构建
+### 构建与运行
 
 ```bash
-# 开发模式
 cargo build
-
-# 发布模式 (优化体积)
 cargo build --release
-```
-
-### 运行
-
-```bash
 cargo run
 ```
 
-调试时可设置日志级别，例如：
+调试日志示例（Windows PowerShell）：
 
-```bash
-# Windows PowerShell
+```powershell
 $env:RUST_LOG="markdownmonkey=debug,info"; cargo run
 ```
 
-### 测试
+可选：通过环境变量 `MARKDOWNMONKEY_PDF_FONT` 指定 PDF 中文字体路径。
+
+### 测试与检查
 
 ```bash
-# 运行所有测试
 cargo test
-
-# 运行特定模块测试
-cargo test services::
-cargo test actions::
-
-# 格式检查
 cargo fmt --all -- --check
-
-# Clippy 检查
-cargo clippy
+cargo clippy --all-targets -- -D warnings
 ```
+
+## 📦 发布
+
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows / Linux / macOS）。
 
 ## ⌨️ 快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
 | Ctrl+N | 新建文件 |
+| Ctrl+O | 打开文件 |
+| Ctrl+S | 保存 |
 | Ctrl+Z | 撤销 |
 | Ctrl+Y / Ctrl+Shift+Z | 重做 |
 | Ctrl+B | 粗体 |
 | Ctrl+I | 斜体 |
 | Ctrl+` | 行内代码 |
 | Ctrl+K | 插入链接 |
-| Ctrl+F | 搜索替换 |
-| Ctrl+Shift+F | 全局搜索 |
+| Ctrl+F | 文档内搜索替换 |
+| Ctrl+Shift+F | 工作区全局搜索 / 替换 |
 | Ctrl+\\ | 切换侧边栏 |
 | Ctrl+P | 切换预览 |
 | Ctrl+T | 切换主题 |
