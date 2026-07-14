@@ -9,8 +9,8 @@ use crate::config::{
 use crate::services::auto_save::AutoSaveService;
 use crate::services::file_watcher::FileModificationChecker;
 use crate::services::keyring_service;
-use crate::services::settings::load_settings;
 use crate::services::session::SessionService;
+use crate::services::settings::load_settings;
 use crate::services::theme_detector::ThemeDetector;
 use crate::state::AppState;
 use crate::state::{AIProvider, Language, Theme};
@@ -124,8 +124,7 @@ pub fn App() -> Element {
 
             // 恢复 AI 会话历史 / Restore AI conversation history for active tab
             let key = state.current_ai_session_key();
-            *ai.ai_history.write() =
-                crate::services::settings::load_ai_history_for_key(&key);
+            *ai.ai_history.write() = crate::services::settings::load_ai_history_for_key(&key);
         }
 
         // 恢复上次编辑会话（标签 / 工作区）/ Restore previous editing session (tabs / workspace)
@@ -353,7 +352,8 @@ pub fn App() -> Element {
             async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                    let enabled = crate::services::settings::load_settings().session_restore_enabled;
+                    let enabled =
+                        crate::services::settings::load_settings().session_restore_enabled;
                     if !enabled {
                         continue;
                     }

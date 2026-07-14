@@ -433,7 +433,10 @@ fn test_evict_inactive_tabs_lru_order() {
         let tabs = state.tabs.read();
         // 应驱逐最旧的 inactive（last_accessed=1，即 index=1）
         // Should evict oldest inactive (last_accessed=1 → index 1)
-        assert!(tabs[1].is_evicted(), "oldest inactive tab should be evicted");
+        assert!(
+            tabs[1].is_evicted(),
+            "oldest inactive tab should be evicted"
+        );
         let resident_inactive = tabs
             .iter()
             .enumerate()

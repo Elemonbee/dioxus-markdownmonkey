@@ -127,9 +127,7 @@ impl AppActions {
 
     /// 开始一轮 AI 生成，返回世代号与取消接收端
     /// Start an AI generation; returns generation epoch and cancel receiver
-    pub fn start_ai_generation(
-        state: &mut AppState,
-    ) -> (u64, tokio::sync::watch::Receiver<bool>) {
+    pub fn start_ai_generation(state: &mut AppState) -> (u64, tokio::sync::watch::Receiver<bool>) {
         let (tx, rx) = tokio::sync::watch::channel(false);
         if let Ok(mut guard) = AI_CANCEL_TX.lock() {
             *guard = Some(tx);

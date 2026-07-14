@@ -522,9 +522,7 @@ impl AppState {
                 String::new()
             }
         } else {
-            content_opt
-                .map(|arc| arc.to_string())
-                .unwrap_or_default()
+            content_opt.map(|arc| arc.to_string()).unwrap_or_default()
         };
 
         // 恢复标签状态（含历史记录）/ Restore tab state (including history)
@@ -626,9 +624,7 @@ impl AppState {
                 String::new()
             }
         } else {
-            content_opt
-                .map(|arc| arc.to_string())
-                .unwrap_or_default()
+            content_opt.map(|arc| arc.to_string()).unwrap_or_default()
         };
 
         *self.content.write() = content;

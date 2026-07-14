@@ -433,10 +433,7 @@ mod tests {
 
     #[test]
     fn test_ai_history_serde_roundtrip() {
-        let turns = vec![
-            ChatTurn::user("hello"),
-            ChatTurn::assistant("world"),
-        ];
+        let turns = vec![ChatTurn::user("hello"), ChatTurn::assistant("world")];
         let json = serde_json::to_string(&turns).unwrap();
         let back: Vec<ChatTurn> = serde_json::from_str(&json).unwrap();
         assert_eq!(turns, back);

@@ -163,11 +163,7 @@ pub fn collect_workspace_files(
 ) -> Vec<(PathBuf, String)> {
     let mut files: Vec<(PathBuf, String)> = Vec::new();
 
-    fn walk(
-        dir: &Path,
-        overrides: &HashMap<PathBuf, String>,
-        out: &mut Vec<(PathBuf, String)>,
-    ) {
+    fn walk(dir: &Path, overrides: &HashMap<PathBuf, String>, out: &mut Vec<(PathBuf, String)>) {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();

@@ -1425,11 +1425,7 @@ mod file_actions_integration_tests {
         with_runtime(|| {
             let mut state = AppState::new();
             for i in 0..12 {
-                AppActions::push_ai_turn(
-                    &mut state,
-                    format!("user-{i}"),
-                    format!("assistant-{i}"),
-                );
+                AppActions::push_ai_turn(&mut state, format!("user-{i}"), format!("assistant-{i}"));
             }
             let len = state.ai().ai_history.read().len();
             assert_eq!(len, crate::services::settings::AI_HISTORY_MAX_MESSAGES);

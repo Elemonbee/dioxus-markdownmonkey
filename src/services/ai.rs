@@ -1170,12 +1170,8 @@ mod tests {
             ChatTurn::user("first question"),
             ChatTurn::assistant("first answer"),
         ];
-        let msgs = AITask::Custom.build_messages_with_history(
-            "doc",
-            "Summarize",
-            &history,
-            "Be concise.",
-        );
+        let msgs =
+            AITask::Custom.build_messages_with_history("doc", "Summarize", &history, "Be concise.");
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0].role, "system");
         assert!(msgs[0].content.contains("Be concise."));
@@ -1218,15 +1214,8 @@ mod tests {
         let pending = stream::pending::<Result<Vec<u8>, reqwest::Error>>();
 
         let task = tokio::spawn(async move {
-            AIService::collect_sse_content(
-                pending,
-                &mut |_| {},
-                || true,
-                rx,
-                |_| None,
-                "empty",
-            )
-            .await
+            AIService::collect_sse_content(pending, &mut |_| {}, || true, rx, |_| None, "empty")
+                .await
         });
 
         tokio::time::sleep(Duration::from_millis(30)).await;

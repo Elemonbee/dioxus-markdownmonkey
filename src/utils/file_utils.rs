@@ -40,42 +40,30 @@ pub fn validate_rename_name(new_name: &str) -> Result<(), String> {
 /// 确保路径位于工作区内（canonicalize 后前缀校验）
 /// Ensure path stays inside the workspace (prefix check after canonicalize)
 pub fn ensure_within_workspace(path: &Path, workspace: &Path) -> Result<PathBuf, String> {
-    let workspace_canon = workspace.canonicalize().map_err(|e| {
-        format!(
-            "无法解析工作区路径 / Cannot resolve workspace path: {}",
-            e
-        )
-    })?;
+    let workspace_canon = workspace
+        .canonicalize()
+        .map_err(|e| format!("无法解析工作区路径 / Cannot resolve workspace path: {}", e))?;
 
     // 已存在路径直接 canonicalize；否则 canonicalize 父目录再拼接文件名
     // Canonicalize existing paths; otherwise canonicalize parent then join filename
     let candidate = if path.exists() {
-        path.canonicalize().map_err(|e| {
-            format!(
-                "无法解析路径 / Cannot resolve path: {}",
-                e
-            )
-        })?
+        path.canonicalize()
+            .map_err(|e| format!("无法解析路径 / Cannot resolve path: {}", e))?
     } else {
-        let parent = path.parent().ok_or_else(|| {
-            "无效路径 / Invalid path".to_string()
-        })?;
-        let file_name = path.file_name().ok_or_else(|| {
-            "无效文件名 / Invalid file name".to_string()
-        })?;
-        let parent_canon = parent.canonicalize().map_err(|e| {
-            format!(
-                "无法解析父目录 / Cannot resolve parent directory: {}",
-                e
-            )
-        })?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| "无效路径 / Invalid path".to_string())?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| "无效文件名 / Invalid file name".to_string())?;
+        let parent_canon = parent
+            .canonicalize()
+            .map_err(|e| format!("无法解析父目录 / Cannot resolve parent directory: {}", e))?;
         parent_canon.join(file_name)
     };
 
     if !candidate.starts_with(&workspace_canon) {
-        return Err(
-            "路径超出工作区范围 / Path escapes the workspace boundary".to_string(),
-        );
+        return Err("路径超出工作区范围 / Path escapes the workspace boundary".to_string());
     }
     Ok(candidate)
 }

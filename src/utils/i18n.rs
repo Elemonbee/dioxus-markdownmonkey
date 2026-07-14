@@ -68,42 +68,15 @@ impl I18n {
                 "Please configure API Key in settings",
             ),
         );
-        texts.insert(
-            "ai_clear_history",
-            lang_map("清空会话", "Clear Chat"),
-        );
-        texts.insert(
-            "ai_follow_up",
-            lang_map("继续提问", "Follow Up"),
-        );
-        texts.insert(
-            "ai_history_turns",
-            lang_map("{n} 轮对话", "{n} turns"),
-        );
-        texts.insert(
-            "ai_transcript_user",
-            lang_map("你", "You"),
-        );
-        texts.insert(
-            "ai_transcript_assistant",
-            lang_map("助手", "Assistant"),
-        );
-        texts.insert(
-            "ai_transcript_copy",
-            lang_map("复制", "Copy"),
-        );
-        texts.insert(
-            "ai_transcript_copied",
-            lang_map("已复制", "Copied"),
-        );
-        texts.insert(
-            "ai_stop",
-            lang_map("停止生成", "Stop"),
-        );
-        texts.insert(
-            "ai_generating",
-            lang_map("正在生成…", "Generating…"),
-        );
+        texts.insert("ai_clear_history", lang_map("清空会话", "Clear Chat"));
+        texts.insert("ai_follow_up", lang_map("继续提问", "Follow Up"));
+        texts.insert("ai_history_turns", lang_map("{n} 轮对话", "{n} turns"));
+        texts.insert("ai_transcript_user", lang_map("你", "You"));
+        texts.insert("ai_transcript_assistant", lang_map("助手", "Assistant"));
+        texts.insert("ai_transcript_copy", lang_map("复制", "Copy"));
+        texts.insert("ai_transcript_copied", lang_map("已复制", "Copied"));
+        texts.insert("ai_stop", lang_map("停止生成", "Stop"));
+        texts.insert("ai_generating", lang_map("正在生成…", "Generating…"));
 
         // 状态 / Status
         texts.insert("saved", lang_map("已保存", "Saved"));
@@ -125,10 +98,7 @@ impl I18n {
 
         // 文件 / Files
         texts.insert("untitled", lang_map("未命名", "Untitled"));
-        texts.insert(
-            "aria_toolbar",
-            lang_map("编辑器工具栏", "Editor toolbar"),
-        );
+        texts.insert("aria_toolbar", lang_map("编辑器工具栏", "Editor toolbar"));
         texts.insert(
             "aria_editor",
             lang_map("Markdown 编辑器", "Markdown editor"),
@@ -148,10 +118,7 @@ impl I18n {
         texts.insert("chars_abbr", lang_map("字", "chars"));
         texts.insert("export_failed", lang_map("导出失败", "Export Failed"));
         texts.insert("export", lang_map("导出", "Export"));
-        texts.insert(
-            "preview_rendering",
-            lang_map("渲染中…", "Rendering…"),
-        );
+        texts.insert("preview_rendering", lang_map("渲染中…", "Rendering…"));
         texts.insert("open_file", lang_map("打开文件", "Open File"));
         texts.insert("save_file", lang_map("保存文件", "Save File"));
         texts.insert(
@@ -480,7 +447,10 @@ impl I18n {
             lang_map("点击选择文件夹", "Click to select folder"),
         );
         texts.insert("recent_files", lang_map("最近打开", "Recent Files"));
-        texts.insert("no_recent_files", lang_map("暂无最近文件", "No recent files"));
+        texts.insert(
+            "no_recent_files",
+            lang_map("暂无最近文件", "No recent files"),
+        );
         texts.insert(
             "aria_recent_files",
             lang_map("最近打开的文件", "Recently opened files"),

@@ -282,9 +282,7 @@ impl SessionService {
             return report;
         }
 
-        let active = snapshot
-            .active_tab_index
-            .min(built.len().saturating_sub(1));
+        let active = snapshot.active_tab_index.min(built.len().saturating_sub(1));
 
         // 工作区 / Workspace
         if let Some(ref root) = snapshot.workspace_root {
