@@ -3,8 +3,6 @@
 //! 使用系统密钥环（keyring）安全存储 API Key
 //! Uses system keyring for secure API Key storage
 
-#![allow(dead_code)]
-
 use keyring_core::Entry;
 use std::sync::OnceLock;
 

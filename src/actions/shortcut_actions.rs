@@ -5,8 +5,7 @@
 //! 注意：部分功能为预留功能，暂未使用
 //! Note: Some functions are reserved for future use, not yet used
 
-use crate::actions::{AppActions, FileActions};
-use crate::services::recent_files::RecentFiles;
+use crate::actions::{AppActions, EditorActions, FileActions};
 use crate::state::AppState;
 use dioxus::prelude::*;
 use rfd::AsyncFileDialog;
@@ -216,7 +215,10 @@ impl ShortcutActions {
     pub fn execute(state: &mut AppState, action: ShortcutAction) {
         match action {
             ShortcutAction::NewFile => {
-                state.new_tab();
+                let mut state = *state;
+                spawn(async move {
+                    FileActions::new_tab_flushed(&mut state).await;
+                });
             }
             ShortcutAction::OpenFile => {
                 let mut state = *state;
@@ -227,36 +229,72 @@ impl ShortcutActions {
                         .await;
                     if let Some(file) = file {
                         let path = file.path().to_path_buf();
-                        if FileActions::open_file(&mut state, path.clone()).is_ok() {
-                            let mut recent = RecentFiles::load();
-                            recent.add(path);
-                            let _ = recent.save();
+                        if let Err(e) =
+                            FileActions::open_file_and_track_recent_flushed(&mut state, path).await
+                        {
+                            tracing::warn!("Open file shortcut failed: {}", e);
                         }
                     }
                 });
             }
             ShortcutAction::SaveFile => {
-                if let Err(e) = FileActions::save_current_file(state) {
-                    tracing::warn!("Save shortcut: {}", e);
-                }
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::flush_from_dom(&mut state).await;
+                    if let Err(e) = FileActions::save_current_file_async(&mut state).await {
+                        tracing::warn!("Save shortcut: {}", e);
+                    }
+                });
             }
             ShortcutAction::Undo => {
-                state.undo();
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::flush_from_dom(&mut state).await;
+                    EditorActions::undo(&mut state);
+                });
             }
             ShortcutAction::Redo => {
-                state.redo();
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::flush_from_dom(&mut state).await;
+                    EditorActions::redo(&mut state);
+                });
             }
             ShortcutAction::Bold => {
-                state.insert_format_around_selection("**", "**");
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::with_flushed_format(&mut state, |s| {
+                        EditorActions::insert_bold(s);
+                    })
+                    .await;
+                });
             }
             ShortcutAction::Italic => {
-                state.insert_format_around_selection("*", "*");
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::with_flushed_format(&mut state, |s| {
+                        EditorActions::insert_italic(s);
+                    })
+                    .await;
+                });
             }
             ShortcutAction::Code => {
-                state.insert_format_around_selection("`", "`");
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::with_flushed_format(&mut state, |s| {
+                        EditorActions::insert_code(s);
+                    })
+                    .await;
+                });
             }
             ShortcutAction::Link => {
-                state.insert_format_around_selection("[", "](url)");
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::with_flushed_format(&mut state, |s| {
+                        EditorActions::insert_link(s);
+                    })
+                    .await;
+                });
             }
             ShortcutAction::ToggleSidebar => {
                 AppActions::toggle_sidebar(state);
@@ -278,10 +316,10 @@ impl ShortcutActions {
             }
             ShortcutAction::Search => {
                 // Ctrl+F: 打开搜索替换弹窗 / Open search & replace modal
-                *state.show_search.write() = true;
+                *state.ui().show_search.write() = true;
             }
             ShortcutAction::GlobalSearch => {
-                *state.show_global_search.write() = true;
+                *state.ui().show_global_search.write() = true;
             }
             ShortcutAction::Close => {
                 AppActions::close_overlays(state);

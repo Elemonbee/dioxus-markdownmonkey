@@ -786,3 +786,41 @@ pub fn GrammarIcon(props: IconProps) -> Element {
         }
     }
 }
+
+/// Export / Download Icon
+pub fn ExportIcon(props: IconProps) -> Element {
+    rsx! {
+        svg {
+            class: "{props.class}",
+            width: "{props.size}",
+            height: "{props.size}",
+            view_box: "0 0 24 24",
+            fill: "none",
+            stroke: "{props.color}",
+            stroke_width: "2",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            path { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }
+            polyline { points: "7 10 12 15 17 10" }
+            line { x1: "12", y1: "15", x2: "12", y2: "3" }
+        }
+    }
+}
+
+/// Chevron Down Icon
+pub fn ChevronDownIcon(props: IconProps) -> Element {
+    rsx! {
+        svg {
+            class: "{props.class}",
+            width: "{props.size}",
+            height: "{props.size}",
+            view_box: "0 0 24 24",
+            fill: "none",
+            stroke: "{props.color}",
+            stroke_width: "2",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            polyline { points: "6 9 12 15 18 9" }
+        }
+    }
+}

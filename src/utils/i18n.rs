@@ -68,6 +68,15 @@ impl I18n {
                 "Please configure API Key in settings",
             ),
         );
+        texts.insert("ai_clear_history", lang_map("清空会话", "Clear Chat"));
+        texts.insert("ai_follow_up", lang_map("继续提问", "Follow Up"));
+        texts.insert("ai_history_turns", lang_map("{n} 轮对话", "{n} turns"));
+        texts.insert("ai_transcript_user", lang_map("你", "You"));
+        texts.insert("ai_transcript_assistant", lang_map("助手", "Assistant"));
+        texts.insert("ai_transcript_copy", lang_map("复制", "Copy"));
+        texts.insert("ai_transcript_copied", lang_map("已复制", "Copied"));
+        texts.insert("ai_stop", lang_map("停止生成", "Stop"));
+        texts.insert("ai_generating", lang_map("正在生成…", "Generating…"));
 
         // 状态 / Status
         texts.insert("saved", lang_map("已保存", "Saved"));
@@ -89,6 +98,27 @@ impl I18n {
 
         // 文件 / Files
         texts.insert("untitled", lang_map("未命名", "Untitled"));
+        texts.insert("aria_toolbar", lang_map("编辑器工具栏", "Editor toolbar"));
+        texts.insert(
+            "aria_editor",
+            lang_map("Markdown 编辑器", "Markdown editor"),
+        );
+        texts.insert("aria_preview", lang_map("预览", "Preview"));
+        texts.insert("aria_sidebar", lang_map("侧边栏", "Sidebar"));
+        texts.insert(
+            "aria_sidebar_content",
+            lang_map("侧边栏内容", "Sidebar content"),
+        );
+        texts.insert("aria_open_tabs", lang_map("打开的标签", "Open tabs"));
+        texts.insert("aria_file_tree", lang_map("文件树", "File tree"));
+        texts.insert(
+            "aria_ai_transcript",
+            lang_map("对话历史", "Conversation history"),
+        );
+        texts.insert("chars_abbr", lang_map("字", "chars"));
+        texts.insert("export_failed", lang_map("导出失败", "Export Failed"));
+        texts.insert("export", lang_map("导出", "Export"));
+        texts.insert("preview_rendering", lang_map("渲染中…", "Rendering…"));
         texts.insert("open_file", lang_map("打开文件", "Open File"));
         texts.insert("save_file", lang_map("保存文件", "Save File"));
         texts.insert(
@@ -144,7 +174,32 @@ impl I18n {
         texts.insert("previous", lang_map("上一个", "Previous"));
         texts.insert("next", lang_map("下一个", "Next"));
         texts.insert("replace_btn", lang_map("替换", "Replace"));
+        texts.insert("replace", lang_map("替换", "Replace"));
         texts.insert("replace_all", lang_map("全部替换", "Replace All"));
+        texts.insert(
+            "replace_all_workspace",
+            lang_map("工作区全部替换", "Replace All in Workspace"),
+        );
+        texts.insert("replacing", lang_map("替换中…", "Replacing…"));
+        texts.insert(
+            "replace_workspace_done",
+            lang_map("工作区替换完成", "Workspace replace done"),
+        );
+        texts.insert(
+            "replace_workspace_none",
+            lang_map("未找到可替换项", "Nothing to replace"),
+        );
+        texts.insert(
+            "replace_workspace_confirm_title",
+            lang_map("确认工作区替换", "Confirm Workspace Replace"),
+        );
+        texts.insert(
+            "replace_workspace_confirm_msg",
+            lang_map(
+                "将在 {files} 个文件中替换 {matches} 处匹配，此操作会直接写盘。是否继续？",
+                "Replace {matches} match(es) in {files} file(s). This writes to disk. Continue?",
+            ),
+        );
 
         // 表格 / Table
         texts.insert("table_editor", lang_map("表格编辑器", "Table Editor"));
@@ -276,6 +331,17 @@ impl I18n {
                 "Enter custom question or select function above...",
             ),
         );
+        texts.insert("ai_context", lang_map("上下文", "Context"));
+        texts.insert("ai_context_full", lang_map("全文", "Document"));
+        texts.insert("ai_context_selection", lang_map("选区", "Selection"));
+        texts.insert(
+            "ai_context_full_hint",
+            lang_map("将整篇文档发送给 AI", "Sending full document to AI"),
+        );
+        texts.insert(
+            "ai_context_selection_hint",
+            lang_map("仅将当前选区发送给 AI", "Sending selected text to AI"),
+        );
 
         // 全局搜索 / Global Search
         texts.insert("searching", lang_map("搜索中...", "Searching..."));
@@ -325,8 +391,16 @@ impl I18n {
             "auto_save_interval",
             lang_map("自动保存间隔（秒）", "Auto Save Interval (sec)"),
         );
+        texts.insert(
+            "session_restore",
+            lang_map("启动时恢复上次会话", "Restore last session on startup"),
+        );
         texts.insert("appearance", lang_map("外观", "Appearance"));
         texts.insert("sidebar_width", lang_map("侧边栏宽度", "Sidebar Width"));
+        texts.insert(
+            "sidebar_resize",
+            lang_map("拖拽调整侧边栏宽度", "Drag to resize sidebar"),
+        );
         texts.insert("enable_ai", lang_map("启用 AI", "Enable AI"));
         texts.insert("enter_api_key", lang_map("输入 API Key", "Enter API Key"));
         texts.insert("model_name", lang_map("模型名称", "Model Name"));
@@ -338,6 +412,13 @@ impl I18n {
         // 拼写检查 / Spell Check
         texts.insert("spell_check", lang_map("拼写检查", "Spell Check"));
         texts.insert("spell_errors", lang_map("个拼写错误", "spell errors"));
+        texts.insert(
+            "spell_nav_tooltip",
+            lang_map(
+                "下一个拼写错误（右键：上一个）",
+                "Next spelling error (right-click: previous)",
+            ),
+        );
 
         // 预览 / Preview
         texts.insert("preview", lang_map("预览", "Preview"));
@@ -365,6 +446,16 @@ impl I18n {
             "click_to_select",
             lang_map("点击选择文件夹", "Click to select folder"),
         );
+        texts.insert("recent_files", lang_map("最近打开", "Recent Files"));
+        texts.insert(
+            "no_recent_files",
+            lang_map("暂无最近文件", "No recent files"),
+        );
+        texts.insert(
+            "aria_recent_files",
+            lang_map("最近打开的文件", "Recently opened files"),
+        );
+        texts.insert("clear_recent", lang_map("清空最近", "Clear Recent"));
         texts.insert("line", lang_map("行", "Line"));
         texts.insert("current_file", lang_map("当前文件", "Current File"));
         texts.insert(
@@ -411,6 +502,26 @@ impl I18n {
             "large_file_threshold",
             lang_map("大文件提醒阈值", "Large File Warning Threshold"),
         );
+        texts.insert(
+            "pdf_cjk_font_path",
+            lang_map("PDF 中文字体路径", "PDF CJK Font Path"),
+        );
+        texts.insert(
+            "pdf_cjk_font_path_hint",
+            lang_map(
+                "可选。留空则自动尝试系统字体；也可设置环境变量 MARKDOWNMONKEY_PDF_FONT",
+                "Optional. Leave empty to auto-detect system fonts; or set MARKDOWNMONKEY_PDF_FONT",
+            ),
+        );
+        texts.insert("browse", lang_map("浏览…", "Browse…"));
+        texts.insert("clear_path", lang_map("清除", "Clear"));
+        texts.insert(
+            "ai_clear_history_confirm",
+            lang_map(
+                "确定清空当前 AI 会话历史？",
+                "Clear the current AI conversation history?",
+            ),
+        );
 
         Self { texts }
     }
@@ -448,6 +559,16 @@ pub fn t(key: &str, lang: Language) -> String {
     I18N.with(|i18n| i18n.get(key, lang).to_string())
 }
 
+/// 未命名标签标题 / Untitled tab title
+pub fn untitled_tab_title(lang: Language) -> String {
+    t("untitled", lang)
+}
+
+/// 带序号的未命名标签标题 / Numbered untitled tab title
+pub fn untitled_tab_title_n(lang: Language, n: usize) -> String {
+    format!("{} {}", t("untitled", lang), n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,5 +598,12 @@ mod tests {
         // They should both be non-empty
         assert!(!zh.is_empty());
         assert!(!en.is_empty());
+    }
+
+    #[test]
+    fn test_i18n_untitled_helpers() {
+        assert_eq!(untitled_tab_title(Language::ZhCN), "未命名");
+        assert_eq!(untitled_tab_title(Language::EnUS), "Untitled");
+        assert_eq!(untitled_tab_title_n(Language::EnUS, 2), "Untitled 2");
     }
 }

@@ -18,6 +18,37 @@ window._mm_initEditor = function() {
     // If already enhanced and textarea hasn't been replaced, skip
     if (ta._mm_enhanced) return;
     ta._mm_enhanced = true;
+
+    // ========== 选区同步到 Rust / Selection sync to Rust ==========
+    // 持续更新全局选区，供 AI「使用选区」等功能读取
+    // Keep global selection updated for AI "use selection" and similar features
+    function syncSelection() {
+        window._mm_selStart = ta.selectionStart || 0;
+        window._mm_selEnd = ta.selectionEnd || 0;
+    }
+    syncSelection();
+    ta.addEventListener('select', syncSelection);
+    ta.addEventListener('keyup', syncSelection);
+    ta.addEventListener('mouseup', syncSelection);
+    ta.addEventListener('input', syncSelection);
+    ta.addEventListener('click', syncSelection);
+    window._mm_getSelection = function() {
+        var el = document.querySelector('.editor-textarea');
+        if (!el) return [0, 0];
+        return [el.selectionStart || 0, el.selectionEnd || 0];
+    };
+    window._mm_getEditorValue = function() {
+        var el = document.querySelector('.editor-textarea');
+        return el ? el.value : '';
+    };
+    window._mm_setEditorValue = function(text) {
+        var el = document.querySelector('.editor-textarea');
+        if (!el) return;
+        if (typeof text !== 'string') text = String(text || '');
+        if (el.value !== text) {
+            el.value = text;
+        }
+    };
     
     // ========== 搜索高亮层 / Search Highlight Overlay ==========
     var highlightDiv = document.createElement('div');
@@ -102,12 +133,18 @@ window._mm_initEditor = function() {
         var lastIndex = 0;
         var matchIndex = 0;
         var match;
+        var currentMatchStart = -1;
+        var currentMatchEnd = -1;
         while ((match = regex.exec(content)) !== null) {
             if (match.index > lastIndex) {
                 result += escapeHtml(content.substring(lastIndex, match.index));
             }
             var cls = (matchIndex === currentIndex) ? 'search-highlight-current' : 'search-highlight';
             result += '<mark class="' + cls + '">' + escapeHtml(match[0]) + '</mark>';
+            if (matchIndex === currentIndex) {
+                currentMatchStart = match.index;
+                currentMatchEnd = match.index + match[0].length;
+            }
             lastIndex = regex.lastIndex;
             matchIndex++;
             if (matchIndex > 2000) break; // 安全限制 / Safety limit
@@ -118,6 +155,28 @@ window._mm_initEditor = function() {
         result += '\n'; // 末尾换行确保高度一致 / Trailing newline for height consistency
         highlightDiv.innerHTML = result;
         syncHighlight();
+
+        // 将当前匹配滚入可视区并选中 / Scroll active match into view and select it
+        if (currentMatchStart >= 0) {
+            try {
+                ta.focus({ preventScroll: true });
+            } catch (e) {
+                ta.focus();
+            }
+            ta.setSelectionRange(currentMatchStart, currentMatchEnd);
+            var style = window.getComputedStyle(ta);
+            var lineHeight = parseFloat(style.lineHeight);
+            if (!lineHeight || isNaN(lineHeight)) {
+                lineHeight = parseFloat(style.fontSize) * 1.5 || 20;
+            }
+            var textBefore = content.substring(0, currentMatchStart);
+            var lineNum = (textBefore.match(/\n/g) || []).length;
+            var targetScroll = Math.max(0, lineNum * lineHeight - ta.clientHeight / 3);
+            ta.scrollTop = targetScroll;
+            if (highlightDiv) {
+                highlightDiv.scrollTop = ta.scrollTop;
+            }
+        }
     };
     
     function escapeHtml(s) {
@@ -333,9 +392,9 @@ window._mm_initEditor = function() {
         }
     });
     
-    // ========== 拖放图片处理 / Drag & Drop Image Handler ==========
-    // 检测拖放的图片文件，转换为 base64 插入 Markdown
-    // Detect dropped image files, convert to base64 and insert as Markdown
+    // ========== 拖放图片/Markdown 处理 / Drag & Drop Image/Markdown Handler ==========
+    // 图片转 base64 插入；Markdown/文本文件内容插入光标处
+    // Images → base64 insert; Markdown/text file contents inserted at cursor
     ta.addEventListener('drop', function(e) {
         var files = e.dataTransfer && e.dataTransfer.files;
         if (!files || files.length === 0) return;
@@ -360,8 +419,10 @@ window._mm_initEditor = function() {
                 reader.readAsDataURL(file);
                 return;
             }
+            // Markdown/文本由 Rust ondrop 按路径打开标签；此处不拦截
+            // Markdown/text: let Rust ondrop open as tabs by path; do not intercept
         }
-    }, true); // capture phase to override parent handler
+    }, true); // capture phase so image drops override parent handler
 };
 
 window._mm_scrollToLine = function(lineNumber) {
@@ -378,18 +439,28 @@ window._mm_scrollToLine = function(lineNumber) {
     ta.scrollTop = lineNumber * lineHeight - ta.clientHeight / 2;
 };
 
-window._mm_reverseSyncScroll = function() {
-    var preview = document.getElementById('preview-scroll');
-    var ta = document.querySelector('.editor-textarea');
-    if (!preview || !ta) return;
-    var psh = preview.scrollHeight - preview.clientHeight;
-    if (psh <= 0) return;
-    var ratio = preview.scrollTop / psh;
-    var maxScroll = ta.scrollHeight - ta.clientHeight;
-    if (maxScroll > 0) {
-        ta.scrollTop = ratio * maxScroll;
-    }
-};
+window._mm_reverseSyncScroll = (function() {
+    var rafId = null;
+    var lastRatio = -1;
+    return function() {
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(function() {
+            rafId = null;
+            var preview = document.getElementById('preview-scroll');
+            var ta = document.querySelector('.editor-textarea');
+            if (!preview || !ta) return;
+            var psh = preview.scrollHeight - preview.clientHeight;
+            if (psh <= 0) return;
+            var ratio = preview.scrollTop / psh;
+            if (Math.abs(ratio - lastRatio) < 0.002) return;
+            lastRatio = ratio;
+            var maxScroll = ta.scrollHeight - ta.clientHeight;
+            if (maxScroll > 0) {
+                ta.scrollTop = ratio * maxScroll;
+            }
+        });
+    };
+})();
 
 // 自动初始化 / Auto-initialize
 if (document.querySelector('.editor-textarea')) {

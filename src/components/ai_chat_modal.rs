@@ -1,10 +1,10 @@
 //! AI 聊天弹窗组件 / AI Chat Modal Component
 
-use crate::actions::AppActions;
+use crate::actions::{AppActions, EditorActions};
 use crate::components::icons::{
     CloseIcon, ContinueIcon, GrammarIcon, ImproveIcon, OutlineIcon, TranslateIcon,
 };
-use crate::services::ai::{format_ai_error, AIService, AITask};
+use crate::services::ai::{format_ai_error, selected_ai_context, AIService, AITask};
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
@@ -13,8 +13,11 @@ use dioxus::prelude::*;
 #[component]
 pub fn AiChatModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_ai_chat.read();
-    let lang = *state.language.read();
+    let ai = state.ai();
+    let ui = state.ui();
+    let doc = state.document();
+    let show = *ai.show_ai_chat.read();
+    let lang = *ui.language.read();
 
     // i18n
     let ai_title_t = t("ai_assistant", lang);
@@ -29,15 +32,143 @@ pub fn AiChatModal() -> Element {
     let grammar_t = t("ai_fix_grammar", lang);
     let placeholder_t = t("custom_input_placeholder", lang);
     let clear_t = t("clear", lang);
+    let clear_history_t = t("ai_clear_history", lang);
+    let clear_confirm_t = t("ai_clear_history_confirm", lang);
+    let history_turns_t = t("ai_history_turns", lang);
+    let transcript_user_t = t("ai_transcript_user", lang);
+    let transcript_assistant_t = t("ai_transcript_assistant", lang);
     let send_t = t("send", lang);
+    let ai_context_t = t("ai_context", lang);
+    let ai_context_full_t = t("ai_context_full", lang);
+    let ai_context_selection_t = t("ai_context_selection", lang);
+    let ai_context_full_hint_t = t("ai_context_full_hint", lang);
+    let ai_context_selection_hint_t = t("ai_context_selection_hint", lang);
+    let chars_abbr_t = t("chars_abbr", lang);
+    let aria_ai_transcript_t = t("aria_ai_transcript", lang);
+    let transcript_copy_t = t("ai_transcript_copy", lang);
+    let transcript_copied_t = t("ai_transcript_copied", lang);
 
     let display_class = if show { "" } else { "hidden" };
+    let history_len = ai.ai_history.read().len();
+    let history_turns = history_len / 2;
+    let history_badge = if history_turns > 0 {
+        history_turns_t.replace("{n}", &history_turns.to_string())
+    } else {
+        String::new()
+    };
+    let mut expanded_turn = use_signal(|| Option::<usize>::None);
+    let mut copy_flash = use_signal(|| Option::<usize>::None);
+    let history_snapshot: Vec<(usize, String, String, String, String)> = {
+        let hist = ai.ai_history.read();
+        AppActions::transcript_window(&hist, 20)
+            .into_iter()
+            .enumerate()
+            .map(|(i, turn)| {
+                let role_class = if turn.role == "assistant" {
+                    "assistant".to_string()
+                } else {
+                    "user".to_string()
+                };
+                let role = if turn.role == "assistant" {
+                    transcript_assistant_t.clone()
+                } else {
+                    transcript_user_t.clone()
+                };
+                let full = turn.content.clone();
+                let preview: String = turn.content.chars().take(120).collect();
+                let preview = if turn.content.chars().count() > 120 {
+                    format!("{preview}…")
+                } else {
+                    preview
+                };
+                (i, role_class, role, preview, full)
+            })
+            .collect()
+    };
 
-    let ai_config = state.ai_config.read().clone();
+    // 历史变化时滚到底部 / Scroll transcript to bottom when history changes
+    use_effect(move || {
+        let _ = history_len;
+        if show && history_len > 0 {
+            let _ = document::eval(
+                r#"
+                (function() {
+                    const el = document.querySelector('.ai-transcript');
+                    if (el) el.scrollTop = el.scrollHeight;
+                })();
+                "#,
+            );
+        }
+    });
+
+    // 打开弹窗时 flush、同步选区，并聚焦输入框 / Flush, sync selection, focus input on open
+    let mut state_for_sel = state;
+    use_effect(move || {
+        if show {
+            spawn(async move {
+                EditorActions::flush_from_dom(&mut state_for_sel).await;
+                let mut ui = state_for_sel.ui();
+                let mut eval = document::eval(
+                    r#"
+                    (function() {
+                        if (window._mm_getSelection) {
+                            dioxus.send(window._mm_getSelection());
+                            return;
+                        }
+                        const ta = document.querySelector('.editor-textarea');
+                        if (!ta) { dioxus.send([0, 0]); return; }
+                        dioxus.send([ta.selectionStart || 0, ta.selectionEnd || 0]);
+                    })();
+                    "#,
+                );
+                if let Ok(vals) = eval.recv::<Vec<usize>>().await {
+                    if vals.len() >= 2 {
+                        *ui.cursor_start.write() = vals[0];
+                        *ui.cursor_end.write() = vals[1];
+                    }
+                }
+                let _ = document::eval(
+                    r#"
+                    (function() {
+                        const input = document.querySelector('.ai-input');
+                        if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+                    })();
+                    "#,
+                );
+            });
+        }
+    });
+
+    let ai_config = ai.ai_config.read().clone();
     let ai_enabled = ai_config.enabled;
-    let ai_loading = *state.ai_loading.read();
-    let input_text = state.ai_input.read().clone();
-    let content = state.content.read().clone();
+    let ai_loading = *ai.ai_loading.read();
+    let input_text = ai.ai_input.read().clone();
+    let content = doc.content.read().clone();
+    let cursor_start = *ui.cursor_start.read();
+    let cursor_end = *ui.cursor_end.read();
+    let selection_content = selected_ai_context(&content, cursor_start, cursor_end);
+    let has_selection = selection_content.is_some();
+    let use_selection = *ai.ai_use_selection.read() && has_selection;
+    let context_content = if use_selection {
+        selection_content.clone().unwrap_or_else(|| content.clone())
+    } else {
+        content.clone()
+    };
+    let context_hint = if use_selection {
+        format!(
+            "{} · {} {}",
+            ai_context_selection_hint_t,
+            context_content.chars().count(),
+            chars_abbr_t
+        )
+    } else {
+        format!(
+            "{} · {} {}",
+            ai_context_full_hint_t,
+            context_content.chars().count(),
+            chars_abbr_t
+        )
+    };
 
     rsx! {
         div {
@@ -53,13 +184,38 @@ pub fn AiChatModal() -> Element {
                 onclick: move |e| e.stop_propagation(),
 
                 div { class: "modal-header",
-                    h2 { "{ai_title_t}" }
-                    button {
-                        class: "modal-close",
-                        onclick: move |_| {
-                            AppActions::hide_ai_chat(&mut state);
-                        },
-                        CloseIcon { size: 20 }
+                    h2 {
+                        "{ai_title_t}"
+                        if !history_badge.is_empty() {
+                            span { class: "ai-history-badge", " · {history_badge}" }
+                        }
+                    }
+                    div { class: "modal-header-actions", style: "display: flex; gap: 8px; align-items: center;",
+                        if history_len > 0 {
+                            button {
+                                class: "btn-secondary",
+                                title: "{clear_history_t}",
+                                onclick: move |_| {
+                                    let confirmed = rfd::MessageDialog::new()
+                                        .set_title(&clear_history_t)
+                                        .set_description(&clear_confirm_t)
+                                        .set_buttons(rfd::MessageButtons::OkCancel)
+                                        .set_level(rfd::MessageLevel::Warning)
+                                        .show();
+                                    if confirmed == rfd::MessageDialogResult::Ok {
+                                        AppActions::clear_ai_history(&mut state);
+                                    }
+                                },
+                                "{clear_history_t}"
+                            }
+                        }
+                        button {
+                            class: "modal-close",
+                            onclick: move |_| {
+                                AppActions::hide_ai_chat(&mut state);
+                            },
+                            CloseIcon { size: 20 }
+                        }
                     }
                 }
 
@@ -93,13 +249,89 @@ pub fn AiChatModal() -> Element {
                         class: if ai_enabled && !ai_loading { "ai-content visible" } else { "ai-content hidden" },
                         style: if ai_enabled && !ai_loading { "" } else { "display: none;" },
 
+                        div { class: "ai-context",
+                            span { class: "ai-context-label", "{ai_context_t}" }
+                            div { class: "ai-context-toggle",
+                                button {
+                                    class: if !use_selection { "ai-context-option active" } else { "ai-context-option" },
+                                    onclick: move |_| {
+                                        AppActions::set_ai_use_selection(&mut state, false);
+                                    },
+                                    "{ai_context_full_t}"
+                                }
+                                button {
+                                    class: if use_selection { "ai-context-option active" } else { "ai-context-option" },
+                                    disabled: !has_selection,
+                                    onclick: move |_| {
+                                        if has_selection {
+                                            AppActions::set_ai_use_selection(&mut state, true);
+                                        }
+                                    },
+                                    "{ai_context_selection_t}"
+                                }
+                            }
+                            span { class: "ai-context-hint", "{context_hint}" }
+                        }
+
+                        if !history_snapshot.is_empty() {
+                            div { class: "ai-transcript", "aria-label": "{aria_ai_transcript_t}",
+                                for (idx, role_class, role, preview, full) in history_snapshot {
+                                    {
+                                        let is_expanded = *expanded_turn.read() == Some(idx);
+                                        let turn_class = if is_expanded {
+                                            format!("ai-transcript-turn {role_class} expanded")
+                                        } else {
+                                            format!("ai-transcript-turn {role_class}")
+                                        };
+                                        let display_text = if is_expanded {
+                                            full.clone()
+                                        } else {
+                                            preview.clone()
+                                        };
+                                        let copied = *copy_flash.read() == Some(idx);
+                                        let copy_label = if copied {
+                                            transcript_copied_t.clone()
+                                        } else {
+                                            transcript_copy_t.clone()
+                                        };
+                                        rsx! {
+                                            div {
+                                                class: "{turn_class}",
+                                                title: "{full}",
+                                                onclick: move |_| {
+                                                    let cur = *expanded_turn.read();
+                                                    expanded_turn.set(if cur == Some(idx) { None } else { Some(idx) });
+                                                },
+                                                div { class: "ai-transcript-turn-header",
+                                                    span { class: "ai-transcript-role", "{role}" }
+                                                    button {
+                                                        class: "ai-transcript-copy",
+                                                        title: "{copy_label}",
+                                                        onclick: move |e| {
+                                                            e.stop_propagation();
+                                                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                                let _ = cb.set_text(full.clone());
+                                                                copy_flash.set(Some(idx));
+                                                            }
+                                                        },
+                                                        "{copy_label}"
+                                                    }
+                                                }
+                                                span { class: "ai-transcript-text", "{display_text}" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         div { class: "ai-actions",
                             AiActionBtn {
                                 label: continue_t.clone(),
                                 icon: Some("continue".to_string()),
                                 task_type: "continue",
                                 config: ai_config.clone(),
-                                content: content.clone(),
+                                content: context_content.clone(),
                                 input: input_text.clone(),
                             }
                             AiActionBtn {
@@ -107,7 +339,7 @@ pub fn AiChatModal() -> Element {
                                 icon: Some("improve".to_string()),
                                 task_type: "improve",
                                 config: ai_config.clone(),
-                                content: content.clone(),
+                                content: context_content.clone(),
                                 input: input_text.clone(),
                             }
                             AiActionBtn {
@@ -115,7 +347,7 @@ pub fn AiChatModal() -> Element {
                                 icon: Some("outline".to_string()),
                                 task_type: "outline",
                                 config: ai_config.clone(),
-                                content: content.clone(),
+                                content: context_content.clone(),
                                 input: input_text.clone(),
                             }
                             AiActionBtn {
@@ -123,7 +355,7 @@ pub fn AiChatModal() -> Element {
                                 icon: Some("translate".to_string()),
                                 task_type: "translate",
                                 config: ai_config.clone(),
-                                content: content.clone(),
+                                content: context_content.clone(),
                                 input: input_text.clone(),
                             }
                             AiActionBtn {
@@ -131,7 +363,7 @@ pub fn AiChatModal() -> Element {
                                 icon: Some("grammar".to_string()),
                                 task_type: "fix_grammar",
                                 config: ai_config.clone(),
-                                content: content.clone(),
+                                content: context_content.clone(),
                                 input: input_text.clone(),
                             }
                         }
@@ -142,7 +374,7 @@ pub fn AiChatModal() -> Element {
                                 placeholder: "{placeholder_t}",
                                 value: "{input_text}",
                                 oninput: move |e| {
-                                    *state.ai_input.write() = e.value();
+                                    AppActions::set_ai_input(&mut state, e.value());
                                 },
                             }
 
@@ -150,7 +382,7 @@ pub fn AiChatModal() -> Element {
                                 button {
                                     class: "btn-secondary",
                                     onclick: move |_| {
-                                        *state.ai_input.write() = String::new();
+                                        AppActions::clear_ai_input(&mut state);
                                     },
                                     "{clear_t}"
                                 }
@@ -158,7 +390,7 @@ pub fn AiChatModal() -> Element {
                                     label: send_t.clone(),
                                     task_type: "custom",
                                     config: ai_config.clone(),
-                                    content: content.clone(),
+                                    content: context_content.clone(),
                                     input: input_text.clone(),
                                 }
                             }
@@ -184,9 +416,10 @@ struct AiActionBtnProps {
 
 /// AI 操作按钮 / AI Action Button
 fn AiActionBtn(props: AiActionBtnProps) -> Element {
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
+    let ui = state.ui();
     let icon_type = props.icon.clone();
-    let lang = *state.language.read();
+    let lang = *ui.language.read();
 
     // Pre-compute i18n strings for async use
     let title_error = t("ai_error", lang);
@@ -201,55 +434,133 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                 let base_url = props.config.base_url.clone();
                 let model = props.config.model.clone();
                 let temperature = props.config.temperature;
-                let content = props.content.clone();
+                let global_system = props.config.system_prompt.clone();
+                let fallback_content = props.content.clone();
                 let input = props.input.clone();
 
-                *state.ai_loading.write() = true;
-                AppActions::hide_ai_chat(&mut state);
-
-                let mut ai_loading = state.ai_loading;
-                let mut ai_result = state.ai_result;
-                let mut ai_title = state.ai_title;
-                let mut show_ai_result_signal = state.show_ai_result;
-
-                // 通过 AITask 枚举统一处理 / Unified handling via AITask enum
-                let task = AITask::from_str_id(&task_type);
-
-                // Capture i18n strings for async
+                let mut state = state;
                 let te = title_error.clone();
                 let ep = error_prefix.clone();
-                let result_title = t(task.title_i18n_key(), lang);
-
-                // 立即显示结果弹窗（流式更新）/ Show result modal immediately (streaming updates)
-                *ai_result.write() = String::new();
-                *ai_title.write() = result_title;
-                AppActions::show_ai_result(&mut state);
-                *show_ai_result_signal.write() = true;
 
                 spawn(async move {
-                    let service =
-                        AIService::with_temperature(api_key, Some(base_url), Some(model), temperature);
+                    let mut ui = state.ui();
+                    let doc = state.document();
+                    let ai = state.ai();
 
-                    // 通过 AITask 统一构建消息 / Unified message building via AITask
-                    let messages = task.build_messages(&content, &input);
+                    // 发送前 flush + 同步选区，避免非受控模式下上下文过期
+                    // Flush + sync selection before send so uncontrolled context is fresh
+                    EditorActions::flush_from_dom(&mut state).await;
+                    let mut eval = document::eval(
+                        r#"
+                        (function() {
+                            if (window._mm_getSelection) {
+                                dioxus.send(window._mm_getSelection());
+                                return;
+                            }
+                            const ta = document.querySelector('.editor-textarea');
+                            if (!ta) { dioxus.send([0, 0]); return; }
+                            dioxus.send([ta.selectionStart || 0, ta.selectionEnd || 0]);
+                        })();
+                        "#,
+                    );
+                    if let Ok(vals) = eval.recv::<Vec<usize>>().await {
+                        if vals.len() >= 2 {
+                            *ui.cursor_start.write() = vals[0];
+                            *ui.cursor_end.write() = vals[1];
+                        }
+                    }
 
-                    // 使用流式响应 / Use streaming response
-                    let result = service.chat_stream(messages, |chunk| {
-                        // 实时追加内容到结果 / Append content to result in real-time
-                        let current = ai_result.read().clone();
-                        *ai_result.write() = format!("{}{}", current, chunk);
-                    }).await;
+                    let body = doc.content.read().clone();
+                    let content = if *ai.ai_use_selection.read() {
+                        selected_ai_context(
+                            &body,
+                            *ui.cursor_start.read(),
+                            *ui.cursor_end.read(),
+                        )
+                        .unwrap_or(fallback_content)
+                    } else if body.is_empty() {
+                        fallback_content
+                    } else {
+                        body
+                    };
+                    let history = ai.ai_history.read().clone();
 
+                    let (generation_id, cancel_rx) = AppActions::start_ai_generation(&mut state);
+                    AppActions::hide_ai_chat(&mut state);
+
+                    let mut ai_loading = ai.ai_loading;
+                    let mut ai_result = ai.ai_result;
+                    let mut ai_title = ai.ai_title;
+                    let mut show_ai_result_signal = ai.show_ai_result;
+                    let generation_signal = ai.ai_generation_id;
+
+                    let task = AITask::from_str_id(&task_type);
+                    let result_title = t(task.title_i18n_key(), lang);
+
+                    *ai_result.write() = String::new();
+                    *ai_title.write() = result_title;
+                    AppActions::show_ai_result(&mut state);
+                    *show_ai_result_signal.write() = true;
+
+                    let service = AIService::with_temperature(
+                        api_key,
+                        Some(base_url),
+                        Some(model),
+                        temperature,
+                    );
+
+                    let messages = task.build_messages_with_history(
+                        &content,
+                        &input,
+                        &history,
+                        &global_system,
+                    );
+                    let user_summary = task.history_user_summary(&content, &input);
+
+                    let result = service
+                        .chat_stream_cancellable(
+                            messages,
+                            |chunk| {
+                                if *generation_signal.read() == generation_id {
+                                    ai_result.write().push_str(chunk);
+                                }
+                            },
+                            || *generation_signal.read() == generation_id,
+                            cancel_rx,
+                        )
+                        .await;
+
+                    // 仅当前世代才收尾 / Only finish if this generation is still current
+                    if *generation_signal.read() != generation_id {
+                        return;
+                    }
                     *ai_loading.write() = false;
 
-                    if let Err(e) = result {
-                        let current_result = ai_result.read().clone();
-                        if current_result.is_empty() {
-                            *ai_result.write() = format_ai_error(&e, &ep);
-                            *ai_title.write() = te;
-                            *show_ai_result_signal.write() = true;
+                    match result {
+                        Ok(full) => {
+                            let assistant = if full.is_empty() {
+                                ai_result.read().clone()
+                            } else {
+                                full
+                            };
+                            if !assistant.is_empty() {
+                                AppActions::push_ai_turn(&mut state, user_summary, assistant);
+                            }
                         }
-                        // 如果已有部分内容，保留已接收的部分 / If partial content exists, keep it
+                        Err(crate::services::ai::AIError::Cancelled) => {
+                            let partial = ai_result.read().clone();
+                            if !partial.is_empty() {
+                                AppActions::push_ai_turn(&mut state, user_summary, partial);
+                            }
+                        }
+                        Err(e) => {
+                            let current_result = ai_result.read().clone();
+                            if current_result.is_empty() {
+                                *ai_result.write() = format_ai_error(&e, &ep);
+                                *ai_title.write() = te;
+                                *show_ai_result_signal.write() = true;
+                            }
+                        }
                     }
                 });
             },

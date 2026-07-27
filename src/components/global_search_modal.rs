@@ -1,42 +1,108 @@
 //! 全局搜索组件 / Global Search Component
 //!
-//! 在工作区所有 Markdown 文件中搜索
+//! 在工作区所有 Markdown 文件中搜索；优先使用已打开标签的内存内容
+//! Search workspace Markdown files; prefer open-tab buffers over disk
 
 use crate::actions::shortcut_actions::ShortcutActions;
-use crate::actions::FileActions;
+use crate::actions::{EditorActions, FileActions};
 use crate::components::icons::CloseIcon;
 use crate::state::AppState;
 use crate::utils::i18n::t;
+use crate::utils::workspace_search::{
+    collect_open_buffer_overrides, collect_workspace_files, preview_workspace_replace_counts,
+    search_in_content, search_in_directory, WorkspaceSearchHit,
+};
 use dioxus::prelude::*;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-/// 搜索结果项 / Search Result Item
+/// 搜索结果项（UI）/ Search result item (UI)
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchResult {
-    /// 文件路径 / File path
     pub path: PathBuf,
-    /// 匹配的行号 / Matching line number
     pub line: usize,
-    /// 匹配的行内容 / Matching line content
     pub content: String,
-    /// 匹配位置 / Match position
     pub start: usize,
     pub end: usize,
+}
+
+impl From<WorkspaceSearchHit> for SearchResult {
+    fn from(h: WorkspaceSearchHit) -> Self {
+        Self {
+            path: h.path,
+            line: h.line,
+            content: h.content,
+            start: h.start,
+            end: h.end,
+        }
+    }
+}
+
+/// 在后台线程启动工作区搜索 / Start workspace search on a background thread
+fn spawn_workspace_search(
+    query: String,
+    workspace: Option<PathBuf>,
+    current_content: String,
+    current_file_label: String,
+    open_overrides: HashMap<PathBuf, String>,
+    mut results: Signal<Vec<SearchResult>>,
+    mut searching: Signal<bool>,
+) {
+    if query.is_empty() {
+        return;
+    }
+    *searching.write() = true;
+
+    spawn(async move {
+        let found = match tokio::task::spawn_blocking(move || {
+            if let Some(root) = workspace {
+                search_in_directory(&root, &query, &open_overrides)
+                    .into_iter()
+                    .map(SearchResult::from)
+                    .collect()
+            } else {
+                let query_lower = query.to_lowercase();
+                search_in_content(
+                    &PathBuf::from(current_file_label),
+                    &current_content,
+                    &query_lower,
+                    false,
+                )
+                .into_iter()
+                .map(SearchResult::from)
+                .collect::<Vec<_>>()
+            }
+        })
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("全局搜索任务失败 / Global search task failed: {}", e);
+                Vec::new()
+            }
+        };
+
+        *results.write() = found;
+        *searching.write() = false;
+    });
 }
 
 /// 全局搜索弹窗 / Global Search Modal
 #[component]
 pub fn GlobalSearchModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_global_search.read();
+    let mut ui = state.ui();
+    let show = *ui.show_global_search.read();
 
-    // 搜索状态 / Search state
     let mut search_input = use_signal(String::new);
-    let mut results = use_signal(Vec::<SearchResult>::new);
-    let mut searching = use_signal(|| false);
+    let mut replace_input = use_signal(String::new);
+    let results = use_signal(Vec::<SearchResult>::new);
+    let searching = use_signal(|| false);
+    let mut replacing = use_signal(|| false);
+    let mut replace_status = use_signal(String::new);
     let mut selected_index = use_signal(|| 0usize);
 
-    let lang = *state.language.read();
+    let lang = *ui.language.read();
     let global_search_t = t("global_search", lang);
     let search_workspace_t = t("search_workspace", lang);
     let searching_t = t("searching", lang);
@@ -45,7 +111,13 @@ pub fn GlobalSearchModal() -> Element {
     let line_t = t("line", lang);
     let navigate_t = t("navigate_open", lang);
     let current_file_t = t("current_file", lang);
-    let current_file_t_key = current_file_t.clone();
+    let replace_with_t = t("replace", lang);
+    let replace_all_workspace_t = t("replace_all_workspace", lang);
+    let replacing_t = t("replacing", lang);
+    let replace_confirm_title_t = t("replace_workspace_confirm_title", lang);
+    let replace_confirm_msg_t = t("replace_workspace_confirm_msg", lang);
+    let current_file_t_enter = current_file_t.clone();
+    let current_file_t_click = current_file_t;
 
     let display_class = if show { "" } else { "hidden" };
 
@@ -53,7 +125,7 @@ pub fn GlobalSearchModal() -> Element {
         div {
             class: "modal-overlay {display_class}",
             onclick: move |_| {
-                *state.show_global_search.write() = false;
+                *ui.show_global_search.write() = false;
             },
 
             div {
@@ -62,19 +134,17 @@ pub fn GlobalSearchModal() -> Element {
                 "aria-modal": "true",
                 onclick: move |e| e.stop_propagation(),
 
-                // 头部 / Header
                 div { class: "modal-header",
                     h2 { "{global_search_t}" }
                     button {
                         class: "modal-close",
                         onclick: move |_| {
-                            *state.show_global_search.write() = false;
+                            *ui.show_global_search.write() = false;
                         },
                         CloseIcon { size: 20 }
                     }
                 }
 
-                // 搜索框 / Search Input
                 div { class: "search-input-container",
                     input {
                         class: "search-input",
@@ -89,26 +159,28 @@ pub fn GlobalSearchModal() -> Element {
                             let key = e.key().to_string();
                             match key.as_str() {
                                 "Escape" => {
-                                    *state.show_global_search.write() = false;
+                                    *ui.show_global_search.write() = false;
                                     e.prevent_default();
                                 }
                                 "Enter" => {
+                                    *selected_index.write() = 0;
                                     let query = search_input.read().clone();
-                                    if !query.is_empty() {
-                                        *searching.write() = true;
-                                        *selected_index.write() = 0;
-
-                                        let workspace = state.workspace_root.read().clone();
-                                        let cft = current_file_t_key.clone();
-                                        let found = if let Some(root) = workspace {
-                                            search_in_directory(&root, &query)
-                                        } else {
-                                            search_in_current_file(&state.content.read(), &query, &cft)
-                                        };
-
-                                        *results.write() = found;
-                                        *searching.write() = false;
-                                    }
+                                    let workspace = ui.workspace_root.read().clone();
+                                    let label = current_file_t_enter.clone();
+                                    let mut state = state;
+                                    spawn(async move {
+                                        EditorActions::flush_from_dom(&mut state).await;
+                                        let overrides = collect_open_buffer_overrides(&state);
+                                        spawn_workspace_search(
+                                            query,
+                                            workspace,
+                                            state.document().content.read().clone(),
+                                            label,
+                                            overrides,
+                                            results,
+                                            searching,
+                                        );
+                                    });
                                     e.prevent_default();
                                 }
                                 "ArrowDown" => {
@@ -138,28 +210,131 @@ pub fn GlobalSearchModal() -> Element {
                     button {
                         class: "btn-primary",
                         onclick: move |_| {
+                            *selected_index.write() = 0;
                             let query = search_input.read().clone();
-                            if !query.is_empty() {
-                                *searching.write() = true;
-                                *selected_index.write() = 0;
-
-                                let workspace = state.workspace_root.read().clone();
-                                let found = if let Some(root) = workspace {
-                                    search_in_directory(&root, &query)
-                                } else {
-                                    search_in_current_file(&state.content.read(), &query, &current_file_t)
-                                };
-
-                                *results.write() = found;
-                                *searching.write() = false;
-                            }
+                            let workspace = ui.workspace_root.read().clone();
+                            let label = current_file_t_click.clone();
+                            let mut state = state;
+                            spawn(async move {
+                                EditorActions::flush_from_dom(&mut state).await;
+                                let overrides = collect_open_buffer_overrides(&state);
+                                spawn_workspace_search(
+                                    query,
+                                    workspace,
+                                    state.document().content.read().clone(),
+                                    label,
+                                    overrides,
+                                    results,
+                                    searching,
+                                );
+                            });
                         },
                         disabled: *searching.read(),
                         if *searching.read() { "{searching_t}" } else { "{search_t}" }
                     }
                 }
 
-                // 搜索结果 / Search Results
+                div { class: "search-input-container replace-row",
+                    input {
+                        class: "search-input",
+                        r#type: "text",
+                        placeholder: "{replace_with_t}",
+                        value: "{replace_input}",
+                        oninput: move |e| {
+                            *replace_input.write() = e.value();
+                        },
+                    }
+                    button {
+                        class: "btn-secondary",
+                        disabled: *searching.read() || *replacing.read() || search_input.read().is_empty(),
+                        onclick: move |_| {
+                            let query = search_input.read().clone();
+                            let replacement = replace_input.read().clone();
+                            if query.is_empty() {
+                                return;
+                            }
+                            let mut state = state;
+                            let confirm_title = replace_confirm_title_t.clone();
+                            let confirm_msg_tpl = replace_confirm_msg_t.clone();
+                            *replacing.write() = true;
+                            *replace_status.write() = String::new();
+                            spawn(async move {
+                                EditorActions::flush_from_dom(&mut state).await;
+
+                                // 预览影响范围并确认 / Preview impact and confirm
+                                let overrides = collect_open_buffer_overrides(&state);
+                                let (files_n, matches_n) = if let Some(root) =
+                                    state.ui().workspace_root.read().clone()
+                                {
+                                    let files = collect_workspace_files(&root, &overrides);
+                                    preview_workspace_replace_counts(&files, &query)
+                                } else {
+                                    let content = state.document().content.read().clone();
+                                    let n = crate::utils::replace::count_matches(
+                                        &content, &query, true, false,
+                                    );
+                                    if n > 0 { (1, n) } else { (0, 0) }
+                                };
+
+                                if files_n == 0 {
+                                    *replace_status.write() =
+                                        t("replace_workspace_none", *state.ui().language.read());
+                                    *replacing.write() = false;
+                                    return;
+                                }
+
+                                let description = confirm_msg_tpl
+                                    .replace("{files}", &files_n.to_string())
+                                    .replace("{matches}", &matches_n.to_string());
+                                let confirmed = rfd::MessageDialog::new()
+                                    .set_title(&confirm_title)
+                                    .set_description(&description)
+                                    .set_buttons(rfd::MessageButtons::OkCancel)
+                                    .show();
+                                if confirmed != rfd::MessageDialogResult::Ok {
+                                    *replacing.write() = false;
+                                    return;
+                                }
+
+                                let report = FileActions::replace_in_workspace(
+                                    &mut state,
+                                    &query,
+                                    &replacement,
+                                );
+                                let lang = *state.ui().language.read();
+                                let msg = if report.files_touched == 0 && report.matches_total == 0 {
+                                    t("replace_workspace_none", lang)
+                                } else {
+                                    format!(
+                                        "{} — {} / {}",
+                                        t("replace_workspace_done", lang),
+                                        report.files_touched,
+                                        report.matches_total
+                                    )
+                                };
+                                *replace_status.write() = msg;
+                                *replacing.write() = false;
+                                let workspace = state.ui().workspace_root.read().clone();
+                                let overrides = collect_open_buffer_overrides(&state);
+                                spawn_workspace_search(
+                                    query,
+                                    workspace,
+                                    state.document().content.read().clone(),
+                                    t("current_file", lang),
+                                    overrides,
+                                    results,
+                                    searching,
+                                );
+                            });
+                        },
+                        if *replacing.read() { "{replacing_t}" } else { "{replace_all_workspace_t}" }
+                    }
+                }
+
+                if !replace_status.read().is_empty() {
+                    div { class: "search-replace-status", "{replace_status}" }
+                }
+
                 div { class: "search-results",
                     if *searching.read() {
                         div { class: "search-loading", "{searching_t}" }
@@ -178,12 +353,19 @@ pub fn GlobalSearchModal() -> Element {
                                         onclick: move |_| {
                                             let file_path = result.path.clone();
                                             let target_line = result.line;
-                                            *state.show_global_search.write() = false;
-                                            let _ = FileActions::open_file(&mut state, file_path.clone());
-                                            let _ = dioxus::document::eval(&format!(
-                                                "if(window._mm_scrollToLine) window._mm_scrollToLine({})",
-                                                target_line
-                                            ));
+                                            *ui.show_global_search.write() = false;
+                                            let mut state = state;
+                                            spawn(async move {
+                                                let _ = FileActions::open_file_flushed(
+                                                    &mut state,
+                                                    file_path,
+                                                )
+                                                .await;
+                                                let _ = dioxus::document::eval(&format!(
+                                                    "if(window._mm_scrollToLine) window._mm_scrollToLine({})",
+                                                    target_line
+                                                ));
+                                            });
                                         },
 
                                         div { class: "result-file", "{result.path.display()}" }
@@ -196,95 +378,10 @@ pub fn GlobalSearchModal() -> Element {
                     }
                 }
 
-                // 底部提示 / Footer
                 div { class: "modal-footer",
                     span { class: "search-hint", "{navigate_t}" }
                 }
             }
         }
     }
-}
-
-/// 在目录中搜索 / Search in directory
-fn search_in_directory(dir: &Path, query: &str) -> Vec<SearchResult> {
-    let mut results = Vec::new();
-    let query_lower = query.to_lowercase();
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-            // 跳过隐藏文件和特殊目录 / Skip hidden files and special directories
-            if name.starts_with('.') || name == "target" || name == "node_modules" {
-                continue;
-            }
-
-            if path.is_dir() {
-                // 递归搜索子目录 / Recursively search subdirectories
-                results.extend(search_in_directory(&path, query));
-            } else if path.is_file() {
-                // 检查文件扩展名 / Check file extension
-                if let Some(ext) = path.extension() {
-                    if ext == "md" || ext == "markdown" || ext == "txt" {
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            results.extend(search_in_content(&path, &content, &query_lower, true));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 按文件路径和行号排序 / Sort by file path and line number
-    results.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
-
-    // 限制总结果数 / Limit total results
-    results.truncate(100);
-    results
-}
-
-/// 在当前文件内容中搜索 / Search in current file content
-fn search_in_current_file(content: &str, query: &str, label: &str) -> Vec<SearchResult> {
-    let query_lower = query.to_lowercase();
-    search_in_content(&PathBuf::from(label), content, &query_lower, false)
-}
-
-/// 在内容中搜索 / Search in content
-fn search_in_content(
-    path: &Path,
-    content: &str,
-    query_lower: &str,
-    case_insensitive: bool,
-) -> Vec<SearchResult> {
-    let mut results = Vec::new();
-    let path_buf = path.to_path_buf();
-
-    for (line_idx, line) in content.lines().enumerate() {
-        let search_in = if case_insensitive {
-            line.to_lowercase()
-        } else {
-            line.to_string()
-        };
-
-        let mut start = 0;
-        while let Some(pos) = search_in[start..].find(query_lower) {
-            let abs_pos = start + pos;
-            results.push(SearchResult {
-                path: path_buf.clone(),
-                line: line_idx,
-                content: line.to_string(),
-                start: abs_pos,
-                end: abs_pos + query_lower.len(),
-            });
-            start = abs_pos + query_lower.len();
-            if start >= search_in.len() {
-                break;
-            }
-        }
-    }
-
-    // 限制每个文件最多返回 50 个结果 / Limit to 50 results per file
-    results.truncate(50);
-    results
 }

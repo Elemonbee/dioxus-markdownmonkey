@@ -2,7 +2,7 @@
 //!
 //! 当检测到文件被外部程序修改时显示此提示
 
-use crate::actions::FileActions;
+use crate::actions::{AppActions, FileActions};
 use crate::components::icons::{CloseIcon, RefreshIcon};
 use crate::state::AppState;
 use crate::utils::i18n::t;
@@ -12,10 +12,12 @@ use dioxus::prelude::*;
 #[component]
 pub fn FileModifiedModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.file_external_modified.read();
-    let lang = *state.language.read();
+    let doc = state.document();
+    let ui = state.ui();
+    let show = *doc.file_external_modified.read();
+    let lang = *ui.language.read();
 
-    let current_file = state.current_file.read().clone();
+    let current_file = doc.current_file.read().clone();
     let untitled_text = t("untitled", lang);
     let filename = current_file
         .as_ref()
@@ -40,8 +42,7 @@ pub fn FileModifiedModal() -> Element {
         div {
             class: "modal-overlay",
             onclick: move |_| {
-                state.refresh_file_watch();
-                *state.file_external_modified.write() = false;
+                AppActions::dismiss_file_external_modified(&mut state);
             },
 
             div {
@@ -56,8 +57,7 @@ pub fn FileModifiedModal() -> Element {
                     button {
                         class: "modal-close",
                         onclick: move |_| {
-                            state.refresh_file_watch();
-                            *state.file_external_modified.write() = false;
+                            AppActions::dismiss_file_external_modified(&mut state);
                         },
                         CloseIcon { size: 20 }
                     }
@@ -78,36 +78,25 @@ pub fn FileModifiedModal() -> Element {
                     button {
                         class: "btn-secondary",
                         onclick: move |_| {
-                            state.refresh_file_watch();
-                            *state.file_external_modified.write() = false;
+                            AppActions::dismiss_file_external_modified(&mut state);
                         },
                         "{ignore_text}"
                     }
                     button {
                         class: "btn-primary",
-                        onclick: {
-                            let current_file = current_file.clone();
-                            move |_| {
-                                if let Some(path) = &current_file {
-                                    if let Ok((content, encoding)) = FileActions::read_file_with_encoding(path) {
-                                        *state.content.write() = content;
-                                        *state.file_encoding.write() = encoding;
-                                        *state.modified.write() = false;
-                                        let mut history = state.history.write();
-                                        history.past.clear();
-                                        history.future.clear();
-                                        drop(history);
-                                        state.update_outline();
-                                        state.refresh_file_watch();
-                                    } else {
-                                        tracing::error!(
-                                            "Failed to reload externally modified file: {:?}",
-                                            path
-                                        );
-                                    }
+                        onclick: move |_| {
+                            let mut state = state;
+                            spawn(async move {
+                                if let Err(e) =
+                                    FileActions::reload_current_file_flushed(&mut state).await
+                                {
+                                    tracing::error!(
+                                        "Failed to reload externally modified file: {}",
+                                        e
+                                    );
+                                    AppActions::dismiss_file_external_modified(&mut state);
                                 }
-                                *state.file_external_modified.write() = false;
-                            }
+                            });
                         },
                         RefreshIcon { size: 16 }
                         " {reload_text}"

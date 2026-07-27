@@ -1,13 +1,41 @@
 //! HTML 导出 / HTML Export
 
 use super::shared::*;
-use std::path::Path;
+use regex::Regex;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-/// 导出为 HTML / Export to HTML
+/// 导出为 HTML（含 Mermaid / KaTeX 运行时，经 CDN 加载以便离线体积可控）
+/// Export to HTML (Mermaid/KaTeX runtime via CDN to keep file size practical)
+#[allow(dead_code)] // 经 ExportService 与无资源导出路径使用 / Via ExportService / no-assets path
 pub fn export_to_html(markdown_content: &str, output_path: &Path) -> Result<(), ExportError> {
-    use crate::services::markdown::render_markdown;
+    export_to_html_with_assets(markdown_content, output_path, None)
+}
 
-    let html_content = render_markdown(markdown_content);
+/// 导出 HTML，并将本地图片复制到 `{stem}_files/` 旁路目录
+/// Export HTML and copy local images into a `{stem}_files/` sidecar folder
+pub fn export_to_html_with_assets(
+    markdown_content: &str,
+    output_path: &Path,
+    source_dir: Option<&Path>,
+) -> Result<(), ExportError> {
+    use crate::services::markdown::MarkdownService;
+
+    let html_content = MarkdownService::new().render_with_highlight(markdown_content);
+    let html_content = rewrite_and_bundle_images(&html_content, source_dir, output_path)?;
+
+    // 将本地 Mermaid/KaTeX 写入旁路目录，导出 HTML 可离线打开
+    // Write local Mermaid/KaTeX into sidecar so exported HTML works offline
+    let assets_dir = assets_dir_for_output(output_path);
+    fs::create_dir_all(&assets_dir)?;
+    let assets_folder = assets_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("export_files")
+        .to_string();
+    write_vendor_runtime(&assets_dir)?;
 
     let full_html = format!(
         r#"<!DOCTYPE html>
@@ -16,6 +44,7 @@ pub fn export_to_html(markdown_content: &str, output_path: &Path) -> Result<(), 
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Markdown Export</title>
+    <link rel="stylesheet" href="{assets_folder}/katex.min.css">
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -25,48 +54,263 @@ pub fn export_to_html(markdown_content: &str, output_path: &Path) -> Result<(), 
             line-height: 1.6;
             color: #333;
         }}
-        pre {{
+        .markdown-body pre {{
             background: #f4f4f4;
             padding: 16px;
             border-radius: 4px;
             overflow-x: auto;
         }}
-        code {{
+        .markdown-body code {{
             background: #f4f4f4;
             padding: 2px 6px;
             border-radius: 3px;
         }}
-        blockquote {{
+        .markdown-body blockquote {{
             border-left: 4px solid #ddd;
             margin: 0;
             padding-left: 16px;
             color: #666;
         }}
-        table {{
+        .markdown-body table {{
             border-collapse: collapse;
             width: 100%;
         }}
-        th, td {{
+        .markdown-body th, .markdown-body td {{
             border: 1px solid #ddd;
             padding: 8px;
             text-align: left;
         }}
-        th {{
+        .markdown-body th {{
             background: #f4f4f4;
         }}
-        img {{
+        .markdown-body img {{
             max-width: 100%;
+        }}
+        .mermaid {{
+            margin: 1.5em 0;
+            text-align: center;
         }}
     </style>
 </head>
 <body>
+<article class="markdown-body">
 {}
+</article>
+<script src="{assets_folder}/mermaid.min.js"></script>
+<script src="{assets_folder}/katex.min.js"></script>
+<script>
+(function() {{
+    function renderMath(root) {{
+        if (typeof katex === 'undefined' || !root) return;
+        root.querySelectorAll('[data-formula-block]').forEach(function(el) {{
+            try {{
+                var tex = el.getAttribute('data-formula-block');
+                el.innerHTML = katex.renderToString(tex.trim(), {{ throwOnError: false, displayMode: true }});
+                el.style.textAlign = 'center';
+                el.style.margin = '1em 0';
+                el.removeAttribute('data-formula-block');
+            }} catch (e) {{
+                el.textContent = '$$' + (el.getAttribute('data-formula-block') || '') + '$$';
+                el.removeAttribute('data-formula-block');
+            }}
+        }});
+        root.querySelectorAll('[data-formula-inline]').forEach(function(el) {{
+            try {{
+                var tex = el.getAttribute('data-formula-inline');
+                el.innerHTML = katex.renderToString(tex.trim(), {{ throwOnError: false }});
+                el.removeAttribute('data-formula-inline');
+            }} catch (e) {{
+                el.textContent = '$' + (el.getAttribute('data-formula-inline') || '') + '$';
+                el.removeAttribute('data-formula-inline');
+            }}
+        }});
+    }}
+
+    function boot() {{
+        var root = document.querySelector('.markdown-body');
+        if (typeof mermaid !== 'undefined') {{
+            try {{
+                mermaid.initialize({{ startOnLoad: false, theme: 'default', securityLevel: 'strict' }});
+                if (mermaid.run) {{
+                    mermaid.run({{ querySelector: '.mermaid' }});
+                }} else if (mermaid.init) {{
+                    mermaid.init(undefined, '.mermaid');
+                }}
+            }} catch (e) {{
+                console.warn('Mermaid render failed:', e);
+            }}
+        }}
+        renderMath(root);
+    }}
+
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', boot);
+    }} else {{
+        boot();
+    }}
+}})();
+</script>
 </body>
 </html>"#,
-        html_content
+        html_content,
+        assets_folder = assets_folder
     );
 
-    std::fs::write(output_path, full_html)?;
+    fs::write(output_path, full_html)?;
 
     Ok(())
+}
+
+/// 写入内置 Mermaid / KaTeX 运行时到旁路目录
+/// Write bundled Mermaid/KaTeX runtime into the sidecar folder
+fn write_vendor_runtime(assets_dir: &Path) -> Result<(), ExportError> {
+    const MERMAID: &str = include_str!("../../../assets/vendor/mermaid.min.js");
+    const KATEX_JS: &str = include_str!("../../../assets/vendor/katex.min.js");
+    const KATEX_CSS: &str = include_str!("../../../assets/vendor/katex.min.css");
+    fs::write(assets_dir.join("mermaid.min.js"), MERMAID)?;
+    fs::write(assets_dir.join("katex.min.js"), KATEX_JS)?;
+    fs::write(assets_dir.join("katex.min.css"), KATEX_CSS)?;
+    Ok(())
+}
+
+/// 资源旁路目录名：`note.html` → `note_files`
+/// Sidecar asset folder name: `note.html` → `note_files`
+fn assets_dir_for_output(output_path: &Path) -> PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("export");
+    output_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{stem}_files"))
+}
+
+/// 将 HTML 中本地 `<img src>` 复制到旁路目录并改写相对路径
+/// Copy local `<img src>` assets into the sidecar folder and rewrite relative paths
+pub fn rewrite_and_bundle_images(
+    html: &str,
+    source_dir: Option<&Path>,
+    output_path: &Path,
+) -> Result<String, ExportError> {
+    static IMG_SRC_RE: OnceLock<Regex> = OnceLock::new();
+    let re = IMG_SRC_RE.get_or_init(|| {
+        // 无反向引用：分别捕获双引号 / 单引号 src
+        // No backreferences: capture double-quoted or single-quoted src separately
+        Regex::new(r#"(?i)(<img\b[^>]*?\bsrc\s*=\s*)(?:"([^"]+)"|'([^']+)')"#)
+            .expect("img src regex")
+    });
+
+    let Some(base) = source_dir.filter(|p| p.is_dir()) else {
+        return Ok(html.to_string());
+    };
+
+    let mut assets_dir: Option<PathBuf> = None;
+    let mut copied: HashMap<PathBuf, String> = HashMap::new();
+    let mut counter = 0usize;
+    let mut out = String::with_capacity(html.len());
+    let mut last = 0;
+
+    for cap in re.captures_iter(html) {
+        let full = cap.get(0).unwrap();
+        let prefix = cap.get(1).unwrap().as_str();
+        let (src, quote) = if let Some(d) = cap.get(2) {
+            (d.as_str(), "\"")
+        } else if let Some(s) = cap.get(3) {
+            (s.as_str(), "'")
+        } else {
+            out.push_str(full.as_str());
+            last = full.end();
+            continue;
+        };
+
+        out.push_str(&html[last..full.start()]);
+        last = full.end();
+
+        if is_remote_or_data_url(src) {
+            out.push_str(full.as_str());
+            continue;
+        }
+
+        let abs = resolve_image_path(base, src);
+        let Some(abs) = abs else {
+            out.push_str(full.as_str());
+            continue;
+        };
+        if !abs.is_file() {
+            tracing::warn!("HTML export: image not found: {:?}", abs);
+            out.push_str(full.as_str());
+            continue;
+        }
+
+        if assets_dir.is_none() {
+            let dir = assets_dir_for_output(output_path);
+            fs::create_dir_all(&dir)?;
+            assets_dir = Some(dir);
+        }
+        let dir = assets_dir.as_ref().unwrap();
+
+        let rel_name = if let Some(existing) = copied.get(&abs) {
+            existing.clone()
+        } else {
+            let file_name = abs
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image.bin");
+            let unique = format!("{counter}_{file_name}");
+            counter += 1;
+            let dest = dir.join(&unique);
+            fs::copy(&abs, &dest)?;
+            let folder = dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("export_files");
+            let rel = format!("{folder}/{unique}");
+            copied.insert(abs, rel.clone());
+            rel
+        };
+
+        out.push_str(prefix);
+        out.push_str(quote);
+        out.push_str(&rel_name);
+        out.push_str(quote);
+    }
+
+    out.push_str(&html[last..]);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_bundle_local_image_rewrites_src() {
+        let dir = TempDir::new().unwrap();
+        let img = dir.path().join("pic.png");
+        fs::write(&img, [0x89, 0x50, 0x4E, 0x47]).unwrap(); // PNG magic-ish
+        let out = dir.path().join("out.html");
+
+        let html = r#"<p><img src="pic.png" alt="x"></p>"#;
+        let rewritten = rewrite_and_bundle_images(html, Some(dir.path()), &out).unwrap();
+        assert!(rewritten.contains("out_files/"));
+        assert!(rewritten.contains("pic.png"));
+        assert!(!rewritten.contains("src=\"pic.png\""));
+
+        let assets = dir.path().join("out_files");
+        assert!(assets.is_dir());
+        let entries: Vec<_> = fs::read_dir(&assets).unwrap().collect();
+        assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn test_skips_remote_images() {
+        let dir = TempDir::new().unwrap();
+        let out = dir.path().join("out.html");
+        let html = r#"<img src="https://example.com/a.png">"#;
+        let rewritten = rewrite_and_bundle_images(html, Some(dir.path()), &out).unwrap();
+        assert_eq!(rewritten, html);
+        assert!(!dir.path().join("out_files").exists());
+    }
 }

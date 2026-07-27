@@ -13,7 +13,13 @@
   border-right: 1px solid var(--border-color);
   overflow: hidden;
   flex-shrink: 0;
+  position: relative;
   transition: width var(--transition-normal), opacity var(--transition-normal);
+}
+
+.sidebar-resizing {
+  transition: none;
+  user-select: none;
 }
 
 .sidebar-collapsed {
@@ -22,6 +28,10 @@
   opacity: 0;
   border-right: none;
   overflow: hidden;
+}
+
+.sidebar-collapsed .sidebar-resize-handle {
+  display: none;
 }
 
 .sidebar-tabs {
@@ -57,9 +67,17 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+
+.sidebar-header-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
 }
 
 .sidebar-header h3 {
@@ -68,6 +86,44 @@
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* 侧边栏右缘拖拽把手 / Sidebar right-edge resize handle */
+.sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+}
+
+.sidebar-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.sidebar-resize-handle:hover::after,
+.sidebar-resizing .sidebar-resize-handle::after {
+  background: var(--accent-primary);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 35%, transparent);
+}
+
+.sidebar-resize-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  cursor: col-resize;
+  user-select: none;
 }
 
 .sidebar-content {
@@ -117,6 +173,61 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.recent-files {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 4px;
+}
+
+.recent-files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 4px;
+  font-size: var(--font-size-xs, 12px);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.recent-clear-btn {
+  opacity: 0.7;
+}
+
+.recent-files-empty {
+  padding: 4px 12px 8px;
+  font-size: var(--font-size-xs, 12px);
+  color: var(--text-muted);
+}
+
+.recent-file-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-file-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.recent-file-item.active {
+  background-color: var(--bg-active, var(--bg-hover));
+  color: var(--accent-primary);
+}
+
+.recent-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-search {
@@ -196,7 +307,23 @@
 }
 
 .search-result-item .name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-text {
   flex: 1;
+  min-width: 0;
+}
+
+.search-result-item .path {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -222,6 +349,16 @@
 }
 
 .file-item:hover {
+  background-color: var(--bg-hover);
+}
+
+.file-item.active {
+  background-color: var(--bg-hover);
+  color: var(--accent-primary);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+
+.file-item.active:hover {
   background-color: var(--bg-hover);
 }
 

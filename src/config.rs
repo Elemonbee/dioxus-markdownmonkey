@@ -61,3 +61,18 @@ pub const FILE_WATCH_IDLE_INTERVAL_SECS: u64 = 5;
 
 /// Grace period for suppressing file watcher notifications after an internal write.
 pub const FILE_WATCH_INTERNAL_WRITE_GRACE_MS: u64 = 1500;
+
+/// Spell-check debounce delay in milliseconds.
+pub const SPELL_CHECK_DEBOUNCE_MS: u64 = 400;
+
+/// 大文件编辑器改为非受控模式的阈值（字节）
+/// Threshold to switch the editor to uncontrolled mode (bytes).
+pub const UNCONTROLLED_EDITOR_THRESHOLD_BYTES: usize = 200 * 1024;
+
+/// 非受控编辑器内容同步防抖（毫秒）
+/// Debounce for syncing uncontrolled editor content to Rust (ms).
+pub const UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS: u64 = 350;
+
+/// 非活动标签在内存中保留的最大数量（其余未修改已保存标签可驱逐）
+/// Max resident inactive tabs kept in memory (others may be evicted if saved).
+pub const MAX_RESIDENT_INACTIVE_TABS: usize = 3;

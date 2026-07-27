@@ -10,6 +10,7 @@ pub mod image;
 pub mod keyring_service;
 pub mod markdown;
 pub mod recent_files;
+pub mod session;
 pub mod settings;
 pub mod spellcheck;
 pub mod syntax_highlight;

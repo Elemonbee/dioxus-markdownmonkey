@@ -3,6 +3,7 @@
 //! 可视化表格创建和编辑，支持动态行列操作
 //! Visual table creation and editing with dynamic row/column operations
 
+use crate::actions::{AppActions, EditorActions};
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
@@ -82,7 +83,8 @@ impl TableData {
         result
     }
 
-    /// 创建空表格 / Create empty table
+    /// 创建空表格（默认中文表头，供测试使用）
+    /// Create empty table (Chinese headers by default; used by tests)
     #[allow(dead_code)]
     pub fn new(columns: usize, rows: usize) -> Self {
         Self::new_with_lang(columns, rows, crate::state::Language::ZhCN)
@@ -95,12 +97,6 @@ impl TableData {
             .collect();
         let rows = (0..rows).map(|_| vec![String::new(); columns]).collect();
         Self { headers, rows }
-    }
-
-    /// 添加列 / Add column
-    #[allow(dead_code)]
-    pub fn add_column(&mut self) {
-        self.add_column_with_lang(crate::state::Language::ZhCN)
     }
 
     /// 添加列（带语言）/ Add column (with language)
@@ -141,8 +137,9 @@ impl TableData {
 #[component]
 pub fn TableEditorModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_table_editor.read();
-    let lang = *state.language.read();
+    let ui = state.ui();
+    let show = *ui.show_table_editor.read();
+    let lang = *ui.language.read();
 
     let mut table_data = use_signal(move || TableData::new_with_lang(3, 3, lang));
 
@@ -164,7 +161,7 @@ pub fn TableEditorModal() -> Element {
         div {
             class: "modal-overlay",
             onclick: move |_| {
-                *state.show_table_editor.write() = false;
+                AppActions::hide_table_editor(&mut state);
             },
 
             div {
@@ -178,7 +175,7 @@ pub fn TableEditorModal() -> Element {
                     button {
                         class: "modal-close",
                         onclick: move |_| {
-                            *state.show_table_editor.write() = false;
+                            AppActions::hide_table_editor(&mut state);
                         },
                         "×"
                     }
@@ -275,7 +272,7 @@ pub fn TableEditorModal() -> Element {
                     button {
                         class: "btn-secondary",
                         onclick: move |_| {
-                            *state.show_table_editor.write() = false;
+                            AppActions::hide_table_editor(&mut state);
                         },
                         "{cancel_text}"
                     }
@@ -284,10 +281,15 @@ pub fn TableEditorModal() -> Element {
                         onclick: move |_| {
                             let data = table_data.read().clone();
                             let markdown = data.to_markdown();
-                            // 在光标位置插入表格
-                            state.insert_at_cursor(&markdown);
-                            *state.show_table_editor.write() = false;
-                            // 重置表格数据
+                            let mut state = state;
+                            spawn(async move {
+                                EditorActions::with_flushed_format(&mut state, |s| {
+                                    EditorActions::insert_text(s, &markdown);
+                                })
+                                .await;
+                                AppActions::hide_table_editor(&mut state);
+                            });
+                            // 重置表格数据 / Reset table data
                             *table_data.write() = TableData::new_with_lang(3, 3, lang);
                         },
                         "{insert_text}"

@@ -1,47 +1,149 @@
 //! 编辑器组件 / Editor Component
 //!
-//! 遵循 PAL 林构构：使用 Actions 处理理编辑器操作
-//! 支持虚拟滚动行号以提升大文件性能 / Following PAL architecture: Using Actions for business logic
-//! Support virtual scrolling line numbers for large file performance
+//! 遵循 PAL 架构：使用 Actions 处理编辑器操作
+//! 小文件：受控 textarea；大文件：非受控 + 防抖同步，降低按键路径开销
+//! Following PAL architecture with Actions
+//! Small files: controlled textarea; large files: uncontrolled + debounced sync
 
 use crate::actions::shortcut_actions::ShortcutActions;
-use crate::actions::{AppActions, EditorActions};
+use crate::actions::{AppActions, EditorActions, FileActions};
 use crate::components::icons::PreviewIcon;
 use crate::config::{
     EDITOR_LINE_HEIGHT_PX, EDITOR_VIRTUAL_SCROLL_BUFFER_LINES,
-    EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES,
+    EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES, UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS,
+    UNCONTROLLED_EDITOR_THRESHOLD_BYTES,
 };
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::document;
+use dioxus::html::HasFileData;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
+use std::path::PathBuf;
 
 /// 编辑器滚动比例（全局信号）/ Editor scroll ratio (global signal)
 pub static EDITOR_SCROLL_RATIO: GlobalSignal<f32> = Signal::global(|| 0.0);
+
+/// 统计行数（按换行符，至少为 1）/ Count lines by newlines (at least 1)
+fn count_lines(content: &str) -> usize {
+    if content.is_empty() {
+        return 1;
+    }
+    content.bytes().filter(|&b| b == b'\n').count() + 1
+}
+
+/// 从 DOM 同步 textarea 选区到 UI 域光标信号
+/// Sync textarea selection from DOM into UI-domain cursor signals
+fn sync_selection_from_dom(state: &mut AppState) {
+    let state = *state;
+    spawn(async move {
+        let mut eval = document::eval(
+            r#"
+            (function() {
+                const ta = document.querySelector('.editor-textarea');
+                if (!ta) { dioxus.send([0, 0]); return; }
+                dioxus.send([ta.selectionStart || 0, ta.selectionEnd || 0]);
+            })();
+            "#,
+        );
+        if let Ok(vals) = eval.recv::<Vec<usize>>().await {
+            if vals.len() >= 2 {
+                let mut ui = state.ui();
+                *ui.cursor_start.write() = vals[0];
+                *ui.cursor_end.write() = vals[1];
+            }
+        }
+    });
+}
+
+/// 处理编辑器拖放：带路径的 md/txt 打开为标签
+/// Handle editor drop: open md/txt with filesystem paths as tabs
+fn handle_editor_drop(mut state: AppState, e: Event<DragData>) {
+    e.prevent_default();
+    let paths: Vec<PathBuf> = e
+        .files()
+        .into_iter()
+        .map(|f| f.path())
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    spawn(async move {
+        FileActions::handle_editor_file_drop_flushed(&mut state, paths).await;
+    });
+}
+
+/// 调度非受控模式的防抖同步 / Schedule debounced sync for uncontrolled mode
+fn schedule_uncontrolled_sync(state: AppState, mut sync_gen: Signal<u64>) {
+    let next = *sync_gen.read() + 1;
+    sync_gen.set(next);
+    let mut state = state;
+    spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS,
+        ))
+        .await;
+        if *sync_gen.read() != next {
+            return;
+        }
+        EditorActions::flush_from_dom(&mut state).await;
+    });
+}
 
 /// 编辑器组件 / Editor Component
 #[component]
 pub fn Editor() -> Element {
     // 所有 hooks 在顶部 / All hooks at top
     let mut state = use_context::<AppState>();
+    let doc = state.document();
+    let ui = state.ui();
     let mut is_dragging = use_signal(|| false);
 
     let mut scroll_top = use_signal(|| 0.0_f32);
     let mut container_height = use_signal(|| 600.0_f32);
+    let sync_gen = use_signal(|| 0u64);
+    let mut last_pushed_rev = use_signal(|| u64::MAX);
 
-    let content = state.content.read().clone();
-    let modified = *state.modified.read();
-    let current_file = state.current_file.read().clone();
-    let show_preview = *state.show_preview.read();
+    // 仅在 content_revision 变化时克隆全文，滚动等局部更新不再 O(n) 拷贝
+    // Clone full content only when content_revision changes; scroll updates skip O(n) copy
+    let mut cached_content = use_signal(String::new);
+    let mut cached_line_count = use_signal(|| 1usize);
+    let mut cached_rev = use_signal(|| u64::MAX);
 
-    let search_query_hl = state.search_query.read().clone();
-    let search_index_hl = *state.search_index.read();
-    let search_total_hl = *state.search_total.read();
-    let case_insensitive_hl = *state.search_case_insensitive.read();
-    let show_search_hl = *state.show_search.read();
+    let rev = *doc.content_revision.read();
+    if rev != *cached_rev.read() {
+        let borrowed = doc.content.read();
+        let lines = count_lines(&borrowed);
+        cached_content.set(borrowed.clone());
+        cached_line_count.set(lines);
+        cached_rev.set(rev);
+    }
 
-    let lang = *state.language.read();
+    let content = cached_content.read().clone();
+    let line_count = *cached_line_count.read();
+    let modified = *doc.modified.read();
+    let current_file = doc.current_file.read().clone();
+    let show_preview = *ui.show_preview.read();
+    let tab_index = *doc.current_tab_index.read();
+    let file_size = (*doc.file_size_bytes.read()).max(content.len());
+    let use_uncontrolled = file_size >= UNCONTROLLED_EDITOR_THRESHOLD_BYTES;
+
+    // 非受控：外部修订（撤销/切换/AI）后把 Rust 内容推回 DOM
+    // Uncontrolled: push Rust content into DOM after external revisions
+    if use_uncontrolled && rev != *last_pushed_rev.read() {
+        last_pushed_rev.set(rev);
+        EditorActions::push_to_dom(&content);
+    }
+
+    let search_query_hl = ui.search_query.read().clone();
+    let search_index_hl = *ui.search_index.read();
+    let search_total_hl = *ui.search_total.read();
+    let case_insensitive_hl = *ui.search_case_insensitive.read();
+    let show_search_hl = *ui.show_search.read();
+
+    let lang = *ui.language.read();
     let placeholder_text = t("placeholder_input", lang);
+    let aria_editor_t = t("aria_editor", lang);
     let untitled_text = t("untitled", lang);
 
     let filename = current_file
@@ -52,8 +154,6 @@ pub fn Editor() -> Element {
                 .unwrap_or_else(|| format!("{untitled_text}.md"))
         })
         .unwrap_or_else(|| format!("{untitled_text}.md"));
-
-    let line_count = content.lines().count().max(1);
 
     let use_virtual = line_count > EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES;
     let (render_start, render_end) = if use_virtual {
@@ -114,8 +214,10 @@ pub fn Editor() -> Element {
         let _ = document::eval(js);
     });
 
+    // 仅在标签切换时重新挂载增强脚本，避免每次按键重绑
+    // Re-init editor enhance only on tab switch, not every keystroke
     let _ = use_effect(move || {
-        let _ = state.content.read();
+        let _ = tab_index;
         let _ = document::eval("if(window._mm_initEditor) window._mm_initEditor();");
     });
 
@@ -132,10 +234,7 @@ pub fn Editor() -> Element {
             },
             ondrop: move |e| {
                 *is_dragging.write() = false;
-                // Dioxus Desktop 拖放事件处理
-                // Handle drag-drop events in Dioxus Desktop
-                let _ = e.data();
-                tracing::info!("文件拖放 - 使用 Ctrl+O 打开文件 / File drop - use Ctrl+O to open files");
+                handle_editor_drop(state, e);
             },
 
             div { class: "editor-header",
@@ -150,7 +249,7 @@ pub fn Editor() -> Element {
 
                 button {
                     class: "{preview_btn_class}",
-                    title: "切换预览 / Toggle Preview (Ctrl+P)",
+                    title: "{t(\"toggle_preview_shortcut\", lang)}",
                     onclick: move |_| {
                         AppActions::toggle_preview(&mut state);
                     },
@@ -174,36 +273,99 @@ pub fn Editor() -> Element {
                         }
                     }
                 }
-                textarea {
-                    class: "editor-textarea",
-                    value: "{content}",
-                    placeholder: "{placeholder_text}",
-                    spellcheck: false,
-                    "aria-label": "Markdown editor",
-                    "aria-multiline": "true",
-                    role: "textbox",
-                    onscroll: move |e| {
-                        let scroll_data = e.data();
-                        let sh = scroll_data.scroll_height() as f32;
-                        let ch = scroll_data.client_height() as f32;
-                        let st = scroll_data.scroll_top() as f32;
-                        scroll_top.set(st);
-                        container_height.set(ch);
-                        let ratio = if sh > ch {
-                            st / (sh - ch)
-                        } else {
-                            0.0
-                        };
-                        *EDITOR_SCROLL_RATIO.write() = ratio;
-                    },
-                    oninput: move |e| {
-                        EditorActions::update_content(&mut state, e.value());
-                    },
-                    onkeydown: move |e| {
-                        if ShortcutActions::handle_event(&mut state, &e) {
+                if use_uncontrolled {
+                    // 大文件非受控：不绑定 value，按键不回写全文到 DOM
+                    // Large-file uncontrolled: no value binding; keystrokes avoid full DOM rewrite
+                    textarea {
+                        class: "editor-textarea",
+                        key: "uc-{tab_index}",
+                        placeholder: "{placeholder_text}",
+                        spellcheck: false,
+                        "aria-label": "{aria_editor_t}",
+                        "aria-multiline": "true",
+                        role: "textbox",
+                        onmounted: move |_| {
+                            EditorActions::push_to_dom(&cached_content.read());
+                        },
+                        ondragover: move |e| {
                             e.prevent_default();
-                        }
-                    },
+                        },
+                        ondrop: move |e| {
+                            handle_editor_drop(state, e);
+                        },
+                        onscroll: move |e| {
+                            let scroll_data = e.data();
+                            let sh = scroll_data.scroll_height() as f32;
+                            let ch = scroll_data.client_height() as f32;
+                            let st = scroll_data.scroll_top() as f32;
+                            scroll_top.set(st);
+                            container_height.set(ch);
+                            let ratio = if sh > ch {
+                                st / (sh - ch)
+                            } else {
+                                0.0
+                            };
+                            *EDITOR_SCROLL_RATIO.write() = ratio;
+                        },
+                        oninput: move |_| {
+                            schedule_uncontrolled_sync(state, sync_gen);
+                        },
+                        onselect: move |_| {
+                            sync_selection_from_dom(&mut state);
+                        },
+                        onmouseup: move |_| {
+                            sync_selection_from_dom(&mut state);
+                        },
+                        onkeydown: move |e| {
+                            if ShortcutActions::handle_event(&mut state, &e) {
+                                e.prevent_default();
+                            }
+                        },
+                    }
+                } else {
+                    textarea {
+                        class: "editor-textarea",
+                        value: "{content}",
+                        placeholder: "{placeholder_text}",
+                        spellcheck: false,
+                        "aria-label": "{aria_editor_t}",
+                        "aria-multiline": "true",
+                        role: "textbox",
+                        ondragover: move |e| {
+                            e.prevent_default();
+                        },
+                        ondrop: move |e| {
+                            handle_editor_drop(state, e);
+                        },
+                        onscroll: move |e| {
+                            let scroll_data = e.data();
+                            let sh = scroll_data.scroll_height() as f32;
+                            let ch = scroll_data.client_height() as f32;
+                            let st = scroll_data.scroll_top() as f32;
+                            scroll_top.set(st);
+                            container_height.set(ch);
+                            let ratio = if sh > ch {
+                                st / (sh - ch)
+                            } else {
+                                0.0
+                            };
+                            *EDITOR_SCROLL_RATIO.write() = ratio;
+                        },
+                        oninput: move |e| {
+                            EditorActions::update_content(&mut state, e.value());
+                        },
+                        onselect: move |_| {
+                            sync_selection_from_dom(&mut state);
+                        },
+                        onmouseup: move |_| {
+                            sync_selection_from_dom(&mut state);
+                        },
+                        onkeydown: move |e| {
+                            if ShortcutActions::handle_event(&mut state, &e) {
+                                e.prevent_default();
+                            }
+                        },
+                    }
                 }
             }
         }

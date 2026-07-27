@@ -7,7 +7,9 @@
 
 use crate::config::{FONT_SIZE_MAX, FONT_SIZE_MIN};
 use crate::state::AppState;
+use dioxus::document;
 use dioxus::prelude::{ReadableExt, WritableExt};
+
 /// 编辑器 Actions 处理器 / Editor Actions Handler
 pub struct EditorActions;
 
@@ -15,6 +17,49 @@ impl EditorActions {
     /// 更新内容 / Update Content
     pub fn update_content(state: &mut AppState, content: String) {
         state.update_content(content);
+    }
+
+    /// 从 DOM 拉取编辑器正文并写入状态（非受控模式保存/撤销前调用）
+    /// Pull editor text from DOM into state (call before save/undo in uncontrolled mode)
+    pub async fn flush_from_dom(state: &mut AppState) {
+        let mut eval = document::eval(
+            r#"
+            (function() {
+                if (window._mm_getEditorValue) {
+                    dioxus.send(window._mm_getEditorValue());
+                    return;
+                }
+                const ta = document.querySelector('.editor-textarea');
+                dioxus.send(ta ? ta.value : '');
+            })();
+            "#,
+        );
+        if let Ok(value) = eval.recv::<String>().await {
+            state.update_content(value);
+        }
+    }
+
+    /// 先 flush 再执行格式化（供工具栏/快捷键在非受控模式下使用）
+    /// Flush then apply formatting (for toolbar/shortcuts in uncontrolled mode)
+    pub async fn with_flushed_format<F>(state: &mut AppState, action: F)
+    where
+        F: FnOnce(&mut AppState),
+    {
+        Self::flush_from_dom(state).await;
+        action(state);
+        // 格式化改了 Rust 内容后推回 DOM / Push formatted content back to DOM
+        let content = state.document().content.read().clone();
+        Self::push_to_dom(&content);
+    }
+
+    /// 将 Rust 正文推送到 DOM（非受控模式下撤销/切换标签后调用）
+    /// Push Rust content into the DOM (after undo/tab switch in uncontrolled mode)
+    pub fn push_to_dom(content: &str) {
+        let safe = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_string());
+        let _ = document::eval(&format!(
+            "if(window._mm_setEditorValue) window._mm_setEditorValue({});",
+            safe
+        ));
     }
 
     /// 撤销 / Undo
@@ -44,45 +89,63 @@ impl EditorActions {
 
     /// 设置字体大小 / Set Font Size
     pub fn set_font_size(state: &mut AppState, size: u32) {
-        *state.font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
+        *state.ui().font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
     }
 
     /// 设置预览字体大小 / Set Preview Font Size
     pub fn set_preview_font_size(state: &mut AppState, size: u32) {
-        *state.preview_font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
+        *state.ui().preview_font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
     }
 
     /// 切换自动换行 / Toggle Word Wrap
     pub fn toggle_word_wrap(state: &mut AppState) {
-        let current = *state.word_wrap.read();
-        *state.word_wrap.write() = !current;
+        let mut ui = state.ui();
+        let current = *ui.word_wrap.read();
+        *ui.word_wrap.write() = !current;
     }
 
     /// 设置自动换行 / Set Word Wrap
     pub fn set_word_wrap(state: &mut AppState, wrap: bool) {
-        *state.word_wrap.write() = wrap;
+        *state.ui().word_wrap.write() = wrap;
     }
 
     /// 切换行号显示 / Toggle Line Numbers
     pub fn toggle_line_numbers(state: &mut AppState) {
-        let current = *state.line_numbers.read();
-        *state.line_numbers.write() = !current;
+        let mut ui = state.ui();
+        let current = *ui.line_numbers.read();
+        *ui.line_numbers.write() = !current;
     }
 
     /// 设置行号显示 / Set Line Numbers
     pub fn set_line_numbers(state: &mut AppState, show: bool) {
-        *state.line_numbers.write() = show;
+        *state.ui().line_numbers.write() = show;
     }
 
     /// 切换同步滚动 / Toggle Sync Scroll
     pub fn toggle_sync_scroll(state: &mut AppState) {
-        let current = *state.sync_scroll.read();
-        *state.sync_scroll.write() = !current;
+        let mut ui = state.ui();
+        let next = !*ui.sync_scroll.read();
+        *ui.sync_scroll.write() = next;
+        // 通知 JS 侧同步开关 / Notify JS-side sync toggle
+        let _ = document::eval(&format!(
+            "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            if next { "true" } else { "false" }
+        ));
+        // 尽力持久化 / Best-effort persist
+        let mut settings = crate::services::settings::load_settings();
+        settings.sync_scroll = next;
+        if let Err(e) = crate::services::settings::save_settings(&settings) {
+            tracing::warn!("Failed to persist sync_scroll: {}", e);
+        }
     }
 
     /// 设置同步滚动 / Set Sync Scroll
     pub fn set_sync_scroll(state: &mut AppState, sync: bool) {
-        *state.sync_scroll.write() = sync;
+        *state.ui().sync_scroll.write() = sync;
+        let _ = document::eval(&format!(
+            "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            if sync { "true" } else { "false" }
+        ));
     }
 
     // ========== 格式化快捷方法 / Formatting Shortcut Methods ==========
@@ -151,36 +214,44 @@ impl EditorActions {
 
     /// 切换拼写检查 / Toggle Spell Check
     pub fn toggle_spell_check(state: &mut AppState) {
-        let current = *state.spell_check_enabled.read();
-        *state.spell_check_enabled.write() = !current;
+        let mut doc = state.document();
+        let current = *doc.spell_check_enabled.read();
+        *doc.spell_check_enabled.write() = !current;
         if !current {
             // 刚启用，运行检查 / Just enabled, run check
             state.run_spell_check();
         } else {
             // 禁用，清除结果 / Disabled, clear results
-            *state.spell_check_results.write() = Vec::new();
+            *doc.spell_check_results.write() = Vec::new();
         }
+    }
+
+    /// 先 flush 再切换拼写检查（非受控大文件下保证检查最新正文）
+    /// Flush then toggle spell check (accurate text in uncontrolled large-file mode)
+    pub async fn toggle_spell_check_flushed(state: &mut AppState) {
+        Self::flush_from_dom(state).await;
+        Self::toggle_spell_check(state);
     }
 
     /// 导航到下一个拼写错误 / Navigate to next spell error
-    #[allow(dead_code)]
     pub fn next_spell_error(state: &mut AppState) {
-        let total = state.spell_check_results.read().len();
+        let mut doc = state.document();
+        let total = doc.spell_check_results.read().len();
         if total == 0 {
             return;
         }
-        let current = *state.spell_error_index.read();
-        *state.spell_error_index.write() = (current + 1) % total;
+        let current = *doc.spell_error_index.read();
+        *doc.spell_error_index.write() = (current + 1) % total;
     }
 
     /// 导航到上一个拼写错误 / Navigate to previous spell error
-    #[allow(dead_code)]
     pub fn prev_spell_error(state: &mut AppState) {
-        let total = state.spell_check_results.read().len();
+        let mut doc = state.document();
+        let total = doc.spell_check_results.read().len();
         if total == 0 {
             return;
         }
-        let current = *state.spell_error_index.read();
-        *state.spell_error_index.write() = if current == 0 { total - 1 } else { current - 1 };
+        let current = *doc.spell_error_index.read();
+        *doc.spell_error_index.write() = if current == 0 { total - 1 } else { current - 1 };
     }
 }

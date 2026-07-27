@@ -1,6 +1,6 @@
 //! AI 结果弹窗组件 / AI Result Modal Component
 
-use crate::actions::AppActions;
+use crate::actions::{AppActions, EditorActions};
 use crate::components::icons::CloseIcon;
 use crate::state::AppState;
 use crate::utils::i18n::t;
@@ -10,25 +10,42 @@ use dioxus::prelude::*;
 #[component]
 pub fn AiResultModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_ai_result.read();
-    let lang = *state.language.read();
+    let ai = state.ai();
+    let ui = state.ui();
+    let show = *ai.show_ai_result.read();
+    let lang = *ui.language.read();
+    let ai_loading = *ai.ai_loading.read();
 
     let close_t = t("close", lang);
     let copy_t = t("copy", lang);
     let append_t = t("append", lang);
     let replace_t = t("replace_doc", lang);
+    let follow_up_t = t("ai_follow_up", lang);
+    let clear_history_t = t("ai_clear_history", lang);
+    let clear_confirm_t = t("ai_clear_history_confirm", lang);
+    let history_turns_t = t("ai_history_turns", lang);
+    let stop_t = t("ai_stop", lang);
+    let generating_t = t("ai_generating", lang);
+    let thinking_t = t("ai_thinking", lang);
+    let history_turns = ai.ai_history.read().len() / 2;
+    let session_hint = if history_turns > 0 {
+        history_turns_t.replace("{n}", &history_turns.to_string())
+    } else {
+        String::new()
+    };
 
     let display_class = if show { "" } else { "hidden" };
 
-    let title = state.ai_title.read().clone();
-    let result = state.ai_result.read().clone();
-    let content = state.content.read().clone();
+    let title = ai.ai_title.read().clone();
+    let result = ai.ai_result.read().clone();
 
     rsx! {
         div {
             class: "modal-overlay {display_class}",
             onclick: move |_| {
-                AppActions::hide_ai_result(&mut state);
+                if !ai_loading {
+                    AppActions::hide_ai_result(&mut state);
+                }
             },
 
             div {
@@ -41,6 +58,7 @@ pub fn AiResultModal() -> Element {
                     h2 { "{title}" }
                     button {
                         class: "modal-close",
+                        disabled: ai_loading,
                         onclick: move |_| {
                             AppActions::hide_ai_result(&mut state);
                         },
@@ -49,24 +67,71 @@ pub fn AiResultModal() -> Element {
                 }
 
                 div { class: "modal-body",
-                    div { class: "ai-result-content",
+                    if ai_loading && result.is_empty() {
+                        div { class: "ai-result-loading", "aria-live": "polite", "{thinking_t}" }
+                    }
+                    div {
+                        class: "ai-result-content",
+                        "aria-live": "polite",
                         pre { "{result}" }
+                    }
+                    if ai_loading {
+                        div { class: "ai-result-generating", "aria-live": "polite", "{generating_t}" }
                     }
                 }
 
                 div { class: "modal-footer",
+                    if !session_hint.is_empty() {
+                        span { class: "ai-session-hint", "{session_hint}" }
+                    }
+                    if ai_loading {
+                        button {
+                            class: "btn-secondary",
+                            onclick: move |_| {
+                                AppActions::cancel_ai_generation(&mut state);
+                            },
+                            "{stop_t}"
+                        }
+                    }
                     CopyButton { result: result.clone(), copy_text: copy_t.clone() }
                     AppendButton {
                         result: result.clone(),
-                        content: content.clone(),
                         append_text: append_t.clone(),
+                        disabled: ai_loading,
                     }
                     ReplaceButton {
                         result: result.clone(),
                         replace_text: replace_t.clone(),
+                        disabled: ai_loading,
+                    }
+                    if history_turns > 0 && !ai_loading {
+                        button {
+                            class: "btn-secondary",
+                            onclick: move |_| {
+                                let confirmed = rfd::MessageDialog::new()
+                                    .set_title(&clear_history_t)
+                                    .set_description(&clear_confirm_t)
+                                    .set_buttons(rfd::MessageButtons::OkCancel)
+                                    .set_level(rfd::MessageLevel::Warning)
+                                    .show();
+                                if confirmed == rfd::MessageDialogResult::Ok {
+                                    AppActions::clear_ai_history(&mut state);
+                                }
+                            },
+                            "{clear_history_t}"
+                        }
+                    }
+                    button {
+                        class: "btn-secondary",
+                        disabled: ai_loading,
+                        onclick: move |_| {
+                            AppActions::follow_up_ai_chat(&mut state);
+                        },
+                        "{follow_up_t}"
                     }
                     button {
                         class: "btn-primary",
+                        disabled: ai_loading,
                         onclick: move |_| {
                             AppActions::hide_ai_result(&mut state);
                         },
@@ -85,21 +150,15 @@ struct CopyButtonProps {
     copy_text: String,
 }
 
-/// 复制按钮 / Copy Button
+/// 复制按钮组件 / Copy Button Component
 fn CopyButton(props: CopyButtonProps) -> Element {
-    let mut state = use_context::<AppState>();
-    let result = props.result.clone();
-
     rsx! {
         button {
             class: "btn-secondary",
             onclick: move |_| {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&result) {
-                        tracing::error!("Failed to copy to clipboard: {}", e);
-                    }
+                    let _ = clipboard.set_text(props.result.clone());
                 }
-                AppActions::hide_ai_result(&mut state);
             },
             "{props.copy_text}"
         }
@@ -110,25 +169,33 @@ fn CopyButton(props: CopyButtonProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 struct AppendButtonProps {
     result: String,
-    content: String,
     append_text: String,
+    #[props(default = false)]
+    disabled: bool,
 }
 
-/// 追加按钮 / Append Button
+/// 追加按钮（先 flush，避免非受控模式下丢编辑）
+/// Append button (flush first so uncontrolled edits are not lost)
 fn AppendButton(props: AppendButtonProps) -> Element {
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
     let result = props.result.clone();
-    let content = props.content.clone();
+    let disabled = props.disabled;
 
     rsx! {
         button {
             class: "btn-secondary",
+            disabled: disabled,
             onclick: move |_| {
-                let new_content = format!("{}\n\n{}", content, result);
-                *state.content.write() = new_content;
-                *state.modified.write() = true;
-                AppActions::hide_ai_result(&mut state);
-                state.update_outline();
+                let result = result.clone();
+                let mut state = state;
+                spawn(async move {
+                    EditorActions::flush_from_dom(&mut state).await;
+                    let content = state.document().content.read().clone();
+                    let new_content = format!("{}\n\n{}", content, result);
+                    EditorActions::update_content(&mut state, new_content);
+                    EditorActions::push_to_dom(&state.document().content.read());
+                    AppActions::hide_ai_result(&mut state);
+                });
             },
             "{props.append_text}"
         }
@@ -140,20 +207,29 @@ fn AppendButton(props: AppendButtonProps) -> Element {
 struct ReplaceButtonProps {
     result: String,
     replace_text: String,
+    #[props(default = false)]
+    disabled: bool,
 }
 
-/// 替换按钮 / Replace Button
+/// 替换按钮（先 flush，保证历史栈含最新正文）
+/// Replace button (flush first so undo history includes latest body)
 fn ReplaceButton(props: ReplaceButtonProps) -> Element {
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
+    let disabled = props.disabled;
 
     rsx! {
         button {
             class: "btn-secondary",
+            disabled: disabled,
             onclick: move |_| {
-                *state.content.write() = props.result.clone();
-                *state.modified.write() = true;
-                AppActions::hide_ai_result(&mut state);
-                state.update_outline();
+                let result = props.result.clone();
+                let mut state = state;
+                spawn(async move {
+                    EditorActions::flush_from_dom(&mut state).await;
+                    EditorActions::update_content(&mut state, result);
+                    EditorActions::push_to_dom(&state.document().content.read());
+                    AppActions::hide_ai_result(&mut state);
+                });
             },
             "{props.replace_text}"
         }

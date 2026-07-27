@@ -10,8 +10,9 @@ use dioxus::prelude::*;
 #[component]
 pub fn ShortcutsModal() -> Element {
     let mut state = use_context::<AppState>();
-    let show = *state.show_shortcuts.read();
-    let lang = *state.language.read();
+    let ui = state.ui();
+    let show = *ui.show_shortcuts.read();
+    let lang = *ui.language.read();
 
     // i18n
     let shortcuts_t = t("shortcuts", lang);

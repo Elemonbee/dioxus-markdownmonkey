@@ -15,6 +15,25 @@ use crate::config::{
 };
 
 impl AppState {
+    /// 递增内容修订号（打开/切换/重载等直接改 content 时调用）
+    /// Bump content revision (call when content is replaced outside update_content)
+    pub fn bump_content_revision(&mut self) {
+        let next = *self.content_revision.read() + 1;
+        *self.content_revision.write() = next;
+    }
+
+    /// 标记当前标签为最近访问（LRU）/ Mark current tab as most recently accessed (LRU)
+    pub fn touch_current_tab_access(&mut self) {
+        let mut doc = self.document();
+        let next = *doc.tab_access_clock.read() + 1;
+        *doc.tab_access_clock.write() = next;
+        let idx = *doc.current_tab_index.read();
+        let mut tabs = doc.tabs.write();
+        if let Some(tab) = tabs.get_mut(idx) {
+            tab.last_accessed = next;
+        }
+    }
+
     /// 更新内容 / Update Content
     pub fn update_content(&mut self, new_content: String) {
         // 处理内嵌图片：将 data URI 替换为本地文件路径
@@ -40,6 +59,8 @@ impl AppState {
         *self.content.write() = processed;
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
+        *self.file_size_bytes.write() = self.content.read().len();
+        self.bump_content_revision();
 
         // 更新大纲（带防抖：中等以上文件短时间内不重复更新）
         // Update outline (with debounce: skip if too soon since last update for medium+ files)
@@ -50,11 +71,33 @@ impl AppState {
                 now.duration_since(last) < std::time::Duration::from_millis(OUTLINE_DEBOUNCE_MS)
             });
             if should_skip {
+                // 仍调度防抖拼写检查 / Still schedule debounced spell check
+                Self::schedule_spell_check(*self);
                 return;
             }
         }
         self.update_outline();
-        self.run_spell_check();
+        Self::schedule_spell_check(*self);
+    }
+
+    /// 防抖调度拼写检查，避免每个按键全量扫描 / Debounce spell check to avoid full scan per keystroke
+    fn schedule_spell_check(mut state: AppState) {
+        if !*state.spell_check_enabled.read() {
+            *state.spell_check_results.write() = Vec::new();
+            return;
+        }
+        let revision = *state.content_revision.read();
+        spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(
+                crate::config::SPELL_CHECK_DEBOUNCE_MS,
+            ))
+            .await;
+            // 仅当内容未再变更时执行 / Run only if content has not changed again
+            if *state.content_revision.read() != revision {
+                return;
+            }
+            state.run_spell_check();
+        });
     }
 
     /// 运行拼写检查 / Run Spell Check
@@ -98,6 +141,7 @@ impl AppState {
             // 从 Arc<str> 转回 String 恢复内容 / Convert Arc<str> back to String to restore content
             *self.content.write() = past_content.to_string();
             *self.modified.write() = true;
+            self.bump_content_revision();
             // 同步哈希，确保后续 is_different 判断正确
             // Sync hash so subsequent is_different checks work correctly
             self.history.write().is_different(past_content.as_ref());
@@ -129,6 +173,7 @@ impl AppState {
             // 从 Arc<str> 转回 String 恢复内容 / Convert Arc<str> back to String to restore content
             *self.content.write() = future_content.to_string();
             *self.modified.write() = true;
+            self.bump_content_revision();
             // 同步哈希，确保后续 is_different 判断正确
             // Sync hash so subsequent is_different checks work correctly
             self.history.write().is_different(future_content.as_ref());
@@ -253,13 +298,96 @@ impl AppState {
 
     // ========== 多标签页管理 / Multi-Tab Management ==========
 
+    /// 当前活动标签的 AI 会话键 / AI session key of the active tab
+    pub fn current_ai_session_key(&self) -> String {
+        let idx = *self.current_tab_index.read();
+        self.tabs
+            .read()
+            .get(idx)
+            .map(|t| t.ai_session_key.clone())
+            .unwrap_or_else(|| "untitled-0".to_string())
+    }
+
+    /// 持久化当前 AI 历史到指定键 / Persist current AI history under a key
+    pub fn persist_ai_history_key(&self, key: &str) {
+        if key.is_empty() {
+            return;
+        }
+        let snapshot = self.ai_history.read().clone();
+        if let Err(e) = crate::services::settings::save_ai_history_for_key(key, &snapshot) {
+            tracing::warn!("Failed to persist AI history for {}: {}", key, e);
+        }
+    }
+
+    /// 加载指定键的 AI 历史到内存 / Load AI history for a key into memory
+    pub fn load_ai_history_key(&mut self, key: &str) {
+        *self.ai_history.write() = crate::services::settings::load_ai_history_for_key(key);
+    }
+
+    /// 在文档上下文切换时交换 AI 历史 / Swap AI history when document context changes
+    pub fn swap_ai_history(&mut self, from_key: &str, to_key: &str) {
+        if from_key == to_key {
+            return;
+        }
+        self.persist_ai_history_key(from_key);
+        self.load_ai_history_key(to_key);
+    }
+
+    /// 用恢复的标签列表替换当前会话并同步编辑器
+    /// Replace the session with restored tabs and sync the editor
+    pub fn apply_restored_tabs(&mut self, tabs: Vec<crate::state::TabInfo>, active_index: usize) {
+        if tabs.is_empty() {
+            return;
+        }
+        let active = active_index.min(tabs.len() - 1);
+        let (content, path, modified) = {
+            let tab = &tabs[active];
+            (
+                tab.content
+                    .as_ref()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
+                tab.path.clone(),
+                tab.modified,
+            )
+        };
+
+        *self.tabs.write() = tabs;
+        *self.current_tab_index.write() = active;
+        *self.content.write() = content.clone();
+        *self.current_file.write() = path;
+        *self.modified.write() = modified;
+        *self.save_status.write() = if modified {
+            SaveStatus::Unsaved
+        } else {
+            SaveStatus::Saved
+        };
+        self.history.write().reset_with_content(&content);
+        *self.file_size_bytes.write() = content.len();
+        *self.file_encoding.write() = "UTF-8".to_string();
+        self.bump_content_revision();
+        self.update_outline();
+        self.run_spell_check();
+        self.touch_current_tab_access();
+        self.evict_inactive_tabs();
+        // 会话恢复后加载活动标签的 AI 历史 / Load active tab AI history after session restore
+        let key = self.current_ai_session_key();
+        self.load_ai_history_key(&key);
+    }
+
     /// 新建标签页 / Create New Tab
     pub fn new_tab(&mut self) {
         // 保存当前标签内容 / Save current tab content
         self.save_current_tab_content();
+        let from_key = self.current_ai_session_key();
 
         // 创建新标签 / Create new tab
-        let tab = TabInfo::new(&format!("未命名 {}", self.tabs.read().len() + 1));
+        let lang = *self.language.read();
+        let tab = TabInfo::new(&crate::utils::i18n::untitled_tab_title_n(
+            lang,
+            self.tabs.read().len() + 1,
+        ));
+        let to_key = tab.ai_session_key.clone();
         self.tabs.write().push(tab);
         *self.current_tab_index.write() = self.tabs.read().len() - 1;
 
@@ -267,10 +395,14 @@ impl AppState {
         *self.content.write() = String::new();
         *self.current_file.write() = None;
         *self.modified.write() = false;
-        *self.history.write() = DocumentHistory::default();
+        self.history.write().reset_with_content("");
         *self.file_encoding.write() = "UTF-8".to_string();
+        self.bump_content_revision();
         self.update_outline();
         self.run_spell_check();
+        self.touch_current_tab_access();
+        self.evict_inactive_tabs();
+        self.swap_ai_history(&from_key, &to_key);
     }
 
     /// 打开文件到新标签页 / Open File in New Tab
@@ -291,9 +423,11 @@ impl AppState {
 
         // 保存当前标签内容 / Save current tab content
         self.save_current_tab_content();
+        let from_key = self.current_ai_session_key();
 
         // 创建新标签 / Create new tab
-        let tab = TabInfo::from_file(path.clone(), content.clone());
+        let tab = TabInfo::from_file(path.clone(), &content);
+        let to_key = tab.ai_session_key.clone();
         self.tabs.write().push(tab);
         *self.current_tab_index.write() = self.tabs.read().len() - 1;
 
@@ -301,7 +435,12 @@ impl AppState {
         *self.content.write() = content;
         *self.current_file.write() = Some(path.clone());
         *self.modified.write() = false;
-        *self.history.write() = DocumentHistory::default();
+        {
+            let body = self.content.read().clone();
+            self.history.write().reset_with_content(&body);
+        }
+        *self.file_size_bytes.write() = self.content.read().len();
+        self.bump_content_revision();
 
         // 自动设置工作区为文件所在目录 / Auto-set workspace to file's parent directory
         if let Some(parent) = path.parent() {
@@ -324,6 +463,9 @@ impl AppState {
         tracing::info!("[open_file_in_tab] About to call update_outline()");
         self.update_outline();
         self.run_spell_check();
+        self.touch_current_tab_access();
+        self.evict_inactive_tabs();
+        self.swap_ai_history(&from_key, &to_key);
         tracing::info!(
             "[open_file_in_tab] After update_outline(), outline items: {}",
             self.outline_items.read().len()
@@ -341,6 +483,8 @@ impl AppState {
             return;
         }
 
+        let from_key = self.current_ai_session_key();
+
         // 保存当前标签内容 / Save current tab content
         self.save_current_tab_content();
 
@@ -348,7 +492,7 @@ impl AppState {
         *self.current_tab_index.write() = index;
 
         // 获取标签数据（包含历史记录）/ Get tab data (including history)
-        let (content, path, modified, history) = {
+        let (content_opt, path, modified, history, needs_reload) = {
             let tabs = self.tabs.read();
             let tab = &tabs[index];
             (
@@ -356,39 +500,78 @@ impl AppState {
                 tab.path.clone(),
                 tab.modified,
                 tab.history.clone(),
+                tab.is_evicted(),
             )
+        };
+
+        // 驱逐标签：从磁盘重载；驻留标签：从 Arc 展开
+        // Evicted tabs reload from disk; resident tabs expand from Arc
+        let content = if needs_reload {
+            if let Some(ref p) = path {
+                match crate::actions::FileActions::read_file_with_encoding(p) {
+                    Ok((text, encoding)) => {
+                        *self.file_encoding.write() = encoding;
+                        text
+                    }
+                    Err(e) => {
+                        tracing::error!("驱逐标签重载失败 / Failed to reload evicted tab: {}", e);
+                        String::new()
+                    }
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            content_opt.map(|arc| arc.to_string()).unwrap_or_default()
         };
 
         // 恢复标签状态（含历史记录）/ Restore tab state (including history)
         *self.content.write() = content;
         *self.current_file.write() = path;
         *self.modified.write() = modified;
-        *self.history.write() = history;
+        *self.history.write() = if needs_reload {
+            let mut h = DocumentHistory::default();
+            h.reset_with_content(&self.content.read());
+            h
+        } else {
+            history
+        };
+        self.bump_content_revision();
         self.update_outline();
         self.run_spell_check();
+        self.touch_current_tab_access();
+        self.evict_inactive_tabs();
+        let to_key = self.current_ai_session_key();
+        self.swap_ai_history(&from_key, &to_key);
     }
 
     /// 关闭当前标签页 / Close Current Tab
     pub fn close_current_tab(&mut self) -> bool {
         let tabs_len = self.tabs.read().len();
+        let from_key = self.current_ai_session_key();
 
         if tabs_len <= 1 {
             // 只有一个标签时，清空内容但不关闭 / When only one tab, clear content but don't close
+            self.persist_ai_history_key(&from_key);
             *self.content.write() = String::new();
             *self.current_file.write() = None;
             *self.modified.write() = false;
-            *self.history.write() = DocumentHistory::default();
+            self.history.write().reset_with_content("");
+            self.bump_content_revision();
 
             let mut tabs = self.tabs.write();
-            tabs[0].content = String::new();
+            tabs[0].content = Some(std::sync::Arc::from(""));
             tabs[0].path = None;
             tabs[0].modified = false;
-            tabs[0].title = "未命名".to_string();
-            tabs[0].history = DocumentHistory::default();
+            tabs[0].title = crate::utils::i18n::untitled_tab_title(*self.language.read());
+            tabs[0].history.reset_with_content("");
+            tabs[0].ai_session_key = crate::state::new_untitled_ai_session_key();
+            let to_key = tabs[0].ai_session_key.clone();
             drop(tabs);
 
             self.update_outline();
             self.run_spell_check();
+            self.load_ai_history_key(&to_key);
             return false;
         }
 
@@ -413,7 +596,7 @@ impl AppState {
         *self.current_tab_index.write() = new_index;
 
         // 恢复到新当前标签（含历史记录）/ Restore to new current tab (including history)
-        let (content, path, modified, history) = {
+        let (content_opt, path, modified, history, needs_reload) = {
             let tabs = self.tabs.read();
             let tab = &tabs[new_index];
             (
@@ -421,15 +604,46 @@ impl AppState {
                 tab.path.clone(),
                 tab.modified,
                 tab.history.clone(),
+                tab.is_evicted(),
             )
+        };
+
+        let content = if needs_reload {
+            if let Some(ref p) = path {
+                match crate::actions::FileActions::read_file_with_encoding(p) {
+                    Ok((text, encoding)) => {
+                        *self.file_encoding.write() = encoding;
+                        text
+                    }
+                    Err(e) => {
+                        tracing::error!("驱逐标签重载失败 / Failed to reload evicted tab: {}", e);
+                        String::new()
+                    }
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            content_opt.map(|arc| arc.to_string()).unwrap_or_default()
         };
 
         *self.content.write() = content;
         *self.current_file.write() = path;
         *self.modified.write() = modified;
-        *self.history.write() = history;
+        *self.history.write() = if needs_reload {
+            let mut h = DocumentHistory::default();
+            h.reset_with_content(&self.content.read());
+            h
+        } else {
+            history
+        };
+        self.bump_content_revision();
         self.update_outline();
         self.run_spell_check();
+        self.touch_current_tab_access();
+        self.evict_inactive_tabs();
+        let to_key = self.current_ai_session_key();
+        self.swap_ai_history(&from_key, &to_key);
 
         true
     }
@@ -476,30 +690,63 @@ impl AppState {
     }
 
     /// 保存当前标签内容到 tabs（含历史记录）/ Save Current Tab Content to Tabs (including history)
-    fn save_current_tab_content(&mut self) {
+    /// 将当前编辑器内容保存到活动标签 / Persist current editor content into the active tab
+    pub fn save_current_tab_content(&mut self) {
         let current_index = *self.current_tab_index.read();
         let tabs_len = self.tabs.read().len();
 
         if current_index < tabs_len {
             // 先获取所有需要的数据 / First get all required data
-            let content = self.content.read().clone();
+            let content_arc = std::sync::Arc::<str>::from(self.content.read().as_str());
             let modified = *self.modified.read();
             let path = self.current_file.read().clone();
             let history = self.history.read().clone();
 
-            // 然后写入 / Then write
+            // 然后写入（Arc 共享，避免再拷一份 String）/ Then write (share via Arc)
             let mut tabs = self.tabs.write();
-            tabs[current_index].content = content;
+            tabs[current_index].set_content_arc(content_arc);
             tabs[current_index].modified = modified;
             tabs[current_index].path = path;
             tabs[current_index].history = history;
         }
     }
 
+    /// 按 LRU 驱逐多余的未修改非活动标签正文
+    /// Evict surplus unmodified inactive tab bodies by LRU order
+    pub fn evict_inactive_tabs(&mut self) {
+        use crate::config::MAX_RESIDENT_INACTIVE_TABS;
+
+        let current = *self.current_tab_index.read();
+        let mut tabs = self.tabs.write();
+
+        // 收集可驱逐候选：非当前、未修改、有路径、仍驻留
+        // Candidates: inactive, unmodified, has path, still resident
+        let mut candidates: Vec<(usize, u64)> = tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, tab)| {
+                *i != current && !tab.modified && tab.path.is_some() && !tab.is_evicted()
+            })
+            .map(|(i, tab)| (i, tab.last_accessed))
+            .collect();
+
+        if candidates.len() <= MAX_RESIDENT_INACTIVE_TABS {
+            return;
+        }
+
+        // 最旧的先驱逐 / Evict oldest first
+        candidates.sort_by_key(|(_, accessed)| *accessed);
+        let evict_count = candidates.len() - MAX_RESIDENT_INACTIVE_TABS;
+        for (idx, _) in candidates.into_iter().take(evict_count) {
+            let _ = tabs[idx].try_evict();
+        }
+    }
+
     /// 初始化第一个标签页 / Initialize First Tab
     pub fn init_first_tab(&mut self) {
         if self.tabs.read().is_empty() {
-            let tab = TabInfo::new("未命名");
+            let lang = *self.language.read();
+            let tab = TabInfo::new(&crate::utils::i18n::untitled_tab_title(lang));
             self.tabs.write().push(tab);
         }
     }
@@ -575,9 +822,10 @@ impl AppState {
         *self.cursor_end.write() = new_cursor_pos;
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
+        self.bump_content_revision();
 
         self.update_outline();
-        self.run_spell_check();
+        Self::schedule_spell_check(*self);
     }
 
     /// 在行首插入前缀 / Insert prefix at line start
@@ -614,9 +862,10 @@ impl AppState {
         *self.cursor_end.write() = new_cursor_pos;
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
+        self.bump_content_revision();
 
         self.update_outline();
-        self.run_spell_check();
+        Self::schedule_spell_check(*self);
     }
 
     /// 在光标位置插入文本 / Insert text at cursor position
@@ -650,9 +899,10 @@ impl AppState {
         *self.cursor_end.write() = new_cursor_pos;
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
+        self.bump_content_revision();
 
         self.update_outline();
-        self.run_spell_check();
+        Self::schedule_spell_check(*self);
     }
 
     // ========== 图片处理 / Image Processing ==========
