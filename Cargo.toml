@@ -12,7 +12,7 @@ dioxus = { version = "0.7.9", features = ["macro", "desktop"] }
 
 # Markdown 解析与渲染
 pulldown-cmark = "0.13"
-ammonia = "4"
+ammonia = "4.1.4"
 
 # 代码高亮
 syntect = "5"
