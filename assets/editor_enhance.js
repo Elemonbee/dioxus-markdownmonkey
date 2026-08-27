@@ -11,6 +11,16 @@
  */
 // 使用全局初始化函数，支持 Dioxus 重新创建 textarea 时重新附加增强功能
 // Use global init function to support re-attaching when Dioxus recreates the textarea
+
+// 同步滚动开关必须挂在 window 上：脚本重跑或 textarea 重建时不得重置用户选择
+// Sync-scroll flag lives on window so script reload / textarea rebuild cannot reset it
+if (typeof window._mm_syncScrollEnabled !== 'boolean') {
+    window._mm_syncScrollEnabled = true;
+}
+window._mm_setSyncScroll = function(enabled) {
+    window._mm_syncScrollEnabled = enabled === true || enabled === 1 || enabled === 'true';
+};
+
 window._mm_initEditor = function() {
     var ta = document.querySelector('.editor-textarea');
     if (!ta) return;
@@ -161,16 +171,10 @@ window._mm_initEditor = function() {
 
     // 同步滚动：在 JS 侧直接处理，避免经过 Dioxus 信号路由造成性能开销
     // Sync scroll: handled directly in JS to avoid Dioxus signal routing overhead
-    var syncScrollEnabled = true;
-
-    window._mm_setSyncScroll = function(enabled) {
-        syncScrollEnabled = enabled;
-    };
-
     var rafId = null;
     var lastRatio = -1;
     ta.addEventListener('scroll', function() {
-        if (!syncScrollEnabled) return;
+        if (!window._mm_syncScrollEnabled) return;
         // rAF 节流，最多每帧一次(约16ms)
         // rAF throttle, at most once per frame (~16ms)
         if (rafId !== null) return;
@@ -517,6 +521,7 @@ window._mm_reverseSyncScroll = (function() {
     var rafId = null;
     var lastRatio = -1;
     return function() {
+        if (!window._mm_syncScrollEnabled) return;
         if (rafId !== null) return;
         rafId = requestAnimationFrame(function() {
             rafId = null;

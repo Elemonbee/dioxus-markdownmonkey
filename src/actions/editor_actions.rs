@@ -241,25 +241,27 @@ impl EditorActions {
         *state.ui().line_numbers.write() = show;
     }
 
+    /// 把同步滚动开关推到 JS（全局标志，跨 textarea 重建仍然有效）
+    /// Push the sync-scroll flag to JS (global; survives textarea rebuilds)
+    fn notify_sync_scroll(enabled: bool) {
+        let _ = document::eval(&format!(
+            "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            if enabled { "true" } else { "false" }
+        ));
+    }
+
     /// 切换同步滚动 / Toggle Sync Scroll
     pub fn toggle_sync_scroll(state: &mut AppState) {
         let mut ui = state.ui();
         let next = !*ui.sync_scroll.read();
         *ui.sync_scroll.write() = next;
-        // 通知 JS 侧同步开关 / Notify JS-side sync toggle
-        let _ = document::eval(&format!(
-            "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
-            if next { "true" } else { "false" }
-        ));
+        Self::notify_sync_scroll(next);
     }
 
     /// 设置同步滚动 / Set Sync Scroll
     pub fn set_sync_scroll(state: &mut AppState, sync: bool) {
         *state.ui().sync_scroll.write() = sync;
-        let _ = document::eval(&format!(
-            "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
-            if sync { "true" } else { "false" }
-        ));
+        Self::notify_sync_scroll(sync);
     }
 
     // ========== 格式化快捷方法 / Formatting Shortcut Methods ==========

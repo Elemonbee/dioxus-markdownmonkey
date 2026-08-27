@@ -706,6 +706,11 @@ mod editor_actions_integration_tests {
 
             EditorActions::toggle_sync_scroll(&mut state);
             assert!(!*state.sync_scroll.read());
+
+            EditorActions::set_sync_scroll(&mut state, true);
+            assert!(*state.sync_scroll.read());
+            EditorActions::set_sync_scroll(&mut state, false);
+            assert!(!*state.sync_scroll.read());
         });
     }
 

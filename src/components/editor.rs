@@ -222,16 +222,17 @@ pub fn Editor() -> Element {
         }
     });
 
-    let _ = use_effect(|| {
-        let js = include_str!("../../assets/editor_enhance.js");
-        let _ = document::eval(js);
-    });
-
-    // 仅在标签切换时重新挂载增强脚本，避免每次按键重绑
-    // Re-init editor enhance only on tab switch, not every keystroke
+    // 注入增强脚本并按当前设置同步滚动开关（同一 eval 避免时序竞态）
+    // Inject enhance script and apply sync-scroll in one eval to avoid races
     let _ = use_effect(move || {
         let _ = tab_index;
-        let _ = document::eval("if(window._mm_initEditor) window._mm_initEditor();");
+        let sync = *ui.sync_scroll.read();
+        let js = include_str!("../../assets/editor_enhance.js");
+        let _ = document::eval(&format!(
+            "{}\nif (window._mm_initEditor) window._mm_initEditor();\nif (window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            js,
+            if sync { "true" } else { "false" }
+        ));
     });
 
     rsx! {

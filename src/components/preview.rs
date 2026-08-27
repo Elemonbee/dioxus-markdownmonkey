@@ -116,7 +116,7 @@ pub fn Preview() -> Element {
         let sync = *ui.sync_scroll.read();
         let _ = document::eval(&format!(
             "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
-            sync
+            if sync { "true" } else { "false" }
         ));
     });
 
