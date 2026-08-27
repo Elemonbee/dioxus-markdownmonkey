@@ -709,6 +709,17 @@ mod editor_actions_integration_tests {
         });
     }
 
+    /// 选区写入应走统一入口 / Selection writes go through the shared setter
+    #[test]
+    fn test_set_selection() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            EditorActions::set_selection(&mut state, 3, 8);
+            assert_eq!(*state.cursor_start.read(), 3);
+            assert_eq!(*state.cursor_end.read(), 8);
+        });
+    }
+
     #[test]
     fn test_undo_redo_via_editor_actions() {
         with_runtime(|| {
@@ -1042,6 +1053,8 @@ mod search_settings_actions_tests {
             let mut state = AppState::new();
             SearchActions::show_global(&mut state);
             assert!(*state.show_global_search.read());
+            SearchActions::hide_global(&mut state);
+            assert!(!*state.show_global_search.read());
         });
     }
 
@@ -1906,6 +1919,12 @@ mod file_actions_integration_tests {
             assert!(*state.trigger_save_as.read());
             assert_eq!(state.pending_close_save_as.read().as_ref(), Some(&snapshot));
 
+            let taken = FileActions::consume_save_as_trigger(&mut state);
+            assert_eq!(taken.as_ref(), Some(&snapshot));
+            assert!(!*state.trigger_save_as.read());
+            assert!(state.pending_close_save_as.read().is_none());
+
+            FileActions::queue_close_save_as(&mut state, snapshot);
             FileActions::cancel_close_request(&mut state);
             assert_eq!(state.tabs.read().len(), 1);
             assert_eq!(state.content.read().as_str(), "draft snapshot");
@@ -2300,6 +2319,34 @@ mod file_actions_integration_tests {
             AppActions::cancel_ai_generation(&mut state);
             assert!(!*state.ai().ai_loading.read());
             assert!(*state.ai().ai_generation_id.read() > id1);
+        });
+    }
+
+    /// 流式结果写入应尊重世代号 / Streamed result writes respect generation ids
+    #[test]
+    fn test_prepare_append_and_finish_ai_result() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            let (id, _rx) = AppActions::start_ai_generation(&mut state);
+            AppActions::prepare_ai_result(&mut state, "Title".to_string());
+            assert!(*state.show_ai_result.read());
+            assert_eq!(state.ai().ai_title.read().as_str(), "Title");
+            assert!(state.ai().ai_result.read().is_empty());
+
+            AppActions::append_ai_chunk(&mut state, id, "Hello");
+            AppActions::append_ai_chunk(&mut state, id.wrapping_add(1), " ignored");
+            assert_eq!(AppActions::ai_result_text(&state), "Hello");
+
+            assert!(AppActions::finish_ai_generation(&mut state, id));
+            assert!(!*state.ai().ai_loading.read());
+            assert!(!AppActions::finish_ai_generation(
+                &mut state,
+                id.wrapping_add(1)
+            ));
+
+            AppActions::set_ai_error_result(&mut state, "oops".to_string(), "Err".to_string());
+            assert_eq!(AppActions::ai_result_text(&state), "oops");
+            assert_eq!(state.ai().ai_title.read().as_str(), "Err");
         });
     }
 }

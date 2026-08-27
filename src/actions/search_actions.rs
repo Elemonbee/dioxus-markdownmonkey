@@ -24,6 +24,22 @@ impl SearchActions {
         *state.ui().show_global_search.write() = true;
     }
 
+    /// 隐藏工作区搜索 / Hide workspace search
+    pub fn hide_global(state: &mut AppState) {
+        *state.ui().show_global_search.write() = false;
+    }
+
+    /// 打开工作区命中：关弹窗、打开文件并滚到行
+    /// Open a workspace hit: hide the modal, open the file, then scroll to the line
+    pub async fn open_workspace_hit(state: &mut AppState, path: std::path::PathBuf, line: usize) {
+        Self::hide_global(state);
+        let _ = crate::actions::FileActions::open_file_flushed(state, path).await;
+        let _ = dioxus::document::eval(&format!(
+            "if(window._mm_scrollToLine) window._mm_scrollToLine({})",
+            line
+        ));
+    }
+
     /// 按当前查询重算匹配数 / Recount matches for the current query
     fn recount(state: &mut AppState) {
         let (query, case_insensitive, use_regex) = {

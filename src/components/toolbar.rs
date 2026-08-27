@@ -7,7 +7,7 @@ use crate::components::icons::*;
 use crate::services::export::ExportService;
 use crate::state::AppState;
 use crate::utils::i18n::t;
-use dioxus::prelude::{ReadableExt, WritableExt, *};
+use dioxus::prelude::{ReadableExt, *};
 use rfd::AsyncFileDialog;
 
 /// 显示导出失败对话框 / Show export failure dialog
@@ -95,7 +95,7 @@ fn run_format(mut state: AppState, format: EditorFormat) {
 #[component]
 pub fn Toolbar() -> Element {
     let mut state = use_context::<AppState>();
-    let mut doc = state.document();
+    let doc = state.document();
     let ui = state.ui();
 
     let show_sidebar = *ui.sidebar_visible.read();
@@ -138,8 +138,7 @@ pub fn Toolbar() -> Element {
     let trigger_save_as = *doc.trigger_save_as.read();
     use_effect(move || {
         if trigger_save_as {
-            *doc.trigger_save_as.write() = false;
-            let close_intent = doc.pending_close_save_as.write().take();
+            let close_intent = FileActions::consume_save_as_trigger(&mut state);
             let is_close_intent = close_intent.is_some();
             let mut state = state;
             spawn(async move {

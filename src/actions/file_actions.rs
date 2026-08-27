@@ -548,6 +548,15 @@ impl FileActions {
         *doc.trigger_save_as.write() = true;
     }
 
+    /// 消费另存为触发：清标志并取出关闭快照
+    /// Consume the Save-As trigger: clear the flag and take any close snapshot
+    pub fn consume_save_as_trigger(state: &mut AppState) -> Option<CloseTabSnapshot> {
+        let mut doc = state.document();
+        *doc.trigger_save_as.write() = false;
+        let snapshot = doc.pending_close_save_as.write().take();
+        snapshot
+    }
+
     /// 先 flush，再按稳定标识保存并关闭；无路径时发出异步另存为意图
     /// Flush, save, and close by stable identity; untitled tabs emit async Save-As intent
     pub async fn save_and_close_tab_flushed(state: &mut AppState, tab_id: TabId) {

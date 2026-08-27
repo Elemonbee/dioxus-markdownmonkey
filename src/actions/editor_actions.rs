@@ -87,14 +87,19 @@ impl EditorActions {
         })
     }
 
+    /// 设置光标选区（UTF-8 字节偏移）/ Set cursor selection (UTF-8 byte offsets)
+    pub fn set_selection(state: &mut AppState, start: usize, end: usize) {
+        let mut ui = state.ui();
+        *ui.cursor_start.write() = start;
+        *ui.cursor_end.write() = end;
+    }
+
     /// 从 DOM 拉取编辑器正文和字节选区并写入状态
     /// Pull editor text and byte-based selection from the DOM into state
     pub async fn flush_from_dom(state: &mut AppState) {
         if let Some(snapshot) = Self::read_editor_snapshot().await {
             state.update_content(snapshot.value);
-            let mut ui = state.ui();
-            *ui.cursor_start.write() = snapshot.start;
-            *ui.cursor_end.write() = snapshot.end;
+            Self::set_selection(state, snapshot.start, snapshot.end);
         }
     }
 
@@ -103,9 +108,7 @@ impl EditorActions {
     pub async fn apply_format(state: &mut AppState, format: EditorFormat) {
         let direction = if let Some(snapshot) = Self::read_editor_snapshot().await {
             state.update_content(snapshot.value);
-            let mut ui = state.ui();
-            *ui.cursor_start.write() = snapshot.start;
-            *ui.cursor_end.write() = snapshot.end;
+            Self::set_selection(state, snapshot.start, snapshot.end);
             snapshot.direction
         } else {
             "none".to_string()
@@ -141,9 +144,7 @@ impl EditorActions {
     pub async fn insert_text_from_dom(state: &mut AppState, text: &str) {
         let direction = if let Some(snapshot) = Self::read_editor_snapshot().await {
             state.update_content(snapshot.value);
-            let mut ui = state.ui();
-            *ui.cursor_start.write() = snapshot.start;
-            *ui.cursor_end.write() = snapshot.end;
+            Self::set_selection(state, snapshot.start, snapshot.end);
             snapshot.direction
         } else {
             "none".to_string()

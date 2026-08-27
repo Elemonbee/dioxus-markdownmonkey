@@ -3,7 +3,7 @@
 //! 可视化表格创建和编辑，支持动态行列操作
 //! Visual table creation and editing with dynamic row/column operations
 
-use crate::actions::{AppActions, EditorActions};
+use crate::actions::AppActions;
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
@@ -283,8 +283,7 @@ pub fn TableEditorModal() -> Element {
                             let markdown = data.to_markdown();
                             let mut state = state;
                             spawn(async move {
-                                EditorActions::insert_text_from_dom(&mut state, &markdown).await;
-                                AppActions::hide_table_editor(&mut state);
+                                AppActions::insert_table_and_close(&mut state, markdown).await;
                             });
                             // 重置表格数据 / Reset table data
                             *table_data.write() = TableData::new_with_lang(3, 3, lang);

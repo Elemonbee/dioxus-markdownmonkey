@@ -447,19 +447,9 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                     let (generation_id, cancel_rx) = AppActions::start_ai_generation(&mut state);
                     AppActions::hide_ai_chat(&mut state);
 
-                    let mut ai_loading = ai.ai_loading;
-                    let mut ai_result = ai.ai_result;
-                    let mut ai_title = ai.ai_title;
-                    let mut show_ai_result_signal = ai.show_ai_result;
-                    let generation_signal = ai.ai_generation_id;
-
                     let task = AITask::from_str_id(&task_type);
                     let result_title = t(task.title_i18n_key(), lang);
-
-                    *ai_result.write() = String::new();
-                    *ai_title.write() = result_title;
-                    AppActions::show_ai_result(&mut state);
-                    *show_ai_result_signal.write() = true;
+                    AppActions::prepare_ai_result(&mut state, result_title);
 
                     let service = AIService::with_temperature(
                         api_key,
@@ -475,30 +465,33 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                         &global_system,
                     );
                     let user_summary = task.history_user_summary(&content, &input);
+                    let mut stream_state = state;
+                    let check_state = state;
 
                     let result = service
                         .chat_stream_cancellable(
                             messages,
                             |chunk| {
-                                if *generation_signal.read() == generation_id {
-                                    ai_result.write().push_str(chunk);
-                                }
+                                AppActions::append_ai_chunk(
+                                    &mut stream_state,
+                                    generation_id,
+                                    chunk,
+                                );
                             },
-                            || *generation_signal.read() == generation_id,
+                            || AppActions::is_ai_generation_current(&check_state, generation_id),
                             cancel_rx,
                         )
                         .await;
 
                     // 仅当前世代才收尾 / Only finish if this generation is still current
-                    if *generation_signal.read() != generation_id {
+                    if !AppActions::finish_ai_generation(&mut state, generation_id) {
                         return;
                     }
-                    *ai_loading.write() = false;
 
                     match result {
                         Ok(full) => {
                             let assistant = if full.is_empty() {
-                                ai_result.read().clone()
+                                AppActions::ai_result_text(&state)
                             } else {
                                 full
                             };
@@ -507,17 +500,18 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                             }
                         }
                         Err(crate::services::ai::AIError::Cancelled) => {
-                            let partial = ai_result.read().clone();
+                            let partial = AppActions::ai_result_text(&state);
                             if !partial.is_empty() {
                                 AppActions::push_ai_turn(&mut state, user_summary, partial);
                             }
                         }
                         Err(e) => {
-                            let current_result = ai_result.read().clone();
-                            if current_result.is_empty() {
-                                *ai_result.write() = format_ai_error(&e, &ep);
-                                *ai_title.write() = te;
-                                *show_ai_result_signal.write() = true;
+                            if AppActions::ai_result_text(&state).is_empty() {
+                                AppActions::set_ai_error_result(
+                                    &mut state,
+                                    format_ai_error(&e, &ep),
+                                    te,
+                                );
                             }
                         }
                     }

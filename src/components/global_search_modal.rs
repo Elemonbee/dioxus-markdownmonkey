@@ -4,7 +4,7 @@
 //! Search workspace Markdown files; prefer open-tab buffers over disk
 
 use crate::actions::shortcut_actions::ShortcutActions;
-use crate::actions::{EditorActions, FileActions};
+use crate::actions::{EditorActions, FileActions, SearchActions};
 use crate::components::icons::CloseIcon;
 use crate::state::AppState;
 use crate::utils::i18n::t;
@@ -91,7 +91,7 @@ fn spawn_workspace_search(
 #[component]
 pub fn GlobalSearchModal() -> Element {
     let mut state = use_context::<AppState>();
-    let mut ui = state.ui();
+    let ui = state.ui();
     let show = *ui.show_global_search.read();
 
     let mut search_input = use_signal(String::new);
@@ -125,7 +125,7 @@ pub fn GlobalSearchModal() -> Element {
         div {
             class: "modal-overlay {display_class}",
             onclick: move |_| {
-                *ui.show_global_search.write() = false;
+                SearchActions::hide_global(&mut state);
             },
 
             div {
@@ -139,7 +139,7 @@ pub fn GlobalSearchModal() -> Element {
                     button {
                         class: "modal-close",
                         onclick: move |_| {
-                            *ui.show_global_search.write() = false;
+                            SearchActions::hide_global(&mut state);
                         },
                         CloseIcon { size: 20 }
                     }
@@ -159,7 +159,7 @@ pub fn GlobalSearchModal() -> Element {
                             let key = e.key().to_string();
                             match key.as_str() {
                                 "Escape" => {
-                                    *ui.show_global_search.write() = false;
+                                    SearchActions::hide_global(&mut state);
                                     e.prevent_default();
                                 }
                                 "Enter" => {
@@ -353,18 +353,14 @@ pub fn GlobalSearchModal() -> Element {
                                         onclick: move |_| {
                                             let file_path = result.path.clone();
                                             let target_line = result.line;
-                                            *ui.show_global_search.write() = false;
                                             let mut state = state;
                                             spawn(async move {
-                                                let _ = FileActions::open_file_flushed(
+                                                SearchActions::open_workspace_hit(
                                                     &mut state,
                                                     file_path,
+                                                    target_line,
                                                 )
                                                 .await;
-                                                let _ = dioxus::document::eval(&format!(
-                                                    "if(window._mm_scrollToLine) window._mm_scrollToLine({})",
-                                                    target_line
-                                                ));
                                             });
                                         },
 

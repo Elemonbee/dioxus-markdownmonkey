@@ -34,7 +34,7 @@ fn count_lines(content: &str) -> usize {
 /// 从 DOM 同步 textarea 选区到 UI 域光标信号
 /// Sync textarea selection from DOM into UI-domain cursor signals
 fn sync_selection_from_dom(state: &mut AppState) {
-    let state = *state;
+    let mut state = *state;
     spawn(async move {
         let mut eval = document::eval(
             r#"
@@ -62,9 +62,7 @@ fn sync_selection_from_dom(state: &mut AppState) {
         );
         if let Ok(vals) = eval.recv::<Vec<usize>>().await {
             if vals.len() >= 2 {
-                let mut ui = state.ui();
-                *ui.cursor_start.write() = vals[0];
-                *ui.cursor_end.write() = vals[1];
+                EditorActions::set_selection(&mut state, vals[0], vals[1]);
             }
         }
     });

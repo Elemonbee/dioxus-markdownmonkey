@@ -125,6 +125,56 @@ impl AppActions {
         *state.ai().show_ai_result.write() = false;
     }
 
+    /// 准备 AI 结果弹窗（清空正文、设标题并显示）
+    /// Prepare the AI result modal (clear body, set title, then show)
+    pub fn prepare_ai_result(state: &mut AppState, title: String) {
+        {
+            let mut ai = state.ai();
+            *ai.ai_result.write() = String::new();
+            *ai.ai_title.write() = title;
+        }
+        Self::show_ai_result(state);
+    }
+
+    /// 当前世代仍有效时追加流式片段 / Append a stream chunk if this generation is still current
+    pub fn append_ai_chunk(state: &mut AppState, generation_id: u64, chunk: &str) {
+        let mut ai = state.ai();
+        if *ai.ai_generation_id.read() == generation_id {
+            ai.ai_result.write().push_str(chunk);
+        }
+    }
+
+    /// 当前世代是否仍是活动生成 / Whether generation_id is still the active generation
+    pub fn is_ai_generation_current(state: &AppState, generation_id: u64) -> bool {
+        *state.ai().ai_generation_id.read() == generation_id
+    }
+
+    /// 读取当前 AI 结果正文 / Read the current AI result text
+    pub fn ai_result_text(state: &AppState) -> String {
+        state.ai().ai_result.read().clone()
+    }
+
+    /// 结束当前世代的 loading；世代过期则返回 false
+    /// Finish loading for this generation; returns false if the generation is stale
+    pub fn finish_ai_generation(state: &mut AppState, generation_id: u64) -> bool {
+        let mut ai = state.ai();
+        if *ai.ai_generation_id.read() != generation_id {
+            return false;
+        }
+        *ai.ai_loading.write() = false;
+        true
+    }
+
+    /// 把错误写入结果弹窗 / Write an error into the result modal
+    pub fn set_ai_error_result(state: &mut AppState, message: String, title: String) {
+        {
+            let mut ai = state.ai();
+            *ai.ai_result.write() = message;
+            *ai.ai_title.write() = title;
+        }
+        Self::show_ai_result(state);
+    }
+
     /// 开始一轮 AI 生成，返回世代号与取消接收端
     /// Start an AI generation; returns generation epoch and cancel receiver
     pub fn start_ai_generation(state: &mut AppState) -> (u64, tokio::sync::watch::Receiver<bool>) {
@@ -272,6 +322,12 @@ impl AppActions {
     /// 隐藏表格编辑器 / Hide table editor modal
     pub fn hide_table_editor(state: &mut AppState) {
         *state.ui().show_table_editor.write() = false;
+    }
+
+    /// 插入表格 Markdown 并关闭表格编辑器 / Insert table markdown and close the table editor
+    pub async fn insert_table_and_close(state: &mut AppState, markdown: String) {
+        crate::actions::EditorActions::insert_text_from_dom(state, &markdown).await;
+        Self::hide_table_editor(state);
     }
 
     /// 切换自动保存 / Toggle auto-save
