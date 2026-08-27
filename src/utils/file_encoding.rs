@@ -113,11 +113,11 @@ fn decode_utf16(data: &[u8], little_endian: bool) -> Result<String, String> {
     if !data.len().is_multiple_of(2) {
         return Err("UTF-16 字节数不是偶数 / UTF-16 byte length is not even".to_string());
     }
-    let units = data.chunks_exact(2).map(|chunk| {
+    let units = data.as_chunks::<2>().0.iter().map(|chunk| {
         if little_endian {
-            u16::from_le_bytes([chunk[0], chunk[1]])
+            u16::from_le_bytes(*chunk)
         } else {
-            u16::from_be_bytes([chunk[0], chunk[1]])
+            u16::from_be_bytes(*chunk)
         }
     });
     std::char::decode_utf16(units)
