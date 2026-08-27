@@ -1,8 +1,8 @@
 //! Actions 模块 - 业务逻辑处理器
 //! Actions Module - Business Logic Handlers
 //!
-//! 遵循 PAL 架构原则，将业务逻辑与 UI 渲染分离
-//! Following PAL architecture, separate business logic from UI rendering
+//! PAL：组件只读 AppState，所有 AppState 写入经由此层。
+//! PAL: components read AppState; all AppState writes go through this layer.
 
 mod app_actions;
 mod editor_actions;
@@ -19,5 +19,5 @@ pub use editor_actions::*;
 pub use file_actions::*;
 pub use search_actions::*;
 pub use settings_actions::*;
-// shortcut_actions 导出在需要时取消注释 / Uncomment when needed
-// pub use shortcut_actions::*;
+// shortcut_actions 以子模块形式公开：`use crate::actions::shortcut_actions::ShortcutActions`
+// Public as a submodule: `use crate::actions::shortcut_actions::ShortcutActions`

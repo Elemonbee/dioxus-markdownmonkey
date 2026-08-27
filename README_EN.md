@@ -9,21 +9,20 @@ A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framew
 
 ## ✨ Features
 
-- 📝 **Markdown Editing** - Live preview; raw HTML and dangerous URLs are filtered
+- 📝 **Markdown Editing** - Live preview (tables / strikethrough / task lists / footnotes); raw HTML and dangerous URLs are filtered; code blocks render as plain text
 - 📁 **File Management** - Workspace folder, file-tree filter, recent files, multi-encoding (UTF-8/GBK/UTF-16); drag-and-drop `.md` / `.txt` to open
 - 🗂️ **Multi-Tab** - Edit multiple files with independent undo/redo per tab; confirm before closing unsaved tabs
 - 📋 **Outline View** - Auto-extract headings for quick navigation
 - 💾 **Session Restore** - On launch, restore tabs, active tab, workspace, and unsaved drafts (can be disabled in Settings)
-- 🤖 **AI Assistant** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter; stoppable streaming; **per-document chat history**
+- 🤖 **AI Assistant** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter; stoppable streaming; **per-document chat history**; API keys in the system keyring
 - 📤 **Export** - HTML (optional local-image sidecar `{stem}_files/`) / plain text
 - 🔍 **Search & Replace** - In-document search (case / regex); workspace-wide search and replace-all (prefers open-tab buffers)
 - 🖼️ **Images** - Paste/drop images into the workspace and insert Markdown
-- 🎨 **Themes** - Dark / Light / Follow System; persisted window size; quick language toggle on the toolbar
-- 🌐 **i18n** - Simplified Chinese / American English
+- 🎨 **Theme & View** - Dark / Light / Follow System; persisted window size; optional editor–preview sync scroll (Settings and preview pane)
+- 🌐 **i18n** - Simplified Chinese / American English; quick language toggle on the toolbar
 - ⌨️ **Shortcuts** - See table below
 - 📊 **Table Editor** - Visual create and edit
-- 🔐 **Secure Storage** - API keys in the system keyring
-- 💾 **Auto Save** - Configurable interval; external modification detection; warn before opening large files (default 1 MB)
+- 💾 **Auto Save** - Configurable interval; external modification detection (mtime polling); warn before opening large files (default 1 MB)
 
 ## 🛠️ Tech Stack
 
@@ -31,39 +30,44 @@ Versions reflect the current `Cargo.lock` / `Cargo.toml` resolution and may chan
 
 | Category | Technology | Version |
 |----------|-----------|---------|
-| **UI Framework** | Dioxus (desktop) | 0.7.10 |
+| **UI Framework** | Dioxus (desktop, no Tauri) | 0.7.10 |
 | **Language** | Rust | Edition 2021 |
-| **Markdown Parsing** | pulldown-cmark | 0.13 |
-| **HTTP** | reqwest (rustls) | 0.13 |
-| **Async Runtime** | tokio | 1 |
+| **Markdown** | pulldown-cmark + in-tree HTML/URL filter | 0.13 |
+| **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |
 | **Key Storage** | keyring-core + native OS stores | 1 |
+| **Search** | regex | 1 |
+| **Encoding** | encoding_rs (GBK, …) | 0.8 |
 | **Serialization** | serde + serde_json | 1.x |
 | **File Dialogs** | rfd | 0.17 |
 | **Logging** | tracing + tracing-subscriber | 0.1 / 0.3 |
 
 ## 🏗️ Architecture
 
-Organized as **Components + Actions + Services/State**, following a PAL (Presentation-Actions-Logic) inspired layout: some components still read/write `AppState` directly, and the Actions layer stays intentionally lightweight.
+Organized as **Components + Actions + Services/State**, following a PAL (Presentation-Actions-Logic) inspired layout.
+
+Components **read** `AppState` through Dioxus Signals to drive the UI. All **writes** to `AppState` go through Actions. Component-local `use_signal` drafts (file-tree filter, model dropdown, table grid, …) stay in the UI layer and do not enter global state.
 
 ```
 ┌─────────────────────────────────────────────────┐
 │  Presentation Layer                              │
-│  components/ — UI components, rendering focused  │
+│  components/ — read AppState, rendering focused  │
 │  ├── editor.rs, preview.rs, sidebar.rs          │
 │  ├── toolbar.rs, tabbar.rs, statusbar.rs        │
-│  └── *_modal.rs (modals)                        │
+│  └── *_modal.rs (settings, search, AI, table, …)│
 ├─────────────────────────────────────────────────┤
-│  Actions Layer                                   │
-│  actions/ — Business logic handlers              │
-│  ├── app_actions.rs — App-level operations       │
-│  ├── editor_actions.rs — Editor operations       │
-│  ├── file_actions.rs — File operations           │
-│  └── shortcut_actions.rs — Shortcut dispatch     │
+│  Actions Layer — the only AppState write path    │
+│  ├── app_actions.rs — theme, language, sidebar, AI stream │
+│  ├── editor_actions.rs — edit, format, sync scroll │
+│  ├── file_actions.rs — open / save / tabs        │
+│  ├── search_actions.rs — in-doc and workspace search │
+│  ├── settings_actions.rs — settings and keyring  │
+│  └── shortcut_actions.rs — shortcut dispatch     │
 ├─────────────────────────────────────────────────┤
 │  Logic Layer                                     │
-│  state/ — Global state (AppState, Dioxus Signal) │
-│  services/ — Pure logic services (testable)      │
-│  utils/ — Utilities (i18n, workspace search, …)  │
+│  state/ — AppState (Dioxus Signal)               │
+│  services/ — testable logic (Markdown, export,   │
+│              session, mtime watcher, keyring)    │
+│  utils/ — i18n, encoding, paths, search, replace │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -71,16 +75,16 @@ Organized as **Components + Actions + Services/State**, following a PAL (Present
 
 1. All hooks are called unconditionally at the top of components
 2. Always render all sub-components; control visibility with CSS
-3. Prefer Actions for reusable interaction logic, while allowing direct state access for simplicity
+3. Components read `AppState`; writes go through Actions; local UI drafts may stay in the component
 4. State management uses the Dioxus Signal reactive pattern
 
 ## 📁 Project Structure
 
 ```
 src/
-├── main.rs                 # Application entry
+├── main.rs                 # Application entry (Dioxus Desktop, no Tauri)
 ├── app.rs                  # Layout, init, auto-save, session restore, file watching
-├── config.rs               # App configuration constants
+├── config.rs               # Runtime thresholds and defaults
 │
 ├── state/
 │   ├── types.rs            # Theme, TabInfo, History, etc.
@@ -89,42 +93,49 @@ src/
 │   ├── app_state_ops.rs    # Document / tabs / outline logic
 │   └── app_state_tests.rs  # State unit tests
 │
-├── components/             # UI components
+├── components/             # UI (read Signals; writes go through Actions)
 │   ├── editor.rs / preview.rs / sidebar.rs / toolbar.rs
 │   ├── tabbar.rs / statusbar.rs / file_tree.rs / icons.rs
-│   └── *_modal.rs          # Settings, search, AI, table, confirms, …
+│   └── *_modal.rs          # Settings, search, AI, table, confirms, shortcuts
 │
-├── actions/                # Interaction logic
-│   ├── app_actions.rs / editor_actions.rs
-│   ├── file_actions.rs / shortcut_actions.rs
+├── actions/                # Interaction logic (AppState writes)
+│   ├── app_actions.rs / editor_actions.rs / file_actions.rs
+│   ├── search_actions.rs / settings_actions.rs
+│   ├── shortcut_actions.rs
 │   └── tests.rs
 │
 ├── services/
 │   ├── markdown.rs / ai.rs / auto_save.rs / image.rs
 │   ├── settings.rs / session.rs / recent_files.rs
-│   ├── file_watcher.rs / keyring_service.rs / theme_detector.rs
-│   └── export/             # HTML / TXT
+│   ├── file_watcher.rs     # mtime polling (no filesystem-event crate)
+│   ├── keyring_service.rs / theme_detector.rs
+│   └── export/             # HTML / plain text
 │       ├── mod.rs / shared.rs
 │       ├── html.rs / text.rs
 │
 ├── utils/
-│   ├── i18n.rs / file_utils.rs / paths.rs / clipboard.rs
+│   ├── i18n.rs / file_utils.rs / file_encoding.rs
+│   ├── paths.rs / clipboard.rs
 │   ├── workspace_search.rs # Workspace search (open-tab buffers)
 │   └── replace.rs          # Replace helpers
 │
 └── styles/                 # CSS (variables / base / editor / toolbar / sidebar / modals)
 
 assets/
-└── editor_enhance.js
+└── editor_enhance.js       # Line numbers, virtual scroll, sync scroll
 ```
 
-Settings and session data live under the user config directory in `MarkdownMonkey/` (e.g. `settings.json`, `session.json`, `session_drafts/`, `ai_history/`).
+Settings and session data live under the user config directory in `MarkdownMonkey/` (`settings.json`, `session.json`, `session_drafts/`, `ai_history/`):
+
+- Windows: `%APPDATA%\MarkdownMonkey`
+- macOS: `~/Library/Application Support/MarkdownMonkey`
+- Linux: `$XDG_CONFIG_HOME/MarkdownMonkey` or `~/.config/MarkdownMonkey`
 
 ## 🚀 Development
 
 ### Requirements
 
-- Rust 1.80+
+- Rust **1.88+** (CI uses `stable`; the code uses `slice::as_chunks`)
 - Cargo
 
 ### Build & Run
@@ -135,20 +146,26 @@ cargo build --release
 cargo run
 ```
 
-Verbose logging (Unix-like):
+Verbose logging (Windows PowerShell):
+
+```powershell
+$env:RUST_LOG="markdownmonkey=debug,info"; cargo run
+```
+
+Unix-like:
 
 ```bash
 RUST_LOG=markdownmonkey=debug,info cargo run
 ```
 
-```
-
 ### Test & Lint
 
+Matches CI (`.github/workflows/ci.yml`):
+
 ```bash
-cargo test
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
 ```
 
 ## 📦 Release

@@ -33,6 +33,8 @@ pub fn ShortcutsModal() -> Element {
     let show_shortcuts_t = t("show_shortcuts", lang);
     let ai_t = t("ai_assistant", lang);
     let close_modal_t = t("close_modal", lang);
+    let search_t = t("shortcut_search", lang);
+    let global_search_t = t("shortcut_global_search", lang);
 
     // 始终渲染，但用 CSS 控制显示/隐藏
     let display_class = if show { "" } else { "hidden" };
@@ -68,11 +70,13 @@ pub fn ShortcutsModal() -> Element {
                             tr { td { "Ctrl+O" } td { "{open_file_t}" } }
                             tr { td { "Ctrl+S" } td { "{save_file_t}" } }
                             tr { td { "Ctrl+Z" } td { "{undo_t}" } }
-                            tr { td { "Ctrl+Y" } td { "{redo_t}" } }
+                            tr { td { "Ctrl+Y / Ctrl+Shift+Z" } td { "{redo_t}" } }
                             tr { td { "Ctrl+B" } td { "{bold_t}" } }
                             tr { td { "Ctrl+I" } td { "{italic_t}" } }
                             tr { td { "Ctrl+`" } td { "{code_t}" } }
                             tr { td { "Ctrl+K" } td { "{insert_link_t}" } }
+                            tr { td { "Ctrl+F" } td { "{search_t}" } }
+                            tr { td { "Ctrl+Shift+F" } td { "{global_search_t}" } }
                             tr { td { "Ctrl+\\" } td { "{toggle_sidebar_t}" } }
                             tr { td { "Ctrl+P" } td { "{toggle_preview_t}" } }
                             tr { td { "Ctrl+T" } td { "{theme_t}" } }

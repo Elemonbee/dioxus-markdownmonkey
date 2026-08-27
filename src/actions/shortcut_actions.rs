@@ -1,9 +1,7 @@
 //! 快捷键动作 / Shortcut Actions
 //!
-//! 遵循 PAL 架构：处理快捷键业务逻辑
-//!
-//! 注意：部分功能为预留功能，暂未使用
-//! Note: Some functions are reserved for future use, not yet used
+//! 将键盘事件匹配到已实现的编辑 / 文件 / 搜索 / UI 动作。
+//! Match keyboard events to implemented edit / file / search / UI actions.
 
 use crate::actions::{AppActions, EditorActions, EditorFormat, FileActions, SearchActions};
 use crate::state::AppState;

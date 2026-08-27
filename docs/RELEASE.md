@@ -3,7 +3,8 @@
 MarkdownMonkey publishes desktop release packages through GitHub Actions for
 **Windows**, **Linux**, and **macOS**.
 
-Current app version: **0.5.0** (see `Cargo.toml`).
+Current app version: **0.5.0** (see `Cargo.toml`). CI uses the `stable` Rust
+toolchain; building from source needs **Rust 1.88+**.
 
 ## Local Verification
 
@@ -58,4 +59,4 @@ Each archive contains:
 Project documentation also includes:
 
 - [RELEASE.md](RELEASE.md) — this guide
-- [screenshots/](screenshots/) — UI screenshots referenced by the READMEs (`main_zh.png`, `main_en.png`)
+- [screenshots/](screenshots/) — UI screenshots referenced by the READMEs (`main_zh.png`, `main_en.png`). Recapture after README or chrome changes so the in-app editor still matches the docs.

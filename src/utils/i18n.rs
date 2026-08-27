@@ -326,6 +326,14 @@ impl I18n {
         texts.insert("insert_link", lang_map("插入链接", "Insert Link"));
         texts.insert("show_shortcuts", lang_map("显示快捷键", "Show Shortcuts"));
         texts.insert("close_modal", lang_map("关闭弹窗", "Close Modal"));
+        texts.insert(
+            "shortcut_search",
+            lang_map("文档内搜索替换", "In-document Search & Replace"),
+        );
+        texts.insert(
+            "shortcut_global_search",
+            lang_map("工作区全局搜索 / 替换", "Workspace Search / Replace"),
+        );
 
         // 设置弹窗 / Settings Modal
         texts.insert("editor", lang_map("编辑器", "Editor"));
