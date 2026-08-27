@@ -3,6 +3,7 @@
 //! 由 app.rs 的 use_future 定时调用，定期检查文件修改并保存
 //! Called periodically by app.rs use_future to check for modifications and save
 
+use crate::utils::file_encoding::{self, FileEncoding};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::task;
@@ -58,12 +59,17 @@ impl AutoSaveService {
         self.last_save = Instant::now();
     }
 
-    /// 执行自动保存 / Perform Auto Save
-    pub async fn auto_save(&mut self, path: Option<&PathBuf>, content: &str) -> Result<(), String> {
+    /// 使用标签编码执行自动保存 / Perform auto-save using the tab encoding
+    pub async fn auto_save(
+        &mut self,
+        path: Option<&PathBuf>,
+        content: &str,
+        encoding: FileEncoding,
+    ) -> Result<(), String> {
         if let Some(path) = path {
             let path = path.clone();
             let content = content.to_string();
-            task::spawn_blocking(move || std::fs::write(&path, content))
+            task::spawn_blocking(move || file_encoding::write_file(&path, &content, encoding))
                 .await
                 .map_err(|e| format!("自动保存任务失败 / Auto save task failed: {}", e))?
                 .map_err(|e| format!("自动保存失败 / Auto save failed: {}", e))?;

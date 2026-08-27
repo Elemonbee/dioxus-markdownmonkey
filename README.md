@@ -9,22 +9,19 @@
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 实时预览、语法高亮、Mermaid 图表、数学公式 (KaTeX)；预览优先使用内置离线脚本，必要时回退 CDN
+- 📝 **Markdown 编辑** - 实时预览；原始 HTML 与危险 URL 会被过滤
 - 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
 - 🗂️ **多标签页** - 同时编辑多个文件，每标签独立撤销/重做；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
 - 💾 **会话恢复** - 启动时恢复标签、活动页、工作区与未保存草稿（可在设置中关闭）
 - 🤖 **AI 助手** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter；流式生成可停止；**按文档独立会话历史**
-- 📤 **多格式导出** - 工具栏下拉：HTML / PDF / DOCX / 纯文本
-  - HTML：打包本地图片与离线 Mermaid/KaTeX 到 `{文件名}_files/`
-  - PDF / DOCX：嵌入本地 PNG/JPEG（整行 `![alt](path)`）；PDF 自动探测系统中文字体，可在设置中指定字体路径
+- 📤 **导出** - HTML（可打包本地图片到 `{文件名}_files/`）/ 纯文本
 - 🔍 **搜索替换** - 文档内搜索（大小写 / 正则）；工作区全局搜索与批量替换（优先使用已打开标签缓冲）
 - 🖼️ **图片支持** - 粘贴/拖放图片保存到工作区并插入 Markdown
 - 🎨 **主题切换** - 深色 / 浅色 / 跟随系统；窗口尺寸持久化；工具栏可快速切换语言
 - 🌐 **国际化** - 简体中文 / 美式英语
 - ⌨️ **快捷键** - 见下方一览表
 - 📊 **表格编辑器** - 可视化创建与编辑
-- ✅ **拼写检查** - 英文拼写 + 中文检测
 - 🔐 **安全存储** - API Key 存于系统密钥环
 - 💾 **自动保存** - 可配置间隔；外部文件修改检测；大文件（默认 1 MB）打开前提示
 
@@ -34,22 +31,15 @@
 
 | 类别 | 技术 | 版本 |
 |------|------|------|
-| **UI 框架** | Dioxus (desktop) | 0.7.9 |
+| **UI 框架** | Dioxus (desktop) | 0.7.10 |
 | **语言** | Rust | Edition 2021 |
 | **Markdown 解析** | pulldown-cmark | 0.13 |
-| **HTML 安全** | ammonia | 4 |
-| **代码高亮** | syntect | 5 |
 | **HTTP** | reqwest (rustls) | 0.13 |
 | **异步运行时** | tokio | 1 |
-| **密钥存储** | keyring | 4 |
+| **密钥存储** | keyring-core + 系统凭据库 | 1 |
 | **序列化** | serde + serde_json | 1.x |
 | **文件对话框** | rfd | 0.17 |
-| **用户目录** | dirs | 6 |
 | **日志** | tracing + tracing-subscriber | 0.1 / 0.3 |
-| **PDF 导出** | printpdf (png/jpeg) | 0.9 |
-| **DOCX 导出** | zip (OOXML) | 8 |
-| **文件监控** | notify | 8 |
-| **剪贴板** | arboard | 3 |
 
 ## 🏗️ 架构
 
@@ -112,23 +102,20 @@ src/
 ├── services/
 │   ├── markdown.rs / ai.rs / auto_save.rs / image.rs
 │   ├── settings.rs / session.rs / recent_files.rs
-│   ├── file_watcher.rs / spellcheck.rs / syntax_highlight.rs
-│   ├── keyring_service.rs / theme_detector.rs
-│   └── export/             # HTML / PDF / DOCX / TXT
+│   ├── file_watcher.rs / keyring_service.rs / theme_detector.rs
+│   └── export/             # HTML / TXT
 │       ├── mod.rs / shared.rs
-│       ├── html.rs / pdf.rs / docx.rs / text.rs
+│       ├── html.rs / text.rs
 │
 ├── utils/
-│   ├── i18n.rs / file_utils.rs
+│   ├── i18n.rs / file_utils.rs / paths.rs / clipboard.rs
 │   ├── workspace_search.rs # 工作区搜索（含打开标签缓冲）
 │   └── replace.rs          # 替换工具
 │
 └── styles/                 # CSS（variables / base / editor / toolbar / sidebar / modals）
 
 assets/
-├── editor_enhance.js
-├── dictionaries/
-└── vendor/                 # 离线 Mermaid + KaTeX
+└── editor_enhance.js
 ```
 
 配置与会话数据默认位于用户配置目录下的 `MarkdownMonkey/`（如 `settings.json`、`session.json`、`session_drafts/`、`ai_history/`）。
@@ -154,7 +141,7 @@ cargo run
 $env:RUST_LOG="markdownmonkey=debug,info"; cargo run
 ```
 
-可选：通过环境变量 `MARKDOWNMONKEY_PDF_FONT` 指定 PDF 中文字体路径。
+```
 
 ### 测试与检查
 

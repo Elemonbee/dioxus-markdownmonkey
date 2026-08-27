@@ -8,14 +8,10 @@ license = "MIT"
 
 [dependencies]
 # Dioxus 核心 / Dioxus core
-dioxus = { version = "0.7.9", features = ["macro", "desktop"] }
+dioxus = { version = "0.7.10", features = ["macro", "desktop"] }
 
-# Markdown 解析与渲染
+# Markdown 解析
 pulldown-cmark = "0.13"
-ammonia = "4.1.4"
-
-# 代码高亮
-syntect = "5"
 
 # HTTP 客户端 (AI API)
 reqwest = { version = "0.13", features = ["json", "stream", "rustls"], default-features = false }
@@ -23,7 +19,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 futures-util = "0.3"
 
 # 安全存储 (API Key)
-keyring = "4"
+# Secure storage for API keys
 keyring-core = "1"
 
 # 序列化
@@ -33,42 +29,32 @@ serde_json = "1"
 # 文件对话框
 rfd = "0.17"
 
-# 日期时间
-chrono = "0.4"
-
 # 日志
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# 错误处理
-thiserror = "2"
-
-# 目录
-dirs = "6"
-
-# 剪贴板
-arboard = "3"
+# 搜索替换
 regex = "1"
 
 # Base64 编码（图片处理）
-base64 = "0.22"
+base64 = "0.23"
 
 # 编码转换（GBK/GB2312 支持）
 encoding_rs = "0.8"
 
-# 文件系统事件监控
-notify = "8"
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = "1"
 
-# PDF 导出（启用 png/jpeg 以嵌入本地图片）
-# PDF export (png/jpeg features for local image embedding)
-printpdf = { version = "0.9", features = ["png", "jpeg"] }
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
 
-# Word/Docx 导出 (使用 zip + xml)
-zip = "8"
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-keyutils-keyring-store = "1"
 
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
 
 [dev-dependencies]
-# 测试
 tempfile = "3"
 
 [profile.release]

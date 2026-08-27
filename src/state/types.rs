@@ -5,6 +5,18 @@
 
 use std::path::PathBuf;
 
+use crate::utils::file_encoding::FileEncoding;
+
+/// 标签稳定标识 / Stable tab identifier
+pub type TabId = u64;
+
+/// 生成进程内唯一的标签标识 / Generate a process-unique tab identifier
+pub fn new_tab_id() -> TabId {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 /// 主题枚举 / Theme Enum
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Theme {
@@ -37,9 +49,13 @@ pub enum SaveStatus {
 /// `content` is an `Arc<str>` shared body; `None` means evicted (reload from disk when unmodified)
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabInfo {
+    /// 不随标签索引变化的稳定标识 / Stable identity independent of tab index
+    pub id: TabId,
     pub path: Option<PathBuf>, // 文件路径 / File Path
     pub title: String,         // 标签标题 / Tab Title
     pub modified: bool,        // 是否修改 / Is Modified
+    /// 文件写回编码 / File encoding used for writes
+    pub encoding: FileEncoding,
     /// 驻留正文；驱逐后为 None / Resident body; None after eviction
     pub content: Option<std::sync::Arc<str>>,
     pub history: History, // 撤销/重做历史 / Undo/Redo History
@@ -55,10 +71,12 @@ impl TabInfo {
         let mut history = History::default();
         history.reset_with_content("");
         Self {
+            id: new_tab_id(),
             path: None,
             title: title.to_string(),
             content: Some(std::sync::Arc::from("")),
             modified: false,
+            encoding: FileEncoding::Utf8,
             history,
             last_accessed: 0,
             ai_session_key: new_untitled_ai_session_key(),
@@ -67,7 +85,13 @@ impl TabInfo {
 
     /// 从文件创建标签（内容以 Arc 共享，避免额外 String 拷贝）
     /// Create tab from file (share body via Arc to avoid an extra String copy)
+    #[cfg(test)]
     pub fn from_file(path: PathBuf, content: &str) -> Self {
+        Self::from_file_with_encoding(path, content, FileEncoding::Utf8)
+    }
+
+    /// 从文件及检测到的编码创建标签 / Create a tab from a file and its detected encoding
+    pub fn from_file_with_encoding(path: PathBuf, content: &str, encoding: FileEncoding) -> Self {
         let title = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -77,10 +101,12 @@ impl TabInfo {
         let mut history = History::default();
         history.reset_with_content(content);
         Self {
+            id: new_tab_id(),
             path: Some(path),
             title,
             content: Some(std::sync::Arc::from(content)),
             modified: false,
+            encoding,
             history,
             last_accessed: 0,
             ai_session_key,
@@ -112,6 +138,19 @@ impl TabInfo {
         self.history = History::default();
         true
     }
+}
+
+/// 待保存关闭标签的不可变快照 / Immutable snapshot of a tab pending save-and-close
+#[derive(Clone, Debug, PartialEq)]
+pub struct CloseTabSnapshot {
+    /// 标签稳定标识 / Stable tab identity
+    pub tab_id: TabId,
+    /// 确认关闭时的文件路径 / File path at confirmation time
+    pub path: Option<PathBuf>,
+    /// 确认关闭时的正文 / Body at confirmation time
+    pub content: String,
+    /// 目标标签写回编码 / Target tab write encoding
+    pub encoding: FileEncoding,
 }
 
 /// 为未命名标签生成稳定 AI 会话键 / Generate a stable AI session key for untitled tabs

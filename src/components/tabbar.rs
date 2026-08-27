@@ -30,20 +30,28 @@ pub fn TabBar() -> Element {
     let aria_open_tabs_t = t("aria_open_tabs", lang);
 
     // 获取标签数据
-    let tabs_data: Vec<(usize, String, bool, bool)> = {
+    let tabs_data: Vec<(usize, crate::state::TabId, String, bool, bool)> = {
         let tabs = doc.tabs.read();
         let current_index = *doc.current_tab_index.read();
         tabs.iter()
             .enumerate()
-            .map(|(i, tab)| (i, tab.title.clone(), tab.modified, i == current_index))
+            .map(|(i, tab)| {
+                (
+                    i,
+                    tab.id,
+                    tab.title.clone(),
+                    tab.modified,
+                    i == current_index,
+                )
+            })
             .collect()
     };
 
     rsx! {
         div { class: "tabbar", role: "tablist", "aria-label": "{aria_open_tabs_t}",
-            for (index, title, modified, is_active) in tabs_data {
+            for (index, tab_id, title, modified, is_active) in tabs_data {
                 TabItem {
-                    key: "{index}",
+                    key: "{tab_id}",
                     index: index,
                     title: title,
                     modified: modified,

@@ -283,10 +283,7 @@ pub fn TableEditorModal() -> Element {
                             let markdown = data.to_markdown();
                             let mut state = state;
                             spawn(async move {
-                                EditorActions::with_flushed_format(&mut state, |s| {
-                                    EditorActions::insert_text(s, &markdown);
-                                })
-                                .await;
+                                EditorActions::insert_text_from_dom(&mut state, &markdown).await;
                                 AppActions::hide_table_editor(&mut state);
                             });
                             // 重置表格数据 / Reset table data

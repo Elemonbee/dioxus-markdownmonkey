@@ -5,11 +5,14 @@
 //! `AppState` keeps flat Signal fields for compatibility;
 //! these views hold the same Signal handles (Copy) for domain-oriented access.
 
+#[cfg(test)]
 use super::types::History as DocumentHistory;
 use super::types::{
-    AIConfig, ChatTurn, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme,
+    AIConfig, ChatTurn, CloseTabSnapshot, Language, OutlineItem, SaveStatus, SidebarTab, TabId,
+    TabInfo, Theme,
 };
 use super::AppState;
+use crate::utils::file_encoding::FileEncoding;
 use dioxus::prelude::Signal;
 use std::path::PathBuf;
 
@@ -19,22 +22,21 @@ pub struct DocumentState {
     pub current_file: Signal<Option<PathBuf>>,
     pub content: Signal<String>,
     pub modified: Signal<bool>,
+    #[cfg(test)]
     pub history: Signal<DocumentHistory>,
     pub save_status: Signal<SaveStatus>,
     pub last_saved: Signal<Option<std::time::Instant>>,
     pub tabs: Signal<Vec<TabInfo>>,
     pub current_tab_index: Signal<usize>,
     pub outline_items: Signal<Vec<OutlineItem>>,
-    pub file_encoding: Signal<String>,
+    pub file_encoding: Signal<FileEncoding>,
     pub content_revision: Signal<u64>,
     pub tab_access_clock: Signal<u64>,
     pub file_external_modified: Signal<bool>,
     pub file_watch_refresh_seq: Signal<u64>,
-    pub spell_check_enabled: Signal<bool>,
-    pub spell_check_results: Signal<Vec<crate::services::spellcheck::SpellError>>,
-    pub spell_error_index: Signal<usize>,
     pub show_close_confirm: Signal<bool>,
-    pub pending_close_tab_index: Signal<Option<usize>>,
+    pub pending_close_tab_id: Signal<Option<TabId>>,
+    pub pending_close_save_as: Signal<Option<CloseTabSnapshot>>,
     pub trigger_save_as: Signal<bool>,
     pub show_large_file_warning: Signal<bool>,
     pub file_size_bytes: Signal<usize>,
@@ -72,7 +74,7 @@ pub struct UiState {
     pub file_list: Signal<Vec<PathBuf>>,
     pub auto_save_enabled: Signal<bool>,
     pub auto_save_interval: Signal<u32>,
-    pub pdf_cjk_font_path: Signal<Option<String>>,
+    pub session_restore_enabled: Signal<bool>,
 }
 
 /// AI 域状态视图 / AI-domain state view
@@ -98,6 +100,7 @@ impl AppState {
             current_file: self.current_file,
             content: self.content,
             modified: self.modified,
+            #[cfg(test)]
             history: self.history,
             save_status: self.save_status,
             last_saved: self.last_saved,
@@ -109,11 +112,9 @@ impl AppState {
             tab_access_clock: self.tab_access_clock,
             file_external_modified: self.file_external_modified,
             file_watch_refresh_seq: self.file_watch_refresh_seq,
-            spell_check_enabled: self.spell_check_enabled,
-            spell_check_results: self.spell_check_results,
-            spell_error_index: self.spell_error_index,
             show_close_confirm: self.show_close_confirm,
-            pending_close_tab_index: self.pending_close_tab_index,
+            pending_close_tab_id: self.pending_close_tab_id,
+            pending_close_save_as: self.pending_close_save_as,
             trigger_save_as: self.trigger_save_as,
             show_large_file_warning: self.show_large_file_warning,
             file_size_bytes: self.file_size_bytes,
@@ -152,7 +153,7 @@ impl AppState {
             file_list: self.file_list,
             auto_save_enabled: self.auto_save_enabled,
             auto_save_interval: self.auto_save_interval,
-            pdf_cjk_font_path: self.pdf_cjk_font_path,
+            session_restore_enabled: self.session_restore_enabled,
         }
     }
 

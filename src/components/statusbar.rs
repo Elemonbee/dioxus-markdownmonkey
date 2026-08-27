@@ -2,7 +2,6 @@
 //!
 //! 遵循 PAL 架构：使用 Actions 处理业务逻辑
 
-use crate::actions::EditorActions;
 use crate::state::{AppState, SaveStatus};
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, *};
@@ -11,7 +10,7 @@ use dioxus::prelude::{ReadableExt, *};
 #[component]
 pub fn StatusBar() -> Element {
     // 所有 hooks 在顶部
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
     let doc = state.document();
     let ui = state.ui();
 
@@ -48,11 +47,6 @@ pub fn StatusBar() -> Element {
     let encoding_text = doc.file_encoding.read();
     let filetype_text = t("file_type_markdown", lang);
 
-    let spell_enabled = *doc.spell_check_enabled.read();
-    let spell_count = doc.spell_check_results.read().len();
-    let spell_idx = *doc.spell_error_index.read();
-    let spell_text = t("spell_errors", lang);
-
     // CSS 计算
     let modified_display = if modified { "" } else { "display: none;" };
 
@@ -74,20 +68,6 @@ pub fn StatusBar() -> Element {
                 span { class: "status-item", "{chars_label}: {char_count}" }
                 span { class: "status-item", "{words_label}: {word_count}" }
                 span { class: "status-item", "{read_label}: {read_time}{min_label}" }
-                if spell_enabled && spell_count > 0 {
-                    button {
-                        class: "status-item spell-errors",
-                        title: "{t(\"spell_nav_tooltip\", lang)}",
-                        onclick: move |_| {
-                            EditorActions::next_spell_error(&mut state);
-                        },
-                        oncontextmenu: move |e| {
-                            e.prevent_default();
-                            EditorActions::prev_spell_error(&mut state);
-                        },
-                        "{spell_idx + 1}/{spell_count} {spell_text}"
-                    }
-                }
             }
 
             // 右侧设置

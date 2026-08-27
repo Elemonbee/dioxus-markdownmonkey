@@ -9,22 +9,19 @@ A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framew
 
 ## ✨ Features
 
-- 📝 **Markdown Editing** - Live preview, syntax highlighting, Mermaid diagrams, KaTeX math; preview prefers bundled offline scripts, with CDN fallback
+- 📝 **Markdown Editing** - Live preview; raw HTML and dangerous URLs are filtered
 - 📁 **File Management** - Workspace folder, file-tree filter, recent files, multi-encoding (UTF-8/GBK/UTF-16); drag-and-drop `.md` / `.txt` to open
 - 🗂️ **Multi-Tab** - Edit multiple files with independent undo/redo per tab; confirm before closing unsaved tabs
 - 📋 **Outline View** - Auto-extract headings for quick navigation
 - 💾 **Session Restore** - On launch, restore tabs, active tab, workspace, and unsaved drafts (can be disabled in Settings)
 - 🤖 **AI Assistant** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter; stoppable streaming; **per-document chat history**
-- 📤 **Multi-Format Export** - Toolbar dropdown: HTML / PDF / DOCX / plain text
-  - HTML: bundles local images and offline Mermaid/KaTeX into `{stem}_files/`
-  - PDF / DOCX: embeds local PNG/JPEG for standalone `![alt](path)` lines; PDF detects system CJK fonts (optional path in Settings)
+- 📤 **Export** - HTML (optional local-image sidecar `{stem}_files/`) / plain text
 - 🔍 **Search & Replace** - In-document search (case / regex); workspace-wide search and replace-all (prefers open-tab buffers)
 - 🖼️ **Images** - Paste/drop images into the workspace and insert Markdown
 - 🎨 **Themes** - Dark / Light / Follow System; persisted window size; quick language toggle on the toolbar
 - 🌐 **i18n** - Simplified Chinese / American English
 - ⌨️ **Shortcuts** - See table below
 - 📊 **Table Editor** - Visual create and edit
-- ✅ **Spell Check** - English spelling + Chinese detection
 - 🔐 **Secure Storage** - API keys in the system keyring
 - 💾 **Auto Save** - Configurable interval; external modification detection; warn before opening large files (default 1 MB)
 
@@ -34,22 +31,15 @@ Versions reflect the current `Cargo.lock` / `Cargo.toml` resolution and may chan
 
 | Category | Technology | Version |
 |----------|-----------|---------|
-| **UI Framework** | Dioxus (desktop) | 0.7.9 |
+| **UI Framework** | Dioxus (desktop) | 0.7.10 |
 | **Language** | Rust | Edition 2021 |
 | **Markdown Parsing** | pulldown-cmark | 0.13 |
-| **HTML Sanitization** | ammonia | 4 |
-| **Syntax Highlighting** | syntect | 5 |
 | **HTTP** | reqwest (rustls) | 0.13 |
 | **Async Runtime** | tokio | 1 |
-| **Key Storage** | keyring | 4 |
+| **Key Storage** | keyring-core + native OS stores | 1 |
 | **Serialization** | serde + serde_json | 1.x |
 | **File Dialogs** | rfd | 0.17 |
-| **User Directories** | dirs | 6 |
 | **Logging** | tracing + tracing-subscriber | 0.1 / 0.3 |
-| **PDF Export** | printpdf (png/jpeg) | 0.9 |
-| **DOCX Export** | zip (OOXML) | 8 |
-| **File Watching** | notify | 8 |
-| **Clipboard** | arboard | 3 |
 
 ## 🏗️ Architecture
 
@@ -112,23 +102,20 @@ src/
 ├── services/
 │   ├── markdown.rs / ai.rs / auto_save.rs / image.rs
 │   ├── settings.rs / session.rs / recent_files.rs
-│   ├── file_watcher.rs / spellcheck.rs / syntax_highlight.rs
-│   ├── keyring_service.rs / theme_detector.rs
-│   └── export/             # HTML / PDF / DOCX / TXT
+│   ├── file_watcher.rs / keyring_service.rs / theme_detector.rs
+│   └── export/             # HTML / TXT
 │       ├── mod.rs / shared.rs
-│       ├── html.rs / pdf.rs / docx.rs / text.rs
+│       ├── html.rs / text.rs
 │
 ├── utils/
-│   ├── i18n.rs / file_utils.rs
+│   ├── i18n.rs / file_utils.rs / paths.rs / clipboard.rs
 │   ├── workspace_search.rs # Workspace search (open-tab buffers)
 │   └── replace.rs          # Replace helpers
 │
 └── styles/                 # CSS (variables / base / editor / toolbar / sidebar / modals)
 
 assets/
-├── editor_enhance.js
-├── dictionaries/
-└── vendor/                 # Offline Mermaid + KaTeX
+└── editor_enhance.js
 ```
 
 Settings and session data live under the user config directory in `MarkdownMonkey/` (e.g. `settings.json`, `session.json`, `session_drafts/`, `ai_history/`).
@@ -154,7 +141,7 @@ Verbose logging (Unix-like):
 RUST_LOG=markdownmonkey=debug,info cargo run
 ```
 
-Optional: set `MARKDOWNMONKEY_PDF_FONT` to a CJK font path for PDF export.
+```
 
 ### Test & Lint
 

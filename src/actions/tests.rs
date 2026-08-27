@@ -145,6 +145,32 @@ mod editor_actions_tests {
     }
 }
 
+/// 快捷键纯分发与对话框防重入测试 / Shortcut dispatch and dialog re-entrancy tests
+#[cfg(test)]
+mod shortcut_dispatch_tests {
+    use crate::actions::file_actions::try_begin_open_dialog;
+    use crate::actions::shortcut_actions::{ShortcutAction, ShortcutActions};
+
+    /// Ctrl+O 应映射到唯一打开文件动作 / Ctrl+O maps to the open-file action
+    #[test]
+    fn test_ctrl_o_dispatches_open_file() {
+        assert_eq!(
+            ShortcutActions::find_action("o", true, false, false),
+            Some(ShortcutAction::OpenFile)
+        );
+        assert_eq!(ShortcutActions::find_action("o", false, false, false), None);
+    }
+
+    /// 打开对话框守卫存活期间应拒绝连续触发 / Repeated triggers are rejected while the dialog guard is alive
+    #[test]
+    fn test_open_dialog_rejects_reentry() {
+        let guard = try_begin_open_dialog().expect("first dialog should acquire guard");
+        assert!(try_begin_open_dialog().is_none());
+        drop(guard);
+        assert!(try_begin_open_dialog().is_some());
+    }
+}
+
 /// 导出服务测试 / Export Service Tests
 #[cfg(test)]
 mod export_tests {
@@ -171,23 +197,6 @@ mod export_tests {
     }
 
     #[test]
-    fn test_export_docx() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("test.docx");
-        ExportService::export_to_docx("# Title\n\nParagraph text\n- List item", &path).unwrap();
-        assert!(path.exists());
-        assert!(std::fs::metadata(&path).unwrap().len() > 0);
-    }
-
-    #[test]
-    fn test_export_pdf() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("test.pdf");
-        // PDF 导出可能因字体不可用而失败，但不应 panic
-        let _ = ExportService::export_to_pdf("# Test\n\nHello 世界", &path);
-    }
-
-    #[test]
     fn test_export_html_with_markdown() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test2.html");
@@ -200,31 +209,12 @@ mod export_tests {
     }
 
     #[test]
-    fn test_export_docx_with_chinese() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("chinese.docx");
-        let md = "# 中文标题\n\n这是中文段落内容\n\n- 列表项1\n- 列表项2";
-        ExportService::export_to_docx(md, &path).unwrap();
-        assert!(path.exists());
-        let size = std::fs::metadata(&path).unwrap().len();
-        assert!(size > 500, "DOCX should have meaningful content");
-    }
-
-    #[test]
     fn test_export_text_empty() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("empty.txt");
         ExportService::export_to_text("", &path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "");
-    }
-
-    #[test]
-    fn test_export_docx_empty() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("empty.docx");
-        ExportService::export_to_docx("", &path).unwrap();
-        assert!(path.exists());
     }
 }
 
@@ -488,6 +478,105 @@ mod editor_actions_integration_tests {
             // 应该插入 placeholder / Should insert placeholder
             assert!(content.contains("**"));
             assert!(content.len() > "Hello".len());
+            let start = *state.cursor_start.read();
+            let end = *state.cursor_end.read();
+            assert_eq!(&content[start..end], "文本");
+        });
+    }
+
+    /// ASCII 选区格式化后应保留正文选区 / ASCII formatting preserves the body selection
+    #[test]
+    fn test_ascii_selection_is_preserved_after_formatting() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("abc def".to_string());
+            *state.cursor_start.write() = 4;
+            *state.cursor_end.write() = 7;
+
+            EditorActions::insert_bold(&mut state);
+
+            assert_eq!(*state.content.read(), "abc **def**");
+            assert_eq!(
+                (*state.cursor_start.read(), *state.cursor_end.read()),
+                (6, 9)
+            );
+        });
+    }
+
+    /// 中文字节选区格式化不得错位 / Chinese byte selections must format without shifting
+    #[test]
+    fn test_chinese_selection_uses_utf8_byte_offsets() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("甲中文乙".to_string());
+            *state.cursor_start.write() = 3;
+            *state.cursor_end.write() = 9;
+
+            EditorActions::insert_bold(&mut state);
+
+            assert_eq!(*state.content.read(), "甲**中文**乙");
+            assert_eq!(
+                (*state.cursor_start.read(), *state.cursor_end.read()),
+                (5, 11)
+            );
+        });
+    }
+
+    /// Emoji 选区格式化不得切开代理对或 UTF-8 字符 / Emoji formatting must not split surrogate pairs or UTF-8 characters
+    #[test]
+    fn test_emoji_selection_uses_utf8_byte_offsets() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("a😀b".to_string());
+            *state.cursor_start.write() = 1;
+            *state.cursor_end.write() = 5;
+
+            EditorActions::insert_code(&mut state);
+
+            assert_eq!(*state.content.read(), "a`😀`b");
+            assert_eq!(
+                (*state.cursor_start.read(), *state.cursor_end.read()),
+                (2, 6)
+            );
+        });
+    }
+
+    /// 反向选区应规范化后安全格式化 / Reversed selections are normalized before safe formatting
+    #[test]
+    fn test_reversed_unicode_selection_is_normalized() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("甲中文乙".to_string());
+            *state.cursor_start.write() = 9;
+            *state.cursor_end.write() = 3;
+
+            EditorActions::insert_italic(&mut state);
+
+            assert_eq!(*state.content.read(), "甲*中文*乙");
+            assert_eq!(
+                (*state.cursor_start.read(), *state.cursor_end.read()),
+                (4, 10)
+            );
+        });
+    }
+
+    /// 非法和越界字节偏移应向字符边界钳制且不 panic
+    /// Invalid and out-of-range byte offsets clamp to character boundaries without panicking
+    #[test]
+    fn test_invalid_unicode_boundaries_are_clamped() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("a😀b".to_string());
+            *state.cursor_start.write() = 2;
+            *state.cursor_end.write() = 999;
+
+            EditorActions::insert_bold(&mut state);
+
+            assert_eq!(*state.content.read(), "a**😀b**");
+            assert_eq!(
+                (*state.cursor_start.read(), *state.cursor_end.read()),
+                (3, 8)
+            );
         });
     }
 
@@ -617,57 +706,6 @@ mod editor_actions_integration_tests {
 
             EditorActions::toggle_sync_scroll(&mut state);
             assert!(!*state.sync_scroll.read());
-        });
-    }
-
-    #[test]
-    fn test_toggle_spell_check_enables_and_runs() {
-        with_runtime(|| {
-            let mut state = AppState::new();
-            state.update_content("teh recieve occured".to_string());
-            assert!(!*state.spell_check_enabled.read());
-            assert!(state.spell_check_results.read().is_empty());
-
-            // 启用拼写检查 / Enable spell check
-            EditorActions::toggle_spell_check(&mut state);
-            assert!(*state.spell_check_enabled.read());
-            assert!(!state.spell_check_results.read().is_empty());
-
-            // 禁用拼写检查 / Disable spell check
-            EditorActions::toggle_spell_check(&mut state);
-            assert!(!*state.spell_check_enabled.read());
-            assert!(state.spell_check_results.read().is_empty());
-        });
-    }
-
-    #[test]
-    fn test_next_prev_spell_error_navigation() {
-        with_runtime(|| {
-            let mut state = AppState::new();
-            state.update_content("teh recieve occured".to_string());
-            *state.spell_check_enabled.write() = true;
-            state.run_spell_check();
-
-            let total = state.spell_check_results.read().len();
-            assert!(total >= 2, "应检测到至少 2 个拼写错误");
-
-            // 向后导航 / Navigate forward
-            EditorActions::next_spell_error(&mut state);
-            assert_eq!(*state.spell_error_index.read(), 1);
-
-            // 循环 / Wrap around
-            for _ in 0..total {
-                EditorActions::next_spell_error(&mut state);
-            }
-            assert_eq!(*state.spell_error_index.read(), 1);
-
-            // 向前导航 / Navigate backward
-            EditorActions::prev_spell_error(&mut state);
-            assert_eq!(*state.spell_error_index.read(), 0);
-
-            // 从头部循环 / Wrap from head
-            EditorActions::prev_spell_error(&mut state);
-            assert_eq!(*state.spell_error_index.read(), total - 1);
         });
     }
 
@@ -958,12 +996,102 @@ mod app_actions_integration_tests {
     }
 }
 
+/// SearchActions / SettingsActions 集成测试
+/// SearchActions / SettingsActions integration tests
+#[cfg(test)]
+mod search_settings_actions_tests {
+    use super::with_runtime;
+    use crate::actions::{SearchActions, SettingsActions};
+    use crate::state::AppState;
+    use dioxus::prelude::{ReadableExt, WritableExt};
+
+    /// 查询应重算匹配并支持循环导航 / Query recounts matches and wraps navigation
+    #[test]
+    fn test_search_query_and_navigation() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("foo bar foo".to_string());
+
+            SearchActions::show(&mut state);
+            assert!(*state.show_search.read());
+
+            SearchActions::set_query(&mut state, "foo".to_string());
+            assert_eq!(*state.search_total.read(), 2);
+            assert_eq!(*state.search_index.read(), 1);
+
+            SearchActions::next_match(&mut state);
+            assert_eq!(*state.search_index.read(), 2);
+            SearchActions::next_match(&mut state);
+            assert_eq!(*state.search_index.read(), 1);
+            SearchActions::prev_match(&mut state);
+            assert_eq!(*state.search_index.read(), 2);
+
+            SearchActions::set_query(&mut state, String::new());
+            assert_eq!(*state.search_total.read(), 0);
+            assert_eq!(*state.search_index.read(), 0);
+
+            SearchActions::hide(&mut state);
+            assert!(!*state.show_search.read());
+        });
+    }
+
+    /// 工作区搜索开关 / Toggle workspace search overlay
+    #[test]
+    fn test_search_show_global() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            SearchActions::show_global(&mut state);
+            assert!(*state.show_global_search.read());
+        });
+    }
+
+    /// 会话恢复与 AI 字段写入 / Session restore and AI field writes
+    #[test]
+    fn test_settings_session_and_ai() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            SettingsActions::set_session_restore(&mut state, false);
+            assert!(!*state.session_restore_enabled.read());
+
+            {
+                let mut config = state.ai_config.write();
+                config.enabled = false;
+                config.base_url.clear();
+                config.model.clear();
+            }
+            SettingsActions::toggle_ai_enabled(&mut state);
+            {
+                let config = state.ai_config.read();
+                assert!(config.enabled);
+                assert!(!config.base_url.is_empty());
+                assert!(!config.model.is_empty());
+            }
+
+            SettingsActions::set_ai_temperature(&mut state, 2.5);
+            assert_eq!(state.ai_config.read().temperature, 1.0);
+
+            SettingsActions::set_ai_model(&mut state, "custom-model".to_string());
+            assert_eq!(state.ai_config.read().model, "custom-model");
+
+            SettingsActions::reset_editor_defaults(&mut state);
+            assert_eq!(*state.font_size.read(), 16);
+            assert_eq!(*state.preview_font_size.read(), 16);
+            assert!(!*state.word_wrap.read());
+            assert!(*state.line_numbers.read());
+            assert!(*state.sync_scroll.read());
+            assert!(*state.session_restore_enabled.read());
+            assert_eq!(*state.sidebar_width.read(), 280);
+        });
+    }
+}
+
 /// FileActions 集成测试 / FileActions integration tests
 #[cfg(test)]
 mod file_actions_integration_tests {
     use super::with_runtime;
     use crate::actions::{AppActions, FileActions};
     use crate::state::AppState;
+    use crate::utils::file_encoding::{decode_bytes, encode_text, FileEncoding};
     use dioxus::prelude::{ReadableExt, WritableExt};
     use std::fs;
     use tempfile::TempDir;
@@ -980,7 +1108,7 @@ mod file_actions_integration_tests {
 
             assert_eq!(*state.current_file.read(), Some(path));
             assert_eq!(*state.content.read(), "# Hello UTF-8\n\nSome content");
-            assert_eq!(*state.file_encoding.read(), "UTF-8");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf8);
             assert!(!*state.modified.read());
         });
     }
@@ -998,7 +1126,7 @@ mod file_actions_integration_tests {
             FileActions::open_file(&mut state, path).unwrap();
 
             assert_eq!(*state.content.read(), "Hello BOM");
-            assert_eq!(*state.file_encoding.read(), "UTF-8 BOM");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf8Bom);
         });
     }
 
@@ -1015,7 +1143,7 @@ mod file_actions_integration_tests {
             FileActions::open_file(&mut state, path).unwrap();
 
             assert_eq!(*state.content.read(), "中文内容");
-            assert_eq!(*state.file_encoding.read(), "GBK");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Gbk);
         });
     }
 
@@ -1038,7 +1166,7 @@ mod file_actions_integration_tests {
             FileActions::open_file(&mut state, path).unwrap();
 
             assert_eq!(*state.content.read(), "Hello");
-            assert_eq!(*state.file_encoding.read(), "UTF-16 LE");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf16Le);
         });
     }
 
@@ -1061,7 +1189,123 @@ mod file_actions_integration_tests {
             FileActions::open_file(&mut state, path).unwrap();
 
             assert_eq!(*state.content.read(), "Hello");
-            assert_eq!(*state.file_encoding.read(), "UTF-16 BE");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf16Be);
+        });
+    }
+
+    /// 手动保存应保持每种原始编码及 BOM / Manual save preserves every original encoding and BOM
+    #[test]
+    fn test_manual_save_preserves_encoding_and_bom() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let cases = [
+                FileEncoding::Utf8,
+                FileEncoding::Utf8Bom,
+                FileEncoding::Utf16Le,
+                FileEncoding::Utf16Be,
+                FileEncoding::Gbk,
+            ];
+
+            for (index, encoding) in cases.into_iter().enumerate() {
+                let path = temp.path().join(format!("preserve-{index}.md"));
+                fs::write(&path, encode_text("原文", encoding).unwrap()).unwrap();
+
+                let mut state = AppState::new();
+                FileActions::open_file(&mut state, path.clone()).unwrap();
+                state.update_content("保存后的中文".to_string());
+                FileActions::save_current_file(&mut state).unwrap();
+
+                let bytes = fs::read(&path).unwrap();
+                let (content, detected) = decode_bytes(&bytes).unwrap();
+                assert_eq!(content, "保存后的中文");
+                assert_eq!(detected, encoding);
+            }
+        });
+    }
+
+    /// 另存为默认沿用当前标签编码 / Save As preserves the active tab encoding by default
+    #[test]
+    fn test_save_as_preserves_active_tab_encoding() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let source = temp.path().join("source.md");
+            let target = temp.path().join("target.md");
+            fs::write(
+                &source,
+                encode_text("带 BOM", FileEncoding::Utf16Be).unwrap(),
+            )
+            .unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, source).unwrap();
+            state.update_content("另存正文".to_string());
+            FileActions::save_as(&mut state, target.clone()).unwrap();
+
+            let (content, encoding) = decode_bytes(&fs::read(target).unwrap()).unwrap();
+            assert_eq!(content, "另存正文");
+            assert_eq!(encoding, FileEncoding::Utf16Be);
+        });
+    }
+
+    /// 切换标签应恢复各自编码并据此保存 / Switching tabs restores and saves each tab with its own encoding
+    #[test]
+    fn test_cross_tab_encoding_isolation() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let utf8_bom_path = temp.path().join("utf8-bom.md");
+            let gbk_path = temp.path().join("gbk.md");
+            fs::write(
+                &utf8_bom_path,
+                encode_text("一", FileEncoding::Utf8Bom).unwrap(),
+            )
+            .unwrap();
+            fs::write(&gbk_path, encode_text("二", FileEncoding::Gbk).unwrap()).unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, utf8_bom_path.clone()).unwrap();
+            let utf8_tab = *state.current_tab_index.read();
+            FileActions::open_file(&mut state, gbk_path.clone()).unwrap();
+            let gbk_tab = *state.current_tab_index.read();
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Gbk);
+
+            FileActions::switch_tab(&mut state, utf8_tab);
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf8Bom);
+            state.update_content("甲".to_string());
+            FileActions::save_current_file(&mut state).unwrap();
+
+            FileActions::switch_tab(&mut state, gbk_tab);
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Gbk);
+            state.update_content("乙".to_string());
+            FileActions::save_current_file(&mut state).unwrap();
+
+            assert_eq!(
+                decode_bytes(&fs::read(utf8_bom_path).unwrap()).unwrap(),
+                ("甲".to_string(), FileEncoding::Utf8Bom)
+            );
+            assert_eq!(
+                decode_bytes(&fs::read(gbk_path).unwrap()).unwrap(),
+                ("乙".to_string(), FileEncoding::Gbk)
+            );
+        });
+    }
+
+    /// GBK 手动保存不可静默替换字符 / GBK manual save must not silently replace characters
+    #[test]
+    fn test_gbk_save_rejects_unrepresentable_characters() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("strict-gbk.md");
+            let original = encode_text("原文", FileEncoding::Gbk).unwrap();
+            fs::write(&path, &original).unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, path.clone()).unwrap();
+            state.update_content("不能保存 😀".to_string());
+
+            assert!(FileActions::save_current_file(&mut state).is_err());
+            assert_eq!(fs::read(path).unwrap(), original);
+            assert!(*state.modified.read());
+            assert_eq!(*state.save_status.read(), crate::state::SaveStatus::Unsaved);
         });
     }
 
@@ -1152,12 +1396,12 @@ mod file_actions_integration_tests {
         with_runtime(|| {
             let mut state = AppState::new();
             state.update_content("Existing content".to_string());
-            *state.file_encoding.write() = "GBK".to_string();
+            *state.file_encoding.write() = FileEncoding::Gbk;
 
             FileActions::new_tab(&mut state);
 
             assert!(state.content.read().is_empty());
-            assert_eq!(*state.file_encoding.read(), "UTF-8");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf8);
             assert!(state.current_file.read().is_none());
         });
     }
@@ -1547,7 +1791,10 @@ mod file_actions_integration_tests {
             FileActions::request_close_tab(&mut state, idx);
             let doc = state.document();
             assert!(*doc.show_close_confirm.read());
-            assert_eq!(*doc.pending_close_tab_index.read(), Some(idx));
+            assert_eq!(
+                *doc.pending_close_tab_id.read(),
+                doc.tabs.read().get(idx).map(|tab| tab.id)
+            );
         });
     }
 
@@ -1565,8 +1812,463 @@ mod file_actions_integration_tests {
             FileActions::discard_and_close_tab(&mut state, idx);
             let doc = state.document();
             assert!(!*doc.show_close_confirm.read());
-            assert!(doc.pending_close_tab_index.read().is_none());
+            assert!(doc.pending_close_tab_id.read().is_none());
             assert_eq!(doc.tabs.read().len(), 1);
+        });
+    }
+
+    /// 当前标签关闭判断必须读取实时 Signal，而非可能过期的 TabInfo
+    /// Current-tab close checks the live Signal instead of possibly stale TabInfo
+    #[test]
+    fn test_request_close_current_uses_live_modified_signal() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("live dirty".to_string());
+            let index = *state.current_tab_index.read();
+            state.tabs.write()[index].modified = false;
+            let tab_id = state.tabs.read()[index].id;
+
+            FileActions::request_close_tab(&mut state, index);
+
+            assert!(*state.show_close_confirm.read());
+            assert_eq!(*state.pending_close_tab_id.read(), Some(tab_id));
+        });
+    }
+
+    /// 非当前标签只使用自身 TabInfo.modified，不受当前标签修改状态影响
+    /// Non-current close uses only its TabInfo.modified, ignoring active-tab dirtiness
+    #[test]
+    fn test_request_close_non_current_ignores_active_modified() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            FileActions::new_tab(&mut state);
+            state.update_content("active dirty".to_string());
+            state.tabs.write()[0].modified = false;
+
+            FileActions::request_close_tab(&mut state, 0);
+
+            assert_eq!(state.tabs.read().len(), 1);
+            assert!(!*state.show_close_confirm.read());
+            assert_eq!(state.content.read().as_str(), "active dirty");
+            assert!(*state.modified.read());
+        });
+    }
+
+    /// 非当前已修改标签应按其稳定标识进入确认状态
+    /// A modified non-current tab enters confirmation by stable identity
+    #[test]
+    fn test_request_close_non_current_modified_target() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("background dirty".to_string());
+            let target_id = state.tabs.read()[0].id;
+            FileActions::new_tab(&mut state);
+
+            FileActions::request_close_tab(&mut state, 0);
+
+            assert!(*state.show_close_confirm.read());
+            assert_eq!(*state.pending_close_tab_id.read(), Some(target_id));
+        });
+    }
+
+    /// 不保存关闭后台标签不得清除活动标签的 modified
+    /// Discard-closing a background tab must preserve the active tab's modified flag
+    #[test]
+    fn test_discard_background_tab_preserves_other_modified() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("target dirty".to_string());
+            let target_id = state.tabs.read()[0].id;
+            FileActions::new_tab(&mut state);
+            state.update_content("other dirty".to_string());
+
+            FileActions::discard_and_close_tab_by_id(&mut state, target_id);
+
+            assert_eq!(state.tabs.read().len(), 1);
+            assert_eq!(state.content.read().as_str(), "other dirty");
+            assert!(*state.modified.read());
+        });
+    }
+
+    /// 无路径关闭应排入快照型另存为意图，取消后保留标签
+    /// Untitled close queues a snapshot Save-As intent and cancel keeps the tab
+    #[test]
+    fn test_untitled_close_intent_cancel_keeps_tab() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.update_content("draft snapshot".to_string());
+            let tab_id = state.tabs.read()[0].id;
+            state.save_current_tab_content();
+            let snapshot = FileActions::close_tab_snapshot(&state, tab_id).unwrap();
+            assert!(snapshot.path.is_none());
+
+            FileActions::queue_close_save_as(&mut state, snapshot.clone());
+            assert!(*state.trigger_save_as.read());
+            assert_eq!(state.pending_close_save_as.read().as_ref(), Some(&snapshot));
+
+            FileActions::cancel_close_request(&mut state);
+            assert_eq!(state.tabs.read().len(), 1);
+            assert_eq!(state.content.read().as_str(), "draft snapshot");
+            assert!(*state.modified.read());
+            assert!(state.pending_close_save_as.read().is_none());
+        });
+    }
+
+    /// 关闭型另存为失败时必须保留目标标签和未保存状态
+    /// Failed close Save-As must retain the target tab and unsaved state
+    #[test]
+    fn test_close_save_as_failure_keeps_tab() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let mut state = AppState::new();
+            state.update_content("cannot lose me".to_string());
+            let tab_id = state.tabs.read()[0].id;
+            state.save_current_tab_content();
+            let snapshot = FileActions::close_tab_snapshot(&state, tab_id).unwrap();
+
+            let invalid_path = temp.path().join("missing-parent").join("file.md");
+            let result = FileActions::save_close_snapshot_as(&mut state, snapshot, invalid_path);
+
+            assert!(result.is_err());
+            assert_eq!(state.tabs.read().len(), 1);
+            assert_eq!(state.content.read().as_str(), "cannot lose me");
+            assert!(*state.modified.read());
+        });
+    }
+
+    /// 单个无路径标签另存为成功后应重置为空白标签
+    /// A single untitled tab resets to a blank tab after successful Save As
+    #[test]
+    fn test_single_untitled_save_as_success_closes_document() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let output = temp.path().join("single.md");
+            let mut state = AppState::new();
+            state.update_content("single draft".to_string());
+            state.save_current_tab_content();
+            let tab_id = state.tabs.read()[0].id;
+            let snapshot = FileActions::close_tab_snapshot(&state, tab_id).unwrap();
+
+            FileActions::save_close_snapshot_as(&mut state, snapshot, output.clone()).unwrap();
+
+            assert_eq!(fs::read_to_string(output).unwrap(), "single draft");
+            assert_eq!(state.tabs.read().len(), 1);
+            assert!(state.content.read().is_empty());
+            assert!(!*state.modified.read());
+            assert_ne!(state.tabs.read()[0].id, tab_id);
+        });
+    }
+
+    /// 保存关闭使用稳定标识和目标编码，即使较早索引被移除也不会写错标签
+    /// Save-and-close uses stable identity and target encoding after earlier indices shift
+    #[test]
+    fn test_close_save_as_survives_index_shift_and_preserves_encoding() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let output = temp.path().join("shifted.md");
+            let mut state = AppState::new();
+            FileActions::new_tab(&mut state);
+            state.update_content("目标正文".to_string());
+            *state.file_encoding.write() = FileEncoding::Utf16Le;
+            state.save_current_tab_content();
+            let target_id = state.tabs.read()[1].id;
+            let snapshot = FileActions::close_tab_snapshot(&state, target_id).unwrap();
+            FileActions::new_tab(&mut state);
+            state.update_content("other dirty".to_string());
+
+            state.close_tab(0);
+            FileActions::save_close_snapshot_as(&mut state, snapshot, output.clone()).unwrap();
+
+            assert!(state.tabs.read().iter().all(|tab| tab.id != target_id));
+            assert_eq!(
+                decode_bytes(&fs::read(output).unwrap()).unwrap(),
+                ("目标正文".to_string(), FileEncoding::Utf16Le)
+            );
+            assert_eq!(state.content.read().as_str(), "other dirty");
+            assert!(*state.modified.read());
+        });
+    }
+
+    /// 有路径后台标签按其快照和编码保存，不切换也不覆盖活动标签
+    /// A pathed background tab saves its snapshot and encoding without switching or overwriting active state
+    #[test]
+    fn test_pathed_background_save_and_close_uses_target_snapshot() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("background-gbk.md");
+            fs::write(&path, encode_text("旧正文", FileEncoding::Gbk).unwrap()).unwrap();
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, path.clone()).unwrap();
+            state.update_content("后台目标".to_string());
+            state.save_current_tab_content();
+            let target_id = state.tabs.read()[1].id;
+            let snapshot = FileActions::close_tab_snapshot(&state, target_id).unwrap();
+            FileActions::new_tab(&mut state);
+            state.update_content("活动标签修改".to_string());
+
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(FileActions::save_pathed_snapshot_and_close(
+                    &mut state,
+                    snapshot,
+                    path.clone(),
+                ))
+                .unwrap();
+
+            assert!(state.tabs.read().iter().all(|tab| tab.id != target_id));
+            assert_eq!(
+                decode_bytes(&fs::read(path).unwrap()).unwrap(),
+                ("后台目标".to_string(), FileEncoding::Gbk)
+            );
+            assert_eq!(state.content.read().as_str(), "活动标签修改");
+            assert!(*state.modified.read());
+        });
+    }
+
+    /// 外部 GBK 重载后的正文与编码应写入稳定标签并跨切换保留
+    /// External GBK reload persists content and encoding in the stable tab across switches
+    #[test]
+    fn test_external_gbk_reload_survives_tab_switch() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let reloaded_path = temp.path().join("reloaded.md");
+            let other_path = temp.path().join("other.md");
+            fs::write(&reloaded_path, "before").unwrap();
+            fs::write(&other_path, "other").unwrap();
+
+            let mut state = AppState::new();
+            FileActions::open_file(&mut state, reloaded_path.clone()).unwrap();
+            let reload_index = *state.current_tab_index.read();
+            let reload_id = state.tabs.read()[reload_index].id;
+            FileActions::open_file(&mut state, other_path).unwrap();
+            FileActions::switch_tab(&mut state, reload_index);
+            fs::write(
+                &reloaded_path,
+                encode_text("外部新内容", FileEncoding::Gbk).unwrap(),
+            )
+            .unwrap();
+
+            FileActions::reload_current_file(&mut state).unwrap();
+            assert_eq!(state.content.read().as_str(), "外部新内容");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Gbk);
+            assert_eq!(state.tabs.read()[reload_index].id, reload_id);
+            assert_eq!(state.tabs.read()[reload_index].content_str(), "外部新内容");
+            assert_eq!(state.tabs.read()[reload_index].encoding, FileEncoding::Gbk);
+
+            FileActions::switch_tab(&mut state, reload_index + 1);
+            FileActions::switch_tab(&mut state, reload_index);
+            assert_eq!(state.content.read().as_str(), "外部新内容");
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Gbk);
+        });
+    }
+
+    /// 另存为应同步活动 Signals 与稳定目标标签的路径、标题和编码
+    /// Save As synchronizes path, title, and encoding for active signals and the stable target tab
+    #[test]
+    fn test_save_as_synchronizes_target_tab_metadata() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let target = temp.path().join("renamed-target.md");
+            let mut state = AppState::new();
+            state.update_content("另存正文".to_string());
+            *state.file_encoding.write() = FileEncoding::Utf16Le;
+            let tab_id = state.tabs.read()[0].id;
+
+            FileActions::save_as(&mut state, target.clone()).unwrap();
+
+            let tab = state
+                .tabs
+                .read()
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .unwrap()
+                .clone();
+            assert_eq!(*state.current_file.read(), Some(target.clone()));
+            assert_eq!(*state.file_encoding.read(), FileEncoding::Utf16Le);
+            assert_eq!(tab.path, Some(target));
+            assert_eq!(tab.title, "renamed-target");
+            assert_eq!(tab.encoding, FileEncoding::Utf16Le);
+            assert!(!tab.modified);
+        });
+    }
+
+    /// 重命名当前文件应保持稳定标签并同步当前路径与监控刷新
+    /// Renaming the active file preserves stable identity and synchronizes path and watcher refresh
+    #[test]
+    fn test_rename_current_file_updates_tab_and_watcher() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let old_path = temp.path().join("old.md");
+            fs::write(&old_path, "body").unwrap();
+            let mut state = AppState::new();
+            FileActions::set_workspace(&mut state, temp.path().to_path_buf());
+            FileActions::open_file(&mut state, old_path.clone()).unwrap();
+            let tab_id = state.tabs.read()[*state.current_tab_index.read()].id;
+            let watch_before = *state.file_watch_refresh_seq.read();
+
+            let new_path = FileActions::rename_file(&mut state, &old_path, "new.md").unwrap();
+
+            assert_eq!(*state.current_file.read(), Some(new_path.clone()));
+            let tab = state
+                .tabs
+                .read()
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .unwrap()
+                .clone();
+            assert_eq!(tab.path, Some(new_path));
+            assert_eq!(tab.title, "new");
+            assert!(*state.file_watch_refresh_seq.read() > watch_before);
+        });
+    }
+
+    /// 重命名目录应批量迁移当前与后台标签以及工作区根
+    /// Renaming a directory migrates active and background tabs plus the workspace root in bulk
+    #[test]
+    fn test_rename_directory_updates_all_tabs_and_workspace_root() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let old_root = temp.path().join("old-root");
+            fs::create_dir(&old_root).unwrap();
+            let first = old_root.join("first.md");
+            let second = old_root.join("nested").join("second.md");
+            fs::create_dir(old_root.join("nested")).unwrap();
+            fs::write(&first, "first").unwrap();
+            fs::write(&second, "second").unwrap();
+            let mut state = AppState::new();
+            FileActions::set_workspace(&mut state, old_root.clone());
+            FileActions::open_file(&mut state, first).unwrap();
+            FileActions::open_file(&mut state, second).unwrap();
+            let ids: Vec<_> = state
+                .tabs
+                .read()
+                .iter()
+                .filter(|tab| tab.path.is_some())
+                .map(|tab| tab.id)
+                .collect();
+
+            let new_root = FileActions::rename_file(&mut state, &old_root, "new-root").unwrap();
+
+            assert_eq!(*state.workspace_root.read(), Some(new_root.clone()));
+            assert!(state
+                .tabs
+                .read()
+                .iter()
+                .filter(|tab| ids.contains(&tab.id))
+                .all(|tab| tab
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| path.starts_with(&new_root))));
+            assert!(state
+                .current_file
+                .read()
+                .as_ref()
+                .is_some_and(|path| path.starts_with(&new_root)));
+            assert_eq!(state.file_list.read().len(), 2);
+        });
+    }
+
+    /// 删除当前文件应保留内存正文、脱离路径并标记未保存
+    /// Deleting the active file preserves memory content, detaches its path, and marks it unsaved
+    #[test]
+    fn test_delete_current_file_preserves_buffer() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("current.md");
+            fs::write(&path, "disk").unwrap();
+            let mut state = AppState::new();
+            FileActions::set_workspace(&mut state, temp.path().to_path_buf());
+            FileActions::open_file(&mut state, path.clone()).unwrap();
+            state.update_content("unsaved memory".to_string());
+            let tab_id = state.tabs.read()[*state.current_tab_index.read()].id;
+
+            FileActions::delete_file(&mut state, &path).unwrap();
+
+            assert_eq!(state.content.read().as_str(), "unsaved memory");
+            assert!(state.current_file.read().is_none());
+            assert!(*state.modified.read());
+            let tab = state
+                .tabs
+                .read()
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .unwrap()
+                .clone();
+            assert!(tab.path.is_none());
+            assert!(tab.modified);
+            assert_eq!(tab.content_str(), "unsaved memory");
+        });
+    }
+
+    /// 删除后台文件不得改变当前标签，但应将目标标签安全转为未命名缓冲区
+    /// Deleting a background file keeps the active tab while safely detaching the target buffer
+    #[test]
+    fn test_delete_non_current_file_preserves_target_buffer() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let target = temp.path().join("target.md");
+            let active = temp.path().join("active.md");
+            fs::write(&target, "target body").unwrap();
+            fs::write(&active, "active body").unwrap();
+            let mut state = AppState::new();
+            FileActions::set_workspace(&mut state, temp.path().to_path_buf());
+            FileActions::open_file(&mut state, target.clone()).unwrap();
+            let target_id = state.tabs.read()[*state.current_tab_index.read()].id;
+            FileActions::open_file(&mut state, active.clone()).unwrap();
+
+            FileActions::delete_file(&mut state, &target).unwrap();
+
+            assert_eq!(*state.current_file.read(), Some(active));
+            assert_eq!(state.content.read().as_str(), "active body");
+            let tab = state
+                .tabs
+                .read()
+                .iter()
+                .find(|tab| tab.id == target_id)
+                .unwrap()
+                .clone();
+            assert!(tab.path.is_none());
+            assert!(tab.modified);
+            assert_eq!(tab.content_str(), "target body");
+        });
+    }
+
+    /// 删除目录应批量保留受影响标签正文并清空被删除的工作区根
+    /// Deleting a directory preserves all affected tab bodies and clears a deleted workspace root
+    #[test]
+    fn test_delete_directory_detaches_tabs_and_clears_workspace() {
+        with_runtime(|| {
+            let temp = TempDir::new().unwrap();
+            let root = temp.path().join("workspace");
+            fs::create_dir(&root).unwrap();
+            let first = root.join("first.md");
+            let second = root.join("second.md");
+            fs::write(&first, "first body").unwrap();
+            fs::write(&second, "second body").unwrap();
+            let mut state = AppState::new();
+            FileActions::set_workspace(&mut state, root.clone());
+            FileActions::open_file(&mut state, first).unwrap();
+            FileActions::open_file(&mut state, second).unwrap();
+            let affected_ids: Vec<_> = state
+                .tabs
+                .read()
+                .iter()
+                .filter(|tab| tab.path.is_some())
+                .map(|tab| tab.id)
+                .collect();
+
+            FileActions::delete_file(&mut state, &root).unwrap();
+
+            assert!(state.workspace_root.read().is_none());
+            assert!(state.file_list.read().is_empty());
+            let tabs = state.tabs.read();
+            for tab in tabs.iter().filter(|tab| affected_ids.contains(&tab.id)) {
+                assert!(tab.path.is_none());
+                assert!(tab.modified);
+                assert!(!tab.content_str().is_empty());
+            }
+            assert!(state.current_file.read().is_none());
+            assert!(*state.modified.read());
         });
     }
 

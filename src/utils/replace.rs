@@ -73,6 +73,60 @@ pub fn replace_all_in_text(
     }
 }
 
+/// 替换第 n 个匹配（1-based；非法索引则原样返回）
+/// Replace the n-th match (1-based; returns original text if the index is invalid)
+pub fn replace_nth_match(
+    content: &str,
+    query: &str,
+    replacement: &str,
+    index: usize,
+    case_insensitive: bool,
+    use_regex: bool,
+) -> String {
+    if index == 0 || content.is_empty() || query.is_empty() {
+        return content.to_string();
+    }
+    if use_regex {
+        let Ok(re) = build_regex(query, case_insensitive) else {
+            return content.to_string();
+        };
+        let mut result = String::with_capacity(content.len());
+        let mut last_end = 0;
+        for (i, m) in re.find_iter(content).enumerate() {
+            if i + 1 == index {
+                result.push_str(&content[last_end..m.start()]);
+                result.push_str(replacement);
+                last_end = m.end();
+                break;
+            }
+        }
+        result.push_str(&content[last_end..]);
+        result
+    } else {
+        let (search_content, search_query) = if case_insensitive {
+            (content.to_lowercase(), query.to_lowercase())
+        } else {
+            (content.to_string(), query.to_string())
+        };
+        let mut count = 0;
+        let mut pos = 0;
+        while let Some(idx) = search_content[pos..].find(&search_query) {
+            count += 1;
+            if count == index {
+                let abs_idx = pos + idx;
+                return format!(
+                    "{}{}{}",
+                    &content[..abs_idx],
+                    replacement,
+                    &content[abs_idx + query.len()..]
+                );
+            }
+            pos += idx + 1;
+        }
+        content.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +141,11 @@ mod tests {
     fn test_count_matches_literal() {
         assert_eq!(count_matches("a a a", "a", false, false), 3);
         assert_eq!(count_matches("AaA", "a", true, false), 3);
+    }
+
+    #[test]
+    fn test_replace_nth_match_literal() {
+        let out = replace_nth_match("a a a", "a", "b", 2, false, false);
+        assert_eq!(out, "a b a");
     }
 }

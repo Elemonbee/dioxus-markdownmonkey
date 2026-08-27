@@ -4,40 +4,58 @@ use crate::state::AIProvider;
 use futures_util::{Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use std::fmt;
 
 /// 默认请求超时（秒）/ Default request timeout (seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// AI 错误类型 / AI Error Types
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum AIError {
-    #[error("网络错误/Network Error: {0}")]
-    Network(#[from] reqwest::Error),
-
-    #[error("API 错误/API Error: {0}")]
+    /// 网络错误 / Network error
+    Network(reqwest::Error),
+    /// API 错误 / API error
     Api(String),
-
-    #[error("认证失败/Authentication Error: {0}")]
+    /// 认证失败 / Authentication error
     Authentication(String),
-
-    #[error("请求被限流/Rate Limit: {0}")]
+    /// 请求被限流 / Rate limit
     RateLimit(String),
-
-    #[error("服务暂时不可用/Service Unavailable: {0}")]
+    /// 服务暂时不可用 / Service unavailable
     ServiceUnavailable(String),
-
-    #[error("配置错误/Config Error: {0}")]
+    /// 配置错误 / Config error
     Config(String),
-
-    #[error("请求超时/Request Timeout: {0}")]
+    /// 请求超时 / Request timeout
     Timeout(String),
-
-    #[error("解析错误/Parse Error: {0}")]
+    /// 解析错误 / Parse error
     Parse(String),
-
-    #[error("生成已取消/Generation cancelled")]
+    /// 生成已取消 / Generation cancelled
     Cancelled,
+}
+
+impl fmt::Display for AIError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Network(e) => write!(f, "网络错误/Network Error: {e}"),
+            Self::Api(e) => write!(f, "API 错误/API Error: {e}"),
+            Self::Authentication(e) => write!(f, "认证失败/Authentication Error: {e}"),
+            Self::RateLimit(e) => write!(f, "请求被限流/Rate Limit: {e}"),
+            Self::ServiceUnavailable(e) => {
+                write!(f, "服务暂时不可用/Service Unavailable: {e}")
+            }
+            Self::Config(e) => write!(f, "配置错误/Config Error: {e}"),
+            Self::Timeout(e) => write!(f, "请求超时/Request Timeout: {e}"),
+            Self::Parse(e) => write!(f, "解析错误/Parse Error: {e}"),
+            Self::Cancelled => write!(f, "生成已取消/Generation cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for AIError {}
+
+impl From<reqwest::Error> for AIError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Network(e)
+    }
 }
 
 /// AI 请求 / AI Request
@@ -199,6 +217,61 @@ impl AIService {
         }
     }
 
+    /// 构建 OpenAI 兼容请求体，统一流式与非流式参数
+    /// Build an OpenAI-compatible request body shared by streaming and non-streaming calls
+    fn build_openai_request(
+        &self,
+        messages: Vec<Message>,
+        stream: bool,
+        max_tokens: u32,
+    ) -> AIRequest {
+        AIRequest {
+            model: self.model.clone(),
+            messages,
+            stream,
+            temperature: Some(self.temperature),
+            max_tokens: Some(max_tokens),
+        }
+    }
+
+    /// 构建 Claude 请求体并分离 system 消息
+    /// Build a Claude request body while separating system messages
+    fn build_claude_request(
+        &self,
+        messages: Vec<Message>,
+        stream: bool,
+        max_tokens: u32,
+    ) -> serde_json::Value {
+        use serde_json::json;
+
+        let mut system_parts = Vec::new();
+        let mut claude_messages = Vec::new();
+        for message in messages {
+            if message.role == "system" {
+                if !message.content.trim().is_empty() {
+                    system_parts.push(message.content);
+                }
+            } else {
+                claude_messages.push(json!({
+                    "role": message.role,
+                    "content": message.content
+                }));
+            }
+        }
+
+        let mut body = json!({
+            "model": self.model,
+            "messages": claude_messages,
+            "max_tokens": max_tokens,
+            "temperature": self.temperature,
+            "stream": stream,
+        });
+        if !system_parts.is_empty() {
+            body["system"] = json!(system_parts.join("\n\n"));
+        }
+        body
+    }
+
     /// 获取默认模型 / Get Default Model
     pub fn default_model(provider: &AIProvider) -> &'static str {
         match provider {
@@ -232,13 +305,7 @@ impl AIService {
     /// OpenAI 兼容格式的聊天请求 / OpenAI-compatible chat request
     #[allow(dead_code)]
     async fn chat_openai_compatible(&self, messages: Vec<Message>) -> Result<String, AIError> {
-        let request = AIRequest {
-            model: self.model.clone(),
-            messages,
-            stream: false,
-            temperature: Some(self.temperature),
-            max_tokens: Some(2048),
-        };
+        let request = self.build_openai_request(messages, false, 2048);
 
         let response = self
             .apply_bearer_auth(
@@ -272,32 +339,7 @@ impl AIService {
     /// Claude uses x-api-key header and different request body format
     #[allow(dead_code)]
     async fn chat_claude(&self, messages: Vec<Message>) -> Result<String, AIError> {
-        use serde_json::json;
-
-        // 分离 system 消息和普通消息 / Separate system messages from regular messages
-        let mut system_content = String::new();
-        let mut claude_messages = Vec::new();
-
-        for msg in messages {
-            if msg.role == "system" {
-                system_content = msg.content;
-            } else {
-                claude_messages.push(json!({
-                    "role": msg.role,
-                    "content": msg.content
-                }));
-            }
-        }
-
-        let mut body = json!({
-            "model": self.model,
-            "messages": claude_messages,
-            "max_tokens": 2048,
-        });
-
-        if !system_content.is_empty() {
-            body["system"] = json!(system_content);
-        }
+        let body = self.build_claude_request(messages, false, 2048);
 
         let response = self
             .client
@@ -377,13 +419,7 @@ impl AIService {
                 .await;
         }
 
-        let request = AIRequest {
-            model: self.model.clone(),
-            messages,
-            stream: true,
-            temperature: Some(self.temperature),
-            max_tokens: Some(4096),
-        };
+        let request = self.build_openai_request(messages, true, 4096);
 
         let response = self
             .apply_bearer_auth(
@@ -425,32 +461,7 @@ impl AIService {
         F: FnMut(&str),
         C: FnMut() -> bool,
     {
-        use serde_json::json;
-
-        let mut system_content = String::new();
-        let mut claude_messages = Vec::new();
-
-        for msg in messages {
-            if msg.role == "system" {
-                system_content = msg.content;
-            } else {
-                claude_messages.push(json!({
-                    "role": msg.role,
-                    "content": msg.content
-                }));
-            }
-        }
-
-        let mut body = json!({
-            "model": self.model,
-            "messages": claude_messages,
-            "max_tokens": 4096,
-            "stream": true,
-        });
-
-        if !system_content.is_empty() {
-            body["system"] = json!(system_content);
-        }
+        let body = self.build_claude_request(messages, true, 4096);
 
         let response = self
             .client
@@ -1048,6 +1059,49 @@ mod tests {
         assert_eq!(service.temperature, 1.0);
     }
 
+    /// OpenAI 流式与非流式请求都应携带配置温度
+    /// OpenAI streaming and non-streaming bodies both carry the configured temperature
+    #[test]
+    fn test_openai_request_bodies_use_configured_temperature() {
+        let service = AIService::with_temperature(
+            "key".to_string(),
+            Some("https://api.openai.com/v1".to_string()),
+            Some("gpt-test".to_string()),
+            0.35,
+        );
+        for stream in [false, true] {
+            let request = service.build_openai_request(vec![Message::user("hello")], stream, 2048);
+            let body = serde_json::to_value(request).unwrap();
+            let temperature = body["temperature"].as_f64().unwrap();
+            assert!((temperature - 0.35).abs() < 0.0001);
+            assert_eq!(body["stream"], serde_json::json!(stream));
+        }
+    }
+
+    /// Claude 流式与非流式请求都应携带温度并正确拆分 system
+    /// Claude streaming and non-streaming bodies carry temperature and separate system correctly
+    #[test]
+    fn test_claude_request_bodies_use_temperature_and_system() {
+        let service = AIService::with_temperature(
+            "key".to_string(),
+            Some("https://api.anthropic.com/v1".to_string()),
+            Some("claude-test".to_string()),
+            0.4,
+        );
+        for stream in [false, true] {
+            let body = service.build_claude_request(
+                vec![Message::system("global"), Message::user("hello")],
+                stream,
+                2048,
+            );
+            let temperature = body["temperature"].as_f64().unwrap();
+            assert!((temperature - 0.4).abs() < 0.0001);
+            assert_eq!(body["stream"], serde_json::json!(stream));
+            assert_eq!(body["system"], "global");
+            assert_eq!(body["messages"][0]["role"], "user");
+        }
+    }
+
     #[test]
     fn test_validate_config_requires_api_key() {
         let service = AIService::new(
@@ -1181,6 +1235,17 @@ mod tests {
         assert_eq!(msgs[2].content, "first answer");
         assert_eq!(msgs[3].role, "user");
         assert_eq!(msgs[3].content, "doc");
+    }
+
+    /// 空全局提示词不得改变原任务消息
+    /// An empty global prompt must preserve the original task messages
+    #[test]
+    fn test_empty_global_system_preserves_existing_behavior() {
+        let original = AITask::Improve.build_messages("body", "");
+        let with_empty = AITask::Improve.build_messages_with_history("body", "", &[], "   ");
+        assert_eq!(original[0].role(), with_empty[0].role());
+        assert_eq!(original[0].content(), with_empty[0].content());
+        assert_eq!(original[1].content(), with_empty[1].content());
     }
 
     #[test]

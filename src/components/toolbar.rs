@@ -2,9 +2,9 @@
 //!
 //! 使用 AsyncFileDialog 避免文件对话框阻塞 UI
 
-use crate::actions::{AppActions, EditorActions, FileActions};
+use crate::actions::{AppActions, EditorActions, EditorFormat, FileActions};
 use crate::components::icons::*;
-use crate::services::export::{ExportService, PdfExportConfig};
+use crate::services::export::ExportService;
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
@@ -25,8 +25,6 @@ fn show_export_error(title: &str, err: impl std::fmt::Display) {
 #[derive(Clone, Copy)]
 enum ExportKind {
     Html,
-    Pdf,
-    Docx,
     Text,
 }
 
@@ -35,8 +33,6 @@ impl ExportKind {
     fn filter(self) -> (&'static str, &'static str) {
         match self {
             Self::Html => ("HTML", "html"),
-            Self::Pdf => ("PDF", "pdf"),
-            Self::Docx => ("DOCX", "docx"),
             Self::Text => ("Text", "txt"),
         }
     }
@@ -44,12 +40,7 @@ impl ExportKind {
 
 /// 统一导出流程：flush → 选路径 → 后台写出
 /// Unified export flow: flush → pick path → write off UI thread
-fn run_export(
-    mut state: AppState,
-    kind: ExportKind,
-    err_title: String,
-    pdf_font_path: Option<String>,
-) {
+fn run_export(mut state: AppState, kind: ExportKind, err_title: String) {
     spawn(async move {
         EditorActions::flush_from_dom(&mut state).await;
         let content = state.document().content.read().clone();
@@ -81,21 +72,6 @@ fn run_export(
             ExportKind::Html => {
                 ExportService::export_to_html_with_assets(&content, &path, source_dir.as_deref())
             }
-            ExportKind::Pdf => {
-                let config = PdfExportConfig {
-                    cjk_font_path: pdf_font_path,
-                    ..Default::default()
-                };
-                ExportService::export_to_pdf_with_assets(
-                    &content,
-                    &path,
-                    config,
-                    source_dir.as_deref(),
-                )
-            }
-            ExportKind::Docx => {
-                ExportService::export_to_docx_with_assets(&content, &path, source_dir.as_deref())
-            }
             ExportKind::Text => ExportService::export_to_text(&content, &path),
         })
         .await;
@@ -105,6 +81,13 @@ fn run_export(
             Ok(Err(e)) => show_export_error(&err_title, e),
             Err(e) => show_export_error(&err_title, e),
         }
+    });
+}
+
+/// 从工具栏调度统一格式化入口 / Dispatch the shared formatting entry point from the toolbar
+fn run_format(mut state: AppState, format: EditorFormat) {
+    spawn(async move {
+        EditorActions::apply_format(&mut state, format).await;
     });
 }
 
@@ -124,8 +107,6 @@ pub fn Toolbar() -> Element {
     let open_file_t = t("open_file", lang);
     let save_file_t = t("save_file", lang);
     let export_html_t = t("export_html", lang);
-    let export_pdf_t = t("export_pdf", lang);
-    let export_docx_t = t("export_docx", lang);
     let export_text_t = t("export_text", lang);
     let export_menu_t = t("export", lang);
     let export_failed_t = t("export_failed", lang);
@@ -158,6 +139,8 @@ pub fn Toolbar() -> Element {
     use_effect(move || {
         if trigger_save_as {
             *doc.trigger_save_as.write() = false;
+            let close_intent = doc.pending_close_save_as.write().take();
+            let is_close_intent = close_intent.is_some();
             let mut state = state;
             spawn(async move {
                 let file = AsyncFileDialog::new()
@@ -166,22 +149,22 @@ pub fn Toolbar() -> Element {
                     .await;
                 if let Some(file) = file {
                     let path = file.path().to_path_buf();
-                    match FileActions::save_as(&mut state, path) {
-                        Ok(()) => {
-                            // 若来自「保存并关闭」，另存为成功后关闭标签
-                            // If Save-and-Close started this, close the tab after Save-As
-                            let mut doc = state.document();
-                            let pending = *doc.pending_close_tab_index.read();
-                            if let Some(idx) = pending {
-                                *doc.pending_close_tab_index.write() = None;
-                                state.close_tab(idx);
-                            }
+                    let result = if let Some(snapshot) = close_intent {
+                        FileActions::save_close_snapshot_as(&mut state, snapshot, path)
+                    } else {
+                        FileActions::save_as(&mut state, path)
+                    };
+                    if let Err(e) = result {
+                        tracing::error!("Save As failed: {}", e);
+                        if is_close_intent {
+                            FileActions::cancel_close_request(&mut state);
                         }
-                        Err(e) => tracing::error!("Save As failed: {}", e),
                     }
                 } else {
-                    // 用户取消另存为则放弃待关闭 / Cancel Save-As clears pending close
-                    *state.document().pending_close_tab_index.write() = None;
+                    // 用户取消关闭型另存为时保留目标标签 / Keep target tab when close Save-As is canceled
+                    if is_close_intent {
+                        FileActions::cancel_close_request(&mut state);
+                    }
                 }
             });
         }
@@ -237,18 +220,8 @@ pub fn Toolbar() -> Element {
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
-                            let file = AsyncFileDialog::new()
-                                .add_filter("Markdown", &["md", "markdown", "txt"])
-                                .pick_file()
-                                .await;
-                            if let Some(file) = file {
-                                let path = file.path().to_path_buf();
-                                if let Err(e) =
-                                    FileActions::open_file_and_track_recent_flushed(&mut state, path)
-                                        .await
-                                {
-                                    tracing::warn!("Open file failed: {}", e);
-                                }
+                            if let Err(e) = FileActions::open_file_dialog(&mut state).await {
+                                tracing::warn!("Open file failed: {}", e);
                             }
                         });
                     },
@@ -329,7 +302,7 @@ pub fn Toolbar() -> Element {
                                     let err_title = export_failed_t.clone();
                                     move |_| {
                                         export_menu_open.set(false);
-                                        run_export(state, ExportKind::Html, err_title.clone(), None);
+                                        run_export(state, ExportKind::Html, err_title.clone());
                                     }
                                 },
                                 "{export_html_t}"
@@ -341,32 +314,7 @@ pub fn Toolbar() -> Element {
                                     let err_title = export_failed_t.clone();
                                     move |_| {
                                         export_menu_open.set(false);
-                                        let font = ui.pdf_cjk_font_path.read().clone();
-                                        run_export(state, ExportKind::Pdf, err_title.clone(), font);
-                                    }
-                                },
-                                "{export_pdf_t}"
-                            }
-                            button {
-                                class: "toolbar-dropdown-item",
-                                role: "menuitem",
-                                onclick: {
-                                    let err_title = export_failed_t.clone();
-                                    move |_| {
-                                        export_menu_open.set(false);
-                                        run_export(state, ExportKind::Docx, err_title.clone(), None);
-                                    }
-                                },
-                                "{export_docx_t}"
-                            }
-                            button {
-                                class: "toolbar-dropdown-item",
-                                role: "menuitem",
-                                onclick: {
-                                    let err_title = export_failed_t.clone();
-                                    move |_| {
-                                        export_menu_open.set(false);
-                                        run_export(state, ExportKind::Text, err_title.clone(), None);
+                                        run_export(state, ExportKind::Text, err_title.clone());
                                     }
                                 },
                                 "{export_text_t}"
@@ -415,13 +363,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{bold_t} (Ctrl+B)",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_bold(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Bold);
                     },
                     BoldIcon { size: 18 }
                 }
@@ -429,13 +371,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{italic_t} (Ctrl+I)",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_italic(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Italic);
                     },
                     ItalicIcon { size: 18 }
                 }
@@ -443,13 +379,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{code_t} (Ctrl+`)",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_code(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Code);
                     },
                     CodeIcon { size: 18 }
                 }
@@ -457,13 +387,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{link_t} (Ctrl+K)",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_link(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Link);
                     },
                     LinkIcon { size: 18 }
                 }
@@ -477,13 +401,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn heading-btn",
                     title: "{h1_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_h1(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Heading1);
                     },
                     "H1"
                 }
@@ -491,13 +409,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn heading-btn",
                     title: "{h2_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_h2(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Heading2);
                     },
                     "H2"
                 }
@@ -505,13 +417,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn heading-btn",
                     title: "{h3_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_h3(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Heading3);
                     },
                     "H3"
                 }
@@ -525,13 +431,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{bullet_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_bullet_list(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::BulletList);
                     },
                     ListIcon { size: 18 }
                 }
@@ -539,13 +439,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{numbered_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_numbered_list(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::NumberedList);
                     },
                     OrderedListIcon { size: 18 }
                 }
@@ -553,13 +447,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{quote_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_quote(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::Quote);
                     },
                     QuoteIcon { size: 18 }
                 }
@@ -579,13 +467,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{code_block_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_code_block(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::CodeBlock);
                     },
                     CodeIcon { size: 18 }
                 }
@@ -593,13 +475,7 @@ pub fn Toolbar() -> Element {
                     class: "toolbar-btn",
                     title: "{hr_t}",
                     onclick: move |_| {
-                        let mut state = state;
-                        spawn(async move {
-                            EditorActions::with_flushed_format(&mut state, |s| {
-                                EditorActions::insert_horizontal_rule(s);
-                            })
-                            .await;
-                        });
+                        run_format(state, EditorFormat::HorizontalRule);
                     },
                     DividerIcon { size: 18 }
                 }
@@ -617,10 +493,7 @@ pub fn Toolbar() -> Element {
                             if let Some(file) = file {
                                 let path = file.path().to_path_buf();
                                 let img_markdown = format!("![{image_t}]({})", path.display());
-                                EditorActions::with_flushed_format(&mut state, |s| {
-                                    EditorActions::insert_text(s, &img_markdown);
-                                })
-                                .await;
+                                EditorActions::insert_text_from_dom(&mut state, &img_markdown).await;
                             }
                         });
                     },

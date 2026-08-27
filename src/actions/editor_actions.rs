@@ -10,6 +10,32 @@ use crate::state::AppState;
 use dioxus::document;
 use dioxus::prelude::{ReadableExt, WritableExt};
 
+/// 编辑器格式化命令 / Editor formatting command
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditorFormat {
+    Bold,
+    Italic,
+    Code,
+    Link,
+    CodeBlock,
+    Heading1,
+    Heading2,
+    Heading3,
+    BulletList,
+    NumberedList,
+    Quote,
+    HorizontalRule,
+}
+
+/// DOM 编辑器快照，偏移量均为 UTF-8 字节位置
+/// DOM editor snapshot whose offsets are UTF-8 byte positions
+struct EditorSnapshot {
+    value: String,
+    start: usize,
+    end: usize,
+    direction: String,
+}
+
 /// 编辑器 Actions 处理器 / Editor Actions Handler
 pub struct EditorActions;
 
@@ -19,37 +45,118 @@ impl EditorActions {
         state.update_content(content);
     }
 
-    /// 从 DOM 拉取编辑器正文并写入状态（非受控模式保存/撤销前调用）
-    /// Pull editor text from DOM into state (call before save/undo in uncontrolled mode)
-    pub async fn flush_from_dom(state: &mut AppState) {
+    /// 原子读取 DOM 正文、选区和方向，并将 UTF-16 偏移转换为 UTF-8 字节偏移
+    /// Atomically read DOM text, selection and direction, converting UTF-16 offsets to UTF-8 bytes
+    async fn read_editor_snapshot() -> Option<EditorSnapshot> {
         let mut eval = document::eval(
             r#"
             (function() {
-                if (window._mm_getEditorValue) {
-                    dioxus.send(window._mm_getEditorValue());
+                if (window._mm_getEditorSnapshot) {
+                    dioxus.send(window._mm_getEditorSnapshot());
                     return;
                 }
                 const ta = document.querySelector('.editor-textarea');
-                dioxus.send(ta ? ta.value : '');
+                if (!ta) { dioxus.send(['', 0, 0, 'none']); return; }
+                const value = ta.value || '';
+                const toBytes = function(offset) {
+                    let safe = Math.max(0, Math.min(Number(offset) || 0, value.length));
+                    if (safe > 0 && safe < value.length) {
+                        const before = value.charCodeAt(safe - 1);
+                        const after = value.charCodeAt(safe);
+                        if (before >= 0xD800 && before <= 0xDBFF &&
+                            after >= 0xDC00 && after <= 0xDFFF) safe -= 1;
+                    }
+                    return new TextEncoder().encode(value.slice(0, safe)).length;
+                };
+                dioxus.send([
+                    value,
+                    toBytes(ta.selectionStart),
+                    toBytes(ta.selectionEnd),
+                    ta.selectionDirection || 'none'
+                ]);
             })();
             "#,
         );
-        if let Ok(value) = eval.recv::<String>().await {
-            state.update_content(value);
+        let (value, start, end, direction) =
+            eval.recv::<(String, usize, usize, String)>().await.ok()?;
+        Some(EditorSnapshot {
+            value,
+            start,
+            end,
+            direction,
+        })
+    }
+
+    /// 从 DOM 拉取编辑器正文和字节选区并写入状态
+    /// Pull editor text and byte-based selection from the DOM into state
+    pub async fn flush_from_dom(state: &mut AppState) {
+        if let Some(snapshot) = Self::read_editor_snapshot().await {
+            state.update_content(snapshot.value);
+            let mut ui = state.ui();
+            *ui.cursor_start.write() = snapshot.start;
+            *ui.cursor_end.write() = snapshot.end;
         }
     }
 
-    /// 先 flush 再执行格式化（供工具栏/快捷键在非受控模式下使用）
-    /// Flush then apply formatting (for toolbar/shortcuts in uncontrolled mode)
-    pub async fn with_flushed_format<F>(state: &mut AppState, action: F)
-    where
-        F: FnOnce(&mut AppState),
-    {
-        Self::flush_from_dom(state).await;
-        action(state);
-        // 格式化改了 Rust 内容后推回 DOM / Push formatted content back to DOM
+    /// 通过唯一入口执行格式化，并在 DOM 更新后恢复焦点与 Unicode 安全选区
+    /// Apply formatting through one entry point, then restore focus and Unicode-safe selection
+    pub async fn apply_format(state: &mut AppState, format: EditorFormat) {
+        let direction = if let Some(snapshot) = Self::read_editor_snapshot().await {
+            state.update_content(snapshot.value);
+            let mut ui = state.ui();
+            *ui.cursor_start.write() = snapshot.start;
+            *ui.cursor_end.write() = snapshot.end;
+            snapshot.direction
+        } else {
+            "none".to_string()
+        };
+
+        match format {
+            EditorFormat::Bold => Self::insert_bold(state),
+            EditorFormat::Italic => Self::insert_italic(state),
+            EditorFormat::Code => Self::insert_code(state),
+            EditorFormat::Link => Self::insert_link(state),
+            EditorFormat::CodeBlock => Self::insert_code_block(state),
+            EditorFormat::Heading1 => Self::insert_h1(state),
+            EditorFormat::Heading2 => Self::insert_h2(state),
+            EditorFormat::Heading3 => Self::insert_h3(state),
+            EditorFormat::BulletList => Self::insert_bullet_list(state),
+            EditorFormat::NumberedList => Self::insert_numbered_list(state),
+            EditorFormat::Quote => Self::insert_quote(state),
+            EditorFormat::HorizontalRule => Self::insert_horizontal_rule(state),
+        }
+
         let content = state.document().content.read().clone();
-        Self::push_to_dom(&content);
+        let ui = state.ui();
+        Self::restore_editor(
+            &content,
+            *ui.cursor_start.read(),
+            *ui.cursor_end.read(),
+            &direction,
+        );
+    }
+
+    /// 基于最新 DOM 选区插入文本，并恢复编辑器焦点与选区
+    /// Insert text at the latest DOM selection and restore editor focus and selection
+    pub async fn insert_text_from_dom(state: &mut AppState, text: &str) {
+        let direction = if let Some(snapshot) = Self::read_editor_snapshot().await {
+            state.update_content(snapshot.value);
+            let mut ui = state.ui();
+            *ui.cursor_start.write() = snapshot.start;
+            *ui.cursor_end.write() = snapshot.end;
+            snapshot.direction
+        } else {
+            "none".to_string()
+        };
+        Self::insert_text(state, text);
+        let content = state.document().content.read().clone();
+        let ui = state.ui();
+        Self::restore_editor(
+            &content,
+            *ui.cursor_start.read(),
+            *ui.cursor_end.read(),
+            &direction,
+        );
     }
 
     /// 将 Rust 正文推送到 DOM（非受控模式下撤销/切换标签后调用）
@@ -59,6 +166,18 @@ impl EditorActions {
         let _ = document::eval(&format!(
             "if(window._mm_setEditorValue) window._mm_setEditorValue({});",
             safe
+        ));
+    }
+
+    /// 将正文推送到 DOM，并按 UTF-8 字节偏移恢复焦点、选区和方向
+    /// Push text to the DOM and restore focus, range and direction from UTF-8 byte offsets
+    fn restore_editor(content: &str, start: usize, end: usize, direction: &str) {
+        let safe_content = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_string());
+        let safe_direction =
+            serde_json::to_string(direction).unwrap_or_else(|_| "\"none\"".to_string());
+        let _ = document::eval(&format!(
+            "if(window._mm_setEditorState) window._mm_setEditorState({}, {}, {}, {});",
+            safe_content, start, end, safe_direction
         ));
     }
 
@@ -131,12 +250,6 @@ impl EditorActions {
             "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
             if next { "true" } else { "false" }
         ));
-        // 尽力持久化 / Best-effort persist
-        let mut settings = crate::services::settings::load_settings();
-        settings.sync_scroll = next;
-        if let Err(e) = crate::services::settings::save_settings(&settings) {
-            tracing::warn!("Failed to persist sync_scroll: {}", e);
-        }
     }
 
     /// 设置同步滚动 / Set Sync Scroll
@@ -208,50 +321,5 @@ impl EditorActions {
     /// 插入分割线 / Insert Horizontal Rule
     pub fn insert_horizontal_rule(state: &mut AppState) {
         Self::insert_text(state, "\n---\n");
-    }
-
-    // ========== 拼写检查操作 / Spell Check Operations ==========
-
-    /// 切换拼写检查 / Toggle Spell Check
-    pub fn toggle_spell_check(state: &mut AppState) {
-        let mut doc = state.document();
-        let current = *doc.spell_check_enabled.read();
-        *doc.spell_check_enabled.write() = !current;
-        if !current {
-            // 刚启用，运行检查 / Just enabled, run check
-            state.run_spell_check();
-        } else {
-            // 禁用，清除结果 / Disabled, clear results
-            *doc.spell_check_results.write() = Vec::new();
-        }
-    }
-
-    /// 先 flush 再切换拼写检查（非受控大文件下保证检查最新正文）
-    /// Flush then toggle spell check (accurate text in uncontrolled large-file mode)
-    pub async fn toggle_spell_check_flushed(state: &mut AppState) {
-        Self::flush_from_dom(state).await;
-        Self::toggle_spell_check(state);
-    }
-
-    /// 导航到下一个拼写错误 / Navigate to next spell error
-    pub fn next_spell_error(state: &mut AppState) {
-        let mut doc = state.document();
-        let total = doc.spell_check_results.read().len();
-        if total == 0 {
-            return;
-        }
-        let current = *doc.spell_error_index.read();
-        *doc.spell_error_index.write() = (current + 1) % total;
-    }
-
-    /// 导航到上一个拼写错误 / Navigate to previous spell error
-    pub fn prev_spell_error(state: &mut AppState) {
-        let mut doc = state.document();
-        let total = doc.spell_check_results.read().len();
-        if total == 0 {
-            return;
-        }
-        let current = *doc.spell_error_index.read();
-        *doc.spell_error_index.write() = if current == 0 { total - 1 } else { current - 1 };
     }
 }

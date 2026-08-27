@@ -7,6 +7,8 @@
 mod app_actions;
 mod editor_actions;
 mod file_actions;
+mod search_actions;
+mod settings_actions;
 pub mod shortcut_actions;
 
 #[cfg(test)]
@@ -15,5 +17,7 @@ mod tests;
 pub use app_actions::*;
 pub use editor_actions::*;
 pub use file_actions::*;
+pub use search_actions::*;
+pub use settings_actions::*;
 // shortcut_actions 导出在需要时取消注释 / Uncomment when needed
 // pub use shortcut_actions::*;

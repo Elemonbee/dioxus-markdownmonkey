@@ -11,12 +11,14 @@
 
 use super::types::History as DocumentHistory;
 use super::types::{
-    AIConfig, ChatTurn, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme,
+    AIConfig, ChatTurn, CloseTabSnapshot, Language, OutlineItem, SaveStatus, SidebarTab, TabId,
+    TabInfo, Theme,
 };
 use crate::config::{
     DEFAULT_AUTO_SAVE_INTERVAL_SECS, DEFAULT_FONT_SIZE, DEFAULT_PREVIEW_FONT_SIZE,
     DEFAULT_SIDEBAR_WIDTH,
 };
+use crate::utils::file_encoding::FileEncoding;
 use dioxus::prelude::*;
 use std::path::PathBuf;
 
@@ -63,16 +65,8 @@ pub struct AppState {
     pub sync_scroll: Signal<bool>,
 
     // ========== 文件编码状态 / File Encoding State ==========
-    /// 当前文件编码名称 / Current file encoding name
-    pub file_encoding: Signal<String>,
-
-    // ========== 拼写检查状态 / Spell Check State ==========
-    /// 拼写检查是否启用 / Is Spell Check Enabled
-    pub spell_check_enabled: Signal<bool>,
-    /// 拼写检查结果 / Spell Check Results
-    pub spell_check_results: Signal<Vec<crate::services::spellcheck::SpellError>>,
-    /// 当前高亮的拼写错误索引 / Current highlighted spell error index
-    pub spell_error_index: Signal<usize>,
+    /// 当前文件编码 / Current file encoding
+    pub file_encoding: Signal<FileEncoding>,
 
     // ========== UI 状态 / UI State ==========
     /// 主题 / Theme
@@ -116,8 +110,8 @@ pub struct AppState {
     pub auto_save_enabled: Signal<bool>,
     /// 自动保存间隔（秒）/ Auto Save Interval (seconds)
     pub auto_save_interval: Signal<u32>,
-    /// PDF 导出中文字体路径 / PDF CJK font path for export
-    pub pdf_cjk_font_path: Signal<Option<String>>,
+    /// 启动时恢复上次会话 / Restore the previous session on startup
+    pub session_restore_enabled: Signal<bool>,
 
     // ========== 文件监控状态 / File Watch State ==========
     /// 文件是否被外部修改 / Is File Externally Modified
@@ -132,8 +126,10 @@ pub struct AppState {
     // ========== 关闭标签确认状态 / Close Tab Confirmation State ==========
     /// 是否显示关闭未保存标签确认弹窗 / Show close unsaved tab confirmation modal
     pub show_close_confirm: Signal<bool>,
-    /// 待关闭的标签索引（用户确认后执行）/ Pending close tab index (executed after user confirms)
-    pub pending_close_tab_index: Signal<Option<usize>>,
+    /// 待关闭标签的稳定标识 / Stable identity of the tab pending close
+    pub pending_close_tab_id: Signal<Option<TabId>>,
+    /// 等待异步另存为的关闭快照 / Close snapshot awaiting asynchronous Save As
+    pub pending_close_save_as: Signal<Option<CloseTabSnapshot>>,
 
     /// 是否触发另存为对话框（新文件首次保存时）/ Trigger Save-As dialog (first save of new file)
     pub trigger_save_as: Signal<bool>,
@@ -190,12 +186,7 @@ impl AppState {
             sync_scroll: Signal::new(true),
 
             // 文件编码状态 / File Encoding State
-            file_encoding: Signal::new("UTF-8".to_string()),
-
-            // 拼写检查状态 / Spell Check State
-            spell_check_enabled: Signal::new(false),
-            spell_check_results: Signal::new(Vec::new()),
-            spell_error_index: Signal::new(0),
+            file_encoding: Signal::new(FileEncoding::Utf8),
 
             // UI 状态 / UI State
             theme: Signal::new(Theme::Dark),
@@ -232,7 +223,7 @@ impl AppState {
             // 自动保存状态 / Auto Save State
             auto_save_enabled: Signal::new(false),
             auto_save_interval: Signal::new(DEFAULT_AUTO_SAVE_INTERVAL_SECS),
-            pdf_cjk_font_path: Signal::new(None),
+            session_restore_enabled: Signal::new(true),
 
             // 文件监控状态 / File Watch State
             file_external_modified: Signal::new(false),
@@ -242,7 +233,8 @@ impl AppState {
 
             // 关闭标签确认状态 / Close Tab Confirmation State
             show_close_confirm: Signal::new(false),
-            pending_close_tab_index: Signal::new(None),
+            pending_close_tab_id: Signal::new(None),
+            pending_close_save_as: Signal::new(None),
 
             // 另存为触发 / Save-As Trigger
             trigger_save_as: Signal::new(false),

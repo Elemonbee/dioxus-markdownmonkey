@@ -19,12 +19,56 @@ window._mm_initEditor = function() {
     if (ta._mm_enhanced) return;
     ta._mm_enhanced = true;
 
-    // ========== 选区同步到 Rust / Selection sync to Rust ==========
-    // 持续更新全局选区，供 AI「使用选区」等功能读取
-    // Keep global selection updated for AI "use selection" and similar features
+    // ========== UTF-16 / UTF-8 字节偏移桥接 / UTF-16 / UTF-8 byte-offset bridge ==========
+    // DOM textarea 使用 UTF-16 code units；Rust 状态统一使用 UTF-8 byte offsets。
+    // DOM textarea uses UTF-16 code units; Rust state consistently uses UTF-8 byte offsets.
+    function clampUtf16Boundary(text, offset) {
+        var safe = Math.max(0, Math.min(Number(offset) || 0, text.length));
+        if (safe > 0 && safe < text.length) {
+            var before = text.charCodeAt(safe - 1);
+            var after = text.charCodeAt(safe);
+            if (before >= 0xD800 && before <= 0xDBFF && after >= 0xDC00 && after <= 0xDFFF) {
+                safe -= 1;
+            }
+        }
+        return safe;
+    }
+
+    function utf16ToUtf8Offset(text, offset) {
+        var safe = clampUtf16Boundary(text, offset);
+        return new TextEncoder().encode(text.slice(0, safe)).length;
+    }
+
+    function utf8ToUtf16Offset(text, byteOffset) {
+        var target = Math.max(0, Number(byteOffset) || 0);
+        var bytes = 0;
+        var utf16 = 0;
+        for (var ch of text) {
+            var next = bytes + new TextEncoder().encode(ch).length;
+            if (next > target) break;
+            bytes = next;
+            utf16 += ch.length;
+        }
+        return utf16;
+    }
+
+    function editorSnapshot(el) {
+        if (!el) return ['', 0, 0, 'none'];
+        var value = el.value || '';
+        return [
+            value,
+            utf16ToUtf8Offset(value, el.selectionStart || 0),
+            utf16ToUtf8Offset(value, el.selectionEnd || 0),
+            el.selectionDirection || 'none'
+        ];
+    }
+
+    // 持续更新全局 UTF-8 字节选区，供 Rust 和 AI 选区功能读取。
+    // Keep the global UTF-8 byte selection current for Rust and AI selection features.
     function syncSelection() {
-        window._mm_selStart = ta.selectionStart || 0;
-        window._mm_selEnd = ta.selectionEnd || 0;
+        var snapshot = editorSnapshot(ta);
+        window._mm_selStart = snapshot[1];
+        window._mm_selEnd = snapshot[2];
     }
     syncSelection();
     ta.addEventListener('select', syncSelection);
@@ -34,8 +78,11 @@ window._mm_initEditor = function() {
     ta.addEventListener('click', syncSelection);
     window._mm_getSelection = function() {
         var el = document.querySelector('.editor-textarea');
-        if (!el) return [0, 0];
-        return [el.selectionStart || 0, el.selectionEnd || 0];
+        var snapshot = editorSnapshot(el);
+        return [snapshot[1], snapshot[2]];
+    };
+    window._mm_getEditorSnapshot = function() {
+        return editorSnapshot(document.querySelector('.editor-textarea'));
     };
     window._mm_getEditorValue = function() {
         var el = document.querySelector('.editor-textarea');
@@ -48,6 +95,33 @@ window._mm_initEditor = function() {
         if (el.value !== text) {
             el.value = text;
         }
+    };
+    window._mm_setEditorState = function(text, byteStart, byteEnd, direction) {
+        var el = document.querySelector('.editor-textarea');
+        if (!el) return;
+        if (typeof text !== 'string') text = String(text || '');
+        var start = utf8ToUtf16Offset(text, byteStart);
+        var end = utf8ToUtf16Offset(text, byteEnd);
+        var selectionDirection = direction === 'backward' ? 'backward' : 'forward';
+        var restore = function() {
+            var current = document.querySelector('.editor-textarea');
+            if (!current) return;
+            if (current.value !== text) current.value = text;
+            try {
+                current.focus({ preventScroll: true });
+            } catch (e) {
+                current.focus();
+            }
+            current.setSelectionRange(start, end, selectionDirection);
+            if (current._mm_enhanced) {
+                var currentSnapshot = editorSnapshot(current);
+                window._mm_selStart = currentSnapshot[1];
+                window._mm_selEnd = currentSnapshot[2];
+            }
+        };
+        restore();
+        queueMicrotask(restore);
+        requestAnimationFrame(restore);
     };
     
     // ========== 搜索高亮层 / Search Highlight Overlay ==========

@@ -39,9 +39,24 @@ fn sync_selection_from_dom(state: &mut AppState) {
         let mut eval = document::eval(
             r#"
             (function() {
+                if (window._mm_getSelection) {
+                    dioxus.send(window._mm_getSelection());
+                    return;
+                }
                 const ta = document.querySelector('.editor-textarea');
                 if (!ta) { dioxus.send([0, 0]); return; }
-                dioxus.send([ta.selectionStart || 0, ta.selectionEnd || 0]);
+                const value = ta.value || '';
+                const toBytes = function(offset) {
+                    let safe = Math.max(0, Math.min(Number(offset) || 0, value.length));
+                    if (safe > 0 && safe < value.length) {
+                        const before = value.charCodeAt(safe - 1);
+                        const after = value.charCodeAt(safe);
+                        if (before >= 0xD800 && before <= 0xDBFF &&
+                            after >= 0xDC00 && after <= 0xDFFF) safe -= 1;
+                    }
+                    return new TextEncoder().encode(value.slice(0, safe)).length;
+                };
+                dioxus.send([toBytes(ta.selectionStart), toBytes(ta.selectionEnd)]);
             })();
             "#,
         );

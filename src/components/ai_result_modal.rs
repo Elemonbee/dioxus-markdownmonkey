@@ -156,9 +156,7 @@ fn CopyButton(props: CopyButtonProps) -> Element {
         button {
             class: "btn-secondary",
             onclick: move |_| {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    let _ = clipboard.set_text(props.result.clone());
-                }
+                crate::utils::clipboard::copy_text(&props.result);
             },
             "{props.copy_text}"
         }

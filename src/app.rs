@@ -10,7 +10,7 @@ use crate::services::auto_save::AutoSaveService;
 use crate::services::file_watcher::FileModificationChecker;
 use crate::services::keyring_service;
 use crate::services::session::SessionService;
-use crate::services::settings::load_settings;
+use crate::services::settings::{load_settings, save_settings, AppSettings};
 use crate::services::theme_detector::ThemeDetector;
 use crate::state::AppState;
 use crate::state::{AIProvider, Language, Theme};
@@ -36,7 +36,6 @@ pub fn App() -> Element {
         let settings = load_settings();
         {
             let mut ui = state.ui();
-            let mut doc = state.document();
             let mut ai = state.ai();
 
             // 应用主题 / Apply theme
@@ -63,13 +62,7 @@ pub fn App() -> Element {
             AppActions::set_sidebar_width(&mut state, settings.sidebar_width);
             *ui.auto_save_enabled.write() = settings.auto_save_enabled;
             *ui.auto_save_interval.write() = settings.auto_save_interval;
-            *ui.pdf_cjk_font_path.write() = settings.pdf_cjk_font_path.clone();
-
-            // 应用拼写检查设置 / Apply spell check settings
-            *doc.spell_check_enabled.write() = settings.spell_check_enabled;
-            if settings.spell_check_enabled {
-                state.run_spell_check();
-            }
+            *ui.session_restore_enabled.write() = settings.session_restore_enabled;
 
             // 应用 AI 设置 / Apply AI settings
             {
@@ -159,6 +152,44 @@ pub fn App() -> Element {
         Theme::Dark => "dark",
     };
 
+    // 即时设置防抖持久化 / Debounced persistence for immediately applied settings
+    {
+        let state_snapshot = state;
+        let desktop = dioxus::desktop::use_window();
+        let window = desktop.window.clone();
+        let mut initialized = use_signal(|| false);
+        let mut revision = use_signal(|| 0_u64);
+        use_effect(move || {
+            let physical_size = window.inner_size();
+            let scale = window.scale_factor();
+            let settings = AppSettings::from_state(
+                &state_snapshot,
+                (physical_size.width as f64 / scale).max(600.0),
+                (physical_size.height as f64 / scale).max(400.0),
+            );
+
+            if !*initialized.peek() {
+                initialized.set(true);
+                return;
+            }
+
+            let next_revision = revision.peek().wrapping_add(1);
+            revision.set(next_revision);
+            spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if *revision.peek() != next_revision {
+                    return;
+                }
+                if let Err(error) = save_settings(&settings) {
+                    tracing::warn!(
+                        "即时设置持久化失败 / Failed to persist immediate settings: {}",
+                        error
+                    );
+                }
+            });
+        });
+    }
+
     // 自动保存定时器（使用 AutoSaveService）/ Auto Save Timer (using AutoSaveService)
     {
         let state_clone = state;
@@ -201,9 +232,13 @@ pub fn App() -> Element {
                         EditorActions::flush_from_dom(&mut state).await;
                         let path = doc.current_file.read().clone();
                         let content = doc.content.read().clone();
+                        let encoding = *doc.file_encoding.read();
                         let revision = *doc.content_revision.read();
 
-                        match auto_saver.auto_save(path.as_ref(), &content).await {
+                        match auto_saver
+                            .auto_save(path.as_ref(), &content, encoding)
+                            .await
+                        {
                             Ok(_) => {
                                 if *doc.content_revision.read() == revision {
                                     tracing::info!("自动保存成功 / Auto save successful");
@@ -216,9 +251,12 @@ pub fn App() -> Element {
                                         "自动保存内容已过期，重新写入最新内容 / Auto-save stale; rewriting latest content"
                                     );
                                     let latest = doc.content.read().clone();
+                                    let latest_encoding = *doc.file_encoding.read();
                                     let latest_rev = *doc.content_revision.read();
                                     let latest_path = doc.current_file.read().clone();
-                                    match auto_saver.auto_save(latest_path.as_ref(), &latest).await
+                                    match auto_saver
+                                        .auto_save(latest_path.as_ref(), &latest, latest_encoding)
+                                        .await
                                     {
                                         Ok(_) if *doc.content_revision.read() == latest_rev => {
                                             state.mark_saved();
@@ -349,11 +387,11 @@ pub fn App() -> Element {
         let state_clone = state;
         use_future(move || {
             let mut state = state_clone;
+            let ui = state.ui();
             async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                    let enabled =
-                        crate::services::settings::load_settings().session_restore_enabled;
+                    let enabled = *ui.session_restore_enabled.read();
                     if !enabled {
                         continue;
                     }
@@ -409,10 +447,8 @@ pub fn App() -> Element {
         AiChatModal {}
         AiResultModal {}
         GlobalSearchModal {}
-        FileModifiedModal {}
         TableEditorModal {}
         SearchModal {}
-        LargeFileWarningModal {}
-        CloseConfirmModal {}
+        ConfirmModals {}
     }
 }

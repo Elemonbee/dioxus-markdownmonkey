@@ -2,11 +2,19 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use dioxus::prelude::ReadableExt;
+
+use crate::state::{AppState, Language, Theme};
+
+/// 进程内设置写锁 / Process-wide settings write lock
+static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 应用设置 / Application Settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettings {
     /// 主题 / Theme
     pub theme: String,
@@ -34,12 +42,6 @@ pub struct AppSettings {
     /// 自动保存间隔（秒）/ Auto Save Interval (seconds)
     #[serde(default = "default_auto_save_interval")]
     pub auto_save_interval: u32,
-    /// 拼写检查启用 / Spell Check Enabled
-    #[serde(default)]
-    pub spell_check_enabled: bool,
-    /// PDF 导出中文字体路径（可选）/ Optional PDF CJK font path
-    #[serde(default)]
-    pub pdf_cjk_font_path: Option<String>,
     /// 启动时恢复上次会话（标签/工作区）/ Restore last session (tabs/workspace) on launch
     #[serde(default = "default_session_restore_enabled")]
     pub session_restore_enabled: bool,
@@ -54,7 +56,7 @@ pub struct AppSettings {
 }
 
 /// AI 设置 / AI Settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AISettings {
     /// 是否启用 / Is Enabled
     pub enabled: bool,
@@ -104,13 +106,58 @@ impl Default for AppSettings {
             sidebar_width: 280,
             auto_save_enabled: false,
             auto_save_interval: 30,
-            spell_check_enabled: false,
-            pdf_cjk_font_path: None,
             session_restore_enabled: true,
             window_width: 1200.0,
             window_height: 800.0,
             ai: AISettings::default(),
         }
+    }
+}
+
+impl AppSettings {
+    /// 从当前应用状态生成完整设置快照，并保留调用方提供的窗口尺寸
+    /// Build a complete settings snapshot from app state while preserving supplied window dimensions
+    pub fn from_state(state: &AppState, window_width: f64, window_height: f64) -> Self {
+        let ui = state.ui();
+        let ai = state.ai();
+        let config = ai.ai_config.read();
+
+        let settings = Self {
+            theme: match *ui.theme.read() {
+                Theme::Dark => "dark",
+                Theme::Light => "light",
+                Theme::System => "system",
+            }
+            .to_string(),
+            language: match *ui.language.read() {
+                Language::ZhCN => "zh-CN",
+                Language::EnUS => "en-US",
+            }
+            .to_string(),
+            font_size: *ui.font_size.read(),
+            preview_font_size: *ui.preview_font_size.read(),
+            word_wrap: *ui.word_wrap.read(),
+            line_numbers: *ui.line_numbers.read(),
+            sync_scroll: *ui.sync_scroll.read(),
+            sidebar_visible: *ui.sidebar_visible.read(),
+            show_preview: *ui.show_preview.read(),
+            sidebar_width: *ui.sidebar_width.read(),
+            auto_save_enabled: *ui.auto_save_enabled.read(),
+            auto_save_interval: *ui.auto_save_interval.read(),
+            session_restore_enabled: *ui.session_restore_enabled.read(),
+            window_width,
+            window_height,
+            ai: AISettings {
+                enabled: config.enabled,
+                provider: config.provider.as_str().to_string(),
+                model: config.model.clone(),
+                api_key: None,
+                base_url: config.base_url.clone(),
+                system_prompt: config.system_prompt.clone(),
+                temperature: config.temperature,
+            },
+        };
+        settings
     }
 }
 
@@ -143,10 +190,17 @@ impl SettingsService {
         Ok(Self { config_path })
     }
 
+    /// 使用指定路径创建设置服务，便于测试隔离
+    /// Create a settings service for an explicit path to isolate tests
+    #[cfg(test)]
+    fn from_path(config_path: PathBuf) -> Self {
+        Self { config_path }
+    }
+
     /// 获取配置目录 / Get Config Directory
     pub fn get_config_dir() -> io::Result<PathBuf> {
         // 尝试使用标准配置目录 / Try to use standard config directory
-        if let Some(home) = dirs::config_dir() {
+        if let Some(home) = crate::utils::paths::config_dir() {
             return Ok(home.join("MarkdownMonkey"));
         }
 
@@ -171,13 +225,131 @@ impl SettingsService {
     /// 安全措施：保存前清除 api_key 明文，确保 API Key 仅存储在系统密钥环中
     /// Security: clear api_key before saving to ensure API Key is only in system keyring
     pub fn save(&self, settings: &AppSettings) -> io::Result<()> {
-        // 创建一个副本用于保存，将 api_key 设为 None
-        // Create a copy for saving, set api_key to None
+        let _guard = SETTINGS_WRITE_LOCK
+            .lock()
+            .map_err(|_| io::Error::other("settings write lock poisoned"))?;
+        let mut merged = settings.clone();
+        if self.config_path.exists() {
+            if let Ok(current) = self.load() {
+                merged.window_width = current.window_width;
+                merged.window_height = current.window_height;
+            }
+        }
+        self.save_locked(&merged)
+    }
+
+    /// 在已持有全局写锁时安全保存设置
+    /// Save settings safely while the global write lock is held
+    fn save_locked(&self, settings: &AppSettings) -> io::Result<()> {
         let mut safe_settings = settings.clone();
         safe_settings.ai.api_key = None;
+        let content = serde_json::to_vec_pretty(&safe_settings)?;
+        atomic_write(&self.config_path, &content)
+    }
 
-        let content = serde_json::to_string_pretty(&safe_settings)?;
-        fs::write(&self.config_path, content)?;
+    /// 在同一串行化临界区内更新窗口尺寸
+    /// Update window dimensions inside the same serialized critical section
+    fn save_window_size(&self, width: f64, height: f64) -> io::Result<()> {
+        let _guard = SETTINGS_WRITE_LOCK
+            .lock()
+            .map_err(|_| io::Error::other("settings write lock poisoned"))?;
+        let mut settings = self.load().unwrap_or_default();
+        settings.window_width = width;
+        settings.window_height = height;
+        self.save_locked(&settings)
+    }
+}
+
+/// 使用同目录临时文件写入并原子替换目标文件
+/// Write through a same-directory temporary file and atomically replace the destination
+fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let stem = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("settings.json");
+    let mut attempt = 0_u32;
+    let temp_path = loop {
+        let candidate = parent.join(format!(".{stem}.{}.{}.tmp", std::process::id(), attempt));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(content).and_then(|_| file.sync_all()) {
+                    let _ = fs::remove_file(&candidate);
+                    return Err(error);
+                }
+                break candidate;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                attempt = attempt.wrapping_add(1);
+            }
+            Err(error) => return Err(error),
+        }
+    };
+
+    if let Err(error) = atomic_replace(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// 在 Unix 上通过 rename 原子替换目标文件
+/// Atomically replace the destination with rename on Unix
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)
+}
+
+/// 在 Windows 上通过 ReplaceFileW 原子替换现有文件
+/// Atomically replace an existing file with ReplaceFileW on Windows
+#[cfg(windows)]
+fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    if !destination.exists() {
+        return fs::rename(source, destination);
+    }
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn ReplaceFileW(
+            replaced_file_name: *const u16,
+            replacement_file_name: *const u16,
+            backup_file_name: *const u16,
+            replace_flags: u32,
+            exclude: *mut std::ffi::c_void,
+            reserved: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let source_wide: Vec<u16> = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        ReplaceFileW(
+            destination_wide.as_ptr(),
+            source_wide.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result == 0 {
+        Err(io::Error::last_os_error())
+    } else {
         Ok(())
     }
 }
@@ -206,10 +378,7 @@ pub fn save_settings(settings: &AppSettings) -> io::Result<()> {
 /// 便捷函数：仅保存窗口尺寸（不影响其他设置）/ Save only window size (doesn't affect other settings)
 pub fn save_window_size(width: f64, height: f64) -> io::Result<()> {
     let service = SettingsService::new()?;
-    let mut settings = service.load().unwrap_or_default();
-    settings.window_width = width;
-    settings.window_height = height;
-    service.save(&settings)
+    service.save_window_size(width, height)
 }
 
 /// AI 历史文件名（旧版全局）/ Legacy global AI history filename
@@ -356,6 +525,21 @@ pub fn save_ai_history_to(
 mod tests {
     use super::*;
     use crate::state::ChatTurn;
+    use dioxus::prelude::WritableExt;
+
+    /// 在 Dioxus 作用域内运行 Signal 相关测试
+    /// Run Signal-related tests inside a Dioxus scope
+    fn with_runtime<F: FnOnce()>(test: F) {
+        use dioxus::prelude::*;
+
+        /// 提供测试所需的空组件 / Provide an empty component for tests
+        fn empty_component() -> Element {
+            rsx! { div {} }
+        }
+
+        let vdom = VirtualDom::prebuilt(empty_component);
+        vdom.in_scope(ScopeId::ROOT, test);
+    }
 
     #[test]
     fn test_settings_default_values() {
@@ -368,7 +552,6 @@ mod tests {
         assert!(!settings.word_wrap);
         assert!(settings.line_numbers);
         assert!(settings.sync_scroll);
-        assert!(settings.pdf_cjk_font_path.is_none());
     }
 
     #[test]
@@ -411,7 +594,6 @@ mod tests {
         // 新字段应该使用默认值 / New fields should use defaults
         assert!(!settings.auto_save_enabled);
         assert_eq!(settings.auto_save_interval, 30);
-        assert!(settings.pdf_cjk_font_path.is_none());
     }
 
     #[test]
@@ -429,6 +611,95 @@ mod tests {
         let json = serde_json::to_string(&ai).unwrap();
         // API Key 为 None 时不应该出现在 JSON 中 / API Key should not appear in JSON when None
         assert!(!json.contains("api_key"));
+    }
+
+    /// AppState 快照应包含工具栏即时设置且永不包含明文密钥
+    /// AppState snapshots include immediate toolbar settings and never plaintext keys
+    #[test]
+    fn test_app_state_mapping_captures_immediate_settings_without_api_key() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            *state.theme.write() = Theme::Light;
+            *state.language.write() = Language::EnUS;
+            *state.show_preview.write() = false;
+            *state.sidebar_visible.write() = false;
+            *state.auto_save_enabled.write() = true;
+            state.ai_config.write().api_key = "secret".to_string();
+
+            let settings = AppSettings::from_state(&state, 900.0, 700.0);
+            assert_eq!(settings.theme, "light");
+            assert_eq!(settings.language, "en-US");
+            assert!(!settings.show_preview);
+            assert!(!settings.sidebar_visible);
+            assert!(settings.auto_save_enabled);
+            assert!(settings.ai.api_key.is_none());
+        });
+    }
+
+    /// 设置保存应原子替换并清理同目录临时文件
+    /// Settings saves atomically replace the destination and clean same-directory temporary files
+    #[test]
+    fn test_settings_save_atomically_replaces_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("settings.json");
+        let service = SettingsService::from_path(path.clone());
+        service.save(&AppSettings::default()).unwrap();
+
+        let mut updated = AppSettings {
+            theme: "light".to_string(),
+            ..AppSettings::default()
+        };
+        updated.ai.api_key = Some("never-on-disk".to_string());
+        service.save(&updated).unwrap();
+
+        let saved: AppSettings = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.theme, "light");
+        assert!(saved.ai.api_key.is_none());
+        assert!(fs::read_dir(temp.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")));
+    }
+
+    /// 并发全量保存与窗口保存应合并，不能互相覆盖
+    /// Concurrent full and window saves merge without overwriting each other
+    #[test]
+    fn test_concurrent_full_and_window_saves_are_serialized_and_merged() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("settings.json");
+        SettingsService::from_path(path.clone())
+            .save(&AppSettings::default())
+            .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+        let full_path = path.clone();
+        let full_barrier = barrier.clone();
+        let full = std::thread::spawn(move || {
+            let service = SettingsService::from_path(full_path);
+            let settings = AppSettings {
+                theme: "light".to_string(),
+                ..AppSettings::default()
+            };
+            full_barrier.wait();
+            service.save(&settings).unwrap();
+        });
+
+        let window_path = path.clone();
+        let window_barrier = barrier.clone();
+        let window = std::thread::spawn(move || {
+            let service = SettingsService::from_path(window_path);
+            window_barrier.wait();
+            service.save_window_size(1440.0, 960.0).unwrap();
+        });
+
+        barrier.wait();
+        full.join().unwrap();
+        window.join().unwrap();
+        let saved = SettingsService::from_path(path).load().unwrap();
+        assert_eq!(saved.theme, "light");
+        assert_eq!(saved.window_width, 1440.0);
+        assert_eq!(saved.window_height, 960.0);
     }
 
     #[test]

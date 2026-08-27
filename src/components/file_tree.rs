@@ -608,10 +608,8 @@ fn reveal_in_explorer(path: &Path) {
 /// 复制路径到剪贴板 / Copy path to clipboard
 fn copy_path_to_clipboard(path: &Path) {
     let path_str = path.to_string_lossy().to_string();
-    match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(&path_str)) {
-        Ok(()) => tracing::info!("路径已复制到剪贴板: {}", path_str),
-        Err(e) => tracing::error!("复制路径失败: {}", e),
-    }
+    crate::utils::clipboard::copy_text(&path_str);
+    tracing::info!("路径已复制到剪贴板: {}", path_str);
 }
 
 /// 扁平化文件树项组件

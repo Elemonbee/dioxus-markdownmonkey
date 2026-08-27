@@ -84,15 +84,11 @@ impl I18n {
         texts.insert("modified", lang_map("已修改", "Modified"));
         texts.insert("chars", lang_map("字符", "characters"));
         texts.insert("words", lang_map("词", "words"));
-        texts.insert("lines", lang_map("行", "lines"));
-        texts.insert("read_time", lang_map("阅读时间", "read time"));
-        texts.insert("minutes", lang_map("分钟", "min"));
 
         // 快捷键 / Shortcuts
         texts.insert("shortcuts", lang_map("快捷键", "Shortcuts"));
         texts.insert("close", lang_map("关闭", "Close"));
         texts.insert("cancel", lang_map("取消", "Cancel"));
-        texts.insert("confirm", lang_map("确认", "Confirm"));
         texts.insert("clear", lang_map("清空", "Clear"));
         texts.insert("send", lang_map("发送", "Send"));
 
@@ -121,11 +117,6 @@ impl I18n {
         texts.insert("preview_rendering", lang_map("渲染中…", "Rendering…"));
         texts.insert("open_file", lang_map("打开文件", "Open File"));
         texts.insert("save_file", lang_map("保存文件", "Save File"));
-        texts.insert(
-            "markdown_files",
-            lang_map("Markdown 文件", "Markdown Files"),
-        );
-        texts.insert("all_files", lang_map("所有文件", "All Files"));
 
         // 占位符 / Placeholders
         texts.insert("placeholder_text", lang_map("文本", "Text"));
@@ -134,13 +125,6 @@ impl I18n {
             lang_map(
                 "开始输入 Markdown 内容...",
                 "Start typing Markdown content...",
-            ),
-        );
-        texts.insert(
-            "placeholder_ai",
-            lang_map(
-                "输入自定义问题或选择上方功能...",
-                "Enter custom question or select a function above...",
             ),
         );
 
@@ -162,12 +146,9 @@ impl I18n {
             "search_placeholder",
             lang_map("搜索所有 Markdown 文件...", "Search all Markdown files..."),
         );
-        texts.insert("search_results", lang_map("搜索结果", "Search Results"));
         texts.insert("no_results", lang_map("未找到结果", "No results found"));
-        texts.insert("files_searched", lang_map("个文件被搜索", "files searched"));
 
         // 搜索替换 / Search & Replace
-        texts.insert("search_replace", lang_map("搜索替换", "Search & Replace"));
         texts.insert("find", lang_map("查找", "Find"));
         texts.insert("case_sensitive", lang_map("区分大小写", "Case Sensitive"));
         texts.insert("regex", lang_map("正则表达式", "Regex"));
@@ -203,13 +184,8 @@ impl I18n {
 
         // 表格 / Table
         texts.insert("table_editor", lang_map("表格编辑器", "Table Editor"));
-        texts.insert("add_column", lang_map("添加列", "Add Column"));
         texts.insert("add_row", lang_map("添加行", "Add Row"));
         texts.insert("insert_table", lang_map("插入表格", "Insert Table"));
-
-        // 图片 / Image
-        texts.insert("paste_image", lang_map("粘贴图片", "Paste Image"));
-        texts.insert("image_saved", lang_map("图片已保存", "Image saved"));
 
         // 大文件警告 / Large File Warning
         texts.insert(
@@ -229,14 +205,6 @@ impl I18n {
         // 文件操作 / File Operations
         texts.insert("delete_file", lang_map("删除文件", "Delete File"));
         texts.insert("rename_file", lang_map("重命名文件", "Rename File"));
-        texts.insert(
-            "delete_confirm",
-            lang_map(
-                "确定要删除此文件吗？",
-                "Are you sure you want to delete this file?",
-            ),
-        );
-        texts.insert("enter_new_name", lang_map("输入新名称", "Enter new name"));
         texts.insert("copy_path", lang_map("复制路径", "Copy Path"));
         texts.insert(
             "reveal_in_explorer",
@@ -255,13 +223,11 @@ impl I18n {
                 "This file has unsaved changes. Are you sure you want to close it?",
             ),
         );
-        texts.insert("dont_save", lang_map("不保存并关闭", "Don't Save"));
+        texts.insert("dont_save", lang_map("不保存并关闭", "Don't Save & Close"));
 
         // 工具栏 / Toolbar
         texts.insert("new_file", lang_map("新建文件", "New File"));
         texts.insert("export_html", lang_map("导出 HTML", "Export HTML"));
-        texts.insert("export_pdf", lang_map("导出 PDF", "Export PDF"));
-        texts.insert("export_docx", lang_map("导出 DOCX", "Export DOCX"));
         texts.insert("export_text", lang_map("导出纯文本", "Export Plain Text"));
         texts.insert("bold", lang_map("粗体", "Bold"));
         texts.insert("italic", lang_map("斜体", "Italic"));
@@ -349,13 +315,6 @@ impl I18n {
             "search_workspace",
             lang_map("搜索工作区中的文本...", "Search text in workspace..."),
         );
-        texts.insert(
-            "navigate_hint",
-            lang_map(
-                "↑↓ 导航 • Enter 打开 • Esc 关闭",
-                "↑↓ Navigate • Enter Open • Esc Close",
-            ),
-        );
 
         // 标签栏 / Tab Bar
         texts.insert("new_tab", lang_map("新建标签", "New Tab"));
@@ -363,18 +322,10 @@ impl I18n {
         // 表格列名 / Table Column
         texts.insert("column", lang_map("列", "Column"));
 
-        // 搜索替换 / Search Replace
-        texts.insert("replace_with", lang_map("替换为", "Replace with"));
-
         // 快捷键弹窗 / Shortcuts Modal
         texts.insert("insert_link", lang_map("插入链接", "Insert Link"));
         texts.insert("show_shortcuts", lang_map("显示快捷键", "Show Shortcuts"));
         texts.insert("close_modal", lang_map("关闭弹窗", "Close Modal"));
-        texts.insert("file_operations", lang_map("文件操作", "File Operations"));
-        texts.insert("edit_operations", lang_map("编辑操作", "Edit Operations"));
-        texts.insert("formatting", lang_map("格式化", "Formatting"));
-        texts.insert("view_controls", lang_map("视图控制", "View Controls"));
-        texts.insert("others", lang_map("其他", "Others"));
 
         // 设置弹窗 / Settings Modal
         texts.insert("editor", lang_map("编辑器", "Editor"));
@@ -405,28 +356,21 @@ impl I18n {
         texts.insert("enter_api_key", lang_map("输入 API Key", "Enter API Key"));
         texts.insert("model_name", lang_map("模型名称", "Model Name"));
         texts.insert("temperature", lang_map("温度 (0-1)", "Temperature"));
+        texts.insert("system_prompt", lang_map("系统提示词", "System Prompt"));
+        texts.insert(
+            "system_prompt_hint",
+            lang_map(
+                "作为所有 AI 任务提示词的全局前缀",
+                "Global prefix for every AI task prompt",
+            ),
+        );
         texts.insert("reset_default", lang_map("重置默认", "Reset"));
         texts.insert("save_close", lang_map("保存并关闭", "Save & Close"));
         texts.insert("follow_system", lang_map("跟随系统", "System"));
 
-        // 拼写检查 / Spell Check
-        texts.insert("spell_check", lang_map("拼写检查", "Spell Check"));
-        texts.insert("spell_errors", lang_map("个拼写错误", "spell errors"));
-        texts.insert(
-            "spell_nav_tooltip",
-            lang_map(
-                "下一个拼写错误（右键：上一个）",
-                "Next spelling error (right-click: previous)",
-            ),
-        );
-
         // 预览 / Preview
         texts.insert("preview", lang_map("预览", "Preview"));
         texts.insert("sync_scroll_toggle", lang_map("同步滚动", "Sync Scroll"));
-        texts.insert(
-            "toggle_preview_shortcut",
-            lang_map("切换预览 (Ctrl+P)", "Toggle Preview (Ctrl+P)"),
-        );
 
         // 文件树 / File Tree
         texts.insert("new_file_btn", lang_map("新建文件", "New File"));
@@ -434,9 +378,6 @@ impl I18n {
         texts.insert("select_folder", lang_map("选择文件夹", "Select Folder"));
         texts.insert("refresh", lang_map("刷新", "Refresh"));
         texts.insert("search_files", lang_map("搜索文件...", "Search files..."));
-        texts.insert("workspace_set", lang_map("已设置", "Set"));
-        texts.insert("workspace_not_set", lang_map("未设置", "Not Set"));
-        texts.insert("workspace_label", lang_map("工作区", "Workspace"));
         texts.insert("files_found", lang_map("个文件", "files found"));
         texts.insert(
             "no_matching_files",
@@ -467,7 +408,6 @@ impl I18n {
         );
 
         // 状态栏补充 / Status Bar additions
-        texts.insert("encoding_utf8", lang_map("UTF-8", "UTF-8"));
         texts.insert("file_type_markdown", lang_map("Markdown", "Markdown"));
 
         // 设置弹窗补充 / Settings Modal additions
@@ -495,26 +435,9 @@ impl I18n {
         texts.insert("no_models_found", lang_map("未找到模型", "No models found"));
         texts.insert("select_model", lang_map("选择模型", "Select Model"));
         texts.insert(
-            "models_fetch_error",
-            lang_map("获取模型失败", "Failed to fetch models"),
-        );
-        texts.insert(
             "large_file_threshold",
             lang_map("大文件提醒阈值", "Large File Warning Threshold"),
         );
-        texts.insert(
-            "pdf_cjk_font_path",
-            lang_map("PDF 中文字体路径", "PDF CJK Font Path"),
-        );
-        texts.insert(
-            "pdf_cjk_font_path_hint",
-            lang_map(
-                "可选。留空则自动尝试系统字体；也可设置环境变量 MARKDOWNMONKEY_PDF_FONT",
-                "Optional. Leave empty to auto-detect system fonts; or set MARKDOWNMONKEY_PDF_FONT",
-            ),
-        );
-        texts.insert("browse", lang_map("浏览…", "Browse…"));
-        texts.insert("clear_path", lang_map("清除", "Clear"));
         texts.insert(
             "ai_clear_history_confirm",
             lang_map(
@@ -605,5 +528,14 @@ mod tests {
         assert_eq!(untitled_tab_title(Language::ZhCN), "未命名");
         assert_eq!(untitled_tab_title(Language::EnUS), "Untitled");
         assert_eq!(untitled_tab_title_n(Language::EnUS, 2), "Untitled 2");
+    }
+
+    /// 关闭确认按钮应同时提供中英文文案 / Close-confirm buttons provide both locales
+    #[test]
+    fn test_close_confirm_action_i18n() {
+        assert_eq!(t("save_close", Language::ZhCN), "保存并关闭");
+        assert_eq!(t("save_close", Language::EnUS), "Save & Close");
+        assert_eq!(t("dont_save", Language::ZhCN), "不保存并关闭");
+        assert_eq!(t("dont_save", Language::EnUS), "Don't Save & Close");
     }
 }

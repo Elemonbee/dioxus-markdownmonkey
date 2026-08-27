@@ -41,7 +41,7 @@ impl RecentFiles {
             return preferred;
         }
 
-        let legacy = dirs::config_dir()
+        let legacy = crate::utils::paths::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("markdownmonkey")
             .join("recent_files.json");

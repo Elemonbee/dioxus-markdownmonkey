@@ -3,19 +3,86 @@
 //! 使用系统密钥环（keyring）安全存储 API Key
 //! Uses system keyring for secure API Key storage
 
-use keyring_core::Entry;
+use keyring_core::{set_default_store, Entry};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 const KEYRING_SERVICE: &str = "markdownmonkey";
 static KEYRING_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
+/// 初始化当前平台的系统密钥环 / Initialize the current platform's native keyring store
+fn init_native_store() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let store = windows_native_keyring_store::Store::new_with_configuration(&HashMap::new())
+            .map_err(|e| format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e))?;
+        set_default_store(store);
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        let store =
+            apple_native_keyring_store::keychain::Store::new_with_configuration(&HashMap::new())
+                .map_err(|e| {
+                    format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e)
+                })?;
+        set_default_store(store);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        match linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::new()) {
+            Ok(store) => {
+                set_default_store(store);
+                return Ok(());
+            }
+            Err(keyutils_error) => {
+                tracing::warn!(
+                    "Linux keyutils 不可用，回退到 Secret Service: {} / \
+                     Linux keyutils unavailable, falling back to Secret Service: {}",
+                    keyutils_error,
+                    keyutils_error
+                );
+            }
+        }
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+    ))]
+    {
+        let store =
+            zbus_secret_service_keyring_store::Store::new_with_configuration(&HashMap::new())
+                .map_err(|e| {
+                    format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e)
+                })?;
+        set_default_store(store);
+        Ok(())
+    }
+
+    #[cfg(not(any(
+        windows,
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "linux",
+        all(
+            unix,
+            not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+        )
+    )))]
+    {
+        Err(
+            "当前平台不支持系统密钥环 / Native keyring is not supported on this platform"
+                .to_string(),
+        )
+    }
+}
+
 fn ensure_native_store() -> Result<(), String> {
-    KEYRING_INIT
-        .get_or_init(|| {
-            keyring::use_native_store(false)
-                .map_err(|e| format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e))
-        })
-        .clone()
+    KEYRING_INIT.get_or_init(init_native_store).clone()
 }
 
 /// 存储 API Key / Store API Key

@@ -77,10 +77,13 @@ impl ImageService {
             .map_err(|e| ImageError::InvalidFormat(e.to_string()))?;
 
         // 生成文件名 / Generate filename
-        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let name = filename
             .map(|s| s.to_string())
-            .unwrap_or_else(|| format!("image_{}", timestamp));
+            .unwrap_or_else(|| format!("image_{timestamp}"));
 
         let filename = format!("{}.{}", name, format.extension());
         let path = output_dir.join(&filename);
@@ -107,7 +110,7 @@ impl ImageService {
 
         // 确定输出目录 / Determine output directory
         let output_dir = workspace.map(|p| p.join("images")).unwrap_or_else(|| {
-            dirs::picture_dir()
+            crate::utils::paths::pictures_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("markdownmonkey_images")
         });

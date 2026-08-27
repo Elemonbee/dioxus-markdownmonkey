@@ -7,7 +7,7 @@ use crate::actions::EditorActions;
 use crate::config::{
     PREVIEW_DEBOUNCE_MS, PREVIEW_LARGE_FILE_DEBOUNCE_MS, PREVIEW_LARGE_FILE_THRESHOLD_BYTES,
 };
-use crate::services::markdown::{katex_script, mermaid_script, MarkdownService};
+use crate::services::markdown::MarkdownService;
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
@@ -83,7 +83,7 @@ pub fn Preview() -> Element {
                 String::new()
             } else {
                 let md_service = MarkdownService::new();
-                md_service.render_with_highlight(&content_clone)
+                md_service.render(&content_clone)
             };
 
             // 渲染完成后再次校验世代号 / Re-check generation after potentially slow render
@@ -93,42 +93,11 @@ pub fn Preview() -> Element {
 
             cached_html.set(rendered);
             is_rendering.set(false);
-
-            let _ = document::eval(
-                r#"
-            (function() {
-                try {
-                    if (typeof mermaid !== 'undefined' && mermaid.run) {
-                        try { mermaid.run(); } catch(e) {
-                            console.warn('Mermaid run error:', e);
-                        }
-                    }
-                    if (window._mm_renderMath) {
-                        try { window._mm_renderMath(); } catch(e) {
-                            console.warn('KaTeX render error:', e);
-                        }
-                    }
-                } catch (e) {
-                    console.warn('Preview post-render failed:', e);
-                }
-            })();
-            "#,
-            );
         });
     }
 
     let content_html = cached_html.read().clone();
     let show_rendering = *is_rendering.read() && !doc.content.read().is_empty();
-
-    // 脚本注入标记
-    let mut scripts_injected = use_signal(|| false);
-    if !*scripts_injected.read() {
-        scripts_injected.set(true);
-        let scripts = format!("{} {}", mermaid_script(), katex_script())
-            .replace("<script>", "")
-            .replace("</script>", "");
-        let _ = document::eval(&scripts);
-    }
 
     // i18n
     let lang = *ui.language.read();
@@ -174,7 +143,6 @@ pub fn Preview() -> Element {
                 }
             }
 
-            div { id: "preview-scripts" }
             div {
                 id: "preview-scroll",
                 class: "preview-content markdown-body",

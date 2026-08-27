@@ -8,6 +8,7 @@ mod tests {
     use crate::services::export::ExportService;
     use crate::services::file_watcher::FileModificationChecker;
     use crate::services::image::{ImageFormat, ImageService};
+    use crate::utils::file_encoding::{decode_bytes, encode_text, FileEncoding};
     use std::io::Write;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -90,6 +91,43 @@ mod tests {
 
         service.mark_saved();
         assert!(!service.should_save(true));
+    }
+
+    /// 自动保存应使用指定编码并保留 BOM / Auto-save uses the specified encoding and preserves its BOM
+    #[tokio::test]
+    async fn test_auto_save_preserves_encoding_and_bom() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("autosave.md");
+        let mut service = AutoSaveService::new();
+
+        service
+            .auto_save(Some(&path), "自动保存", FileEncoding::Utf16Le)
+            .await
+            .unwrap();
+
+        let bytes = std::fs::read(path).unwrap();
+        assert!(bytes.starts_with(&[0xFF, 0xFE]));
+        assert_eq!(
+            decode_bytes(&bytes).unwrap(),
+            ("自动保存".to_string(), FileEncoding::Utf16Le)
+        );
+    }
+
+    /// 自动保存 GBK 不可表示字符时应失败且不覆盖文件 / GBK auto-save rejects unrepresentable text without overwriting
+    #[tokio::test]
+    async fn test_auto_save_rejects_unrepresentable_gbk() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("autosave-gbk.md");
+        let original = encode_text("原文", FileEncoding::Gbk).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let mut service = AutoSaveService::new();
+
+        let result = service
+            .auto_save(Some(&path), "emoji 😀", FileEncoding::Gbk)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(path).unwrap(), original);
     }
 
     // ========== 图片服务测试 / Image Service Tests ==========
@@ -289,21 +327,21 @@ mod tests {
     }
 
     #[test]
-    fn test_markdown_render_mermaid() {
+    fn test_markdown_render_fenced_code() {
         use crate::services::markdown::render_markdown;
 
         let md = "```mermaid\ngraph TD\nA-->B\n```";
         let html = render_markdown(md);
-        assert!(html.contains("mermaid"));
+        assert!(html.contains("<pre>") || html.contains("<code>"));
     }
 
     #[test]
     fn test_markdown_sanitizes_script_tags() {
         use crate::services::markdown::render_markdown;
 
-        let html = render_markdown("<script>alert('xss')</script><p>ok</p>");
-        assert!(!html.contains("alert('xss')"));
-        assert!(html.contains("<p>ok</p>") || html.contains("ok"));
+        let html = render_markdown("ok\n\n<script>alert('xss')</script>");
+        assert!(!html.contains("<script"));
+        assert!(html.contains("ok"));
     }
 
     #[test]
@@ -316,102 +354,6 @@ mod tests {
         assert!(!html.to_lowercase().contains("javascript:"));
         assert!(!html.contains("position:fixed"));
         assert!(!html.to_lowercase().contains("data:text/html"));
-    }
-
-    // ========== 数学公式预处理测试 / Math Formula Preprocess Tests ==========
-
-    #[test]
-    fn test_html_encode_attribute() {
-        use crate::services::markdown::html_encode_attribute;
-
-        assert_eq!(html_encode_attribute("hello"), "hello");
-        assert!(html_encode_attribute("a & b").contains("amp;"));
-        assert!(html_encode_attribute(r#"a " b"#).contains("quot;"));
-        assert!(html_encode_attribute("a < b").contains("lt;"));
-        assert!(html_encode_attribute("a > b").contains("gt;"));
-    }
-
-    #[test]
-    fn test_preprocess_math_formulas_inline() {
-        use crate::services::markdown::preprocess_math_formulas;
-
-        let input = "The formula $E = mc^2$ is famous.";
-        let result = preprocess_math_formulas(input);
-        assert!(result.contains("data-formula-inline"));
-        assert!(!result.contains("$E = mc^2$"));
-    }
-
-    #[test]
-    fn test_preprocess_math_formulas_block() {
-        use crate::services::markdown::preprocess_math_formulas;
-
-        let input = "Block formula:\n$$x^2 + y^2 = z^2$$\nDone.";
-        let result = preprocess_math_formulas(input);
-        assert!(result.contains("data-formula-block"));
-    }
-
-    #[test]
-    fn test_preprocess_math_formulas_in_code_block() {
-        use crate::services::markdown::preprocess_math_formulas;
-
-        let input = "```\n$not a formula$\n```";
-        let result = preprocess_math_formulas(input);
-        assert!(!result.contains("data-formula-inline"));
-        assert!(result.contains("$not a formula$"));
-    }
-
-    // ========== 语法高亮测试 / Syntax Highlight Tests ==========
-
-    #[test]
-    fn test_syntax_highlight_rust() {
-        use crate::services::syntax_highlight::SyntaxHighlightService;
-
-        let service = SyntaxHighlightService::new();
-        let result = service.highlight_code_block("fn main() { println!(\"hello\"); }", "rust");
-        assert!(!result.is_empty());
-        // Should contain HTML tags for highlighted code
-        assert!(result.contains("<span") || result.contains("<pre") || result.contains("<code"));
-    }
-
-    #[test]
-    fn test_syntax_highlight_unknown_lang() {
-        use crate::services::syntax_highlight::SyntaxHighlightService;
-
-        let service = SyntaxHighlightService::new();
-        let result = service.highlight_code_block("some code", "unknown_lang_xyz");
-        // Should still produce output (plain text fallback)
-        assert!(!result.is_empty());
-    }
-
-    // ========== DOCX 导出测试 / DOCX Export Tests ==========
-
-    #[test]
-    fn test_export_docx_creates_file() {
-        let content = "# Test Document\n\nThis is a test paragraph.\n\n- Item 1\n- Item 2";
-        let output_path = std::env::temp_dir().join("test_export.docx");
-
-        let result = ExportService::export_to_docx(content, &output_path);
-        assert!(result.is_ok(), "DOCX export should succeed");
-        assert!(output_path.exists(), "DOCX file should be created");
-
-        // 验证文件不为空 / Verify file is not empty
-        let metadata = std::fs::metadata(&output_path).unwrap();
-        assert!(metadata.len() > 0, "DOCX file should not be empty");
-
-        // 清理 / Cleanup
-        let _ = std::fs::remove_file(&output_path);
-    }
-
-    #[test]
-    fn test_export_docx_chinese_content() {
-        let content = "# 中文标题\n\n这是中文内容测试。\n\n- 列表项一\n- 列表项二";
-        let output_path = std::env::temp_dir().join("test_export_chinese.docx");
-
-        let result = ExportService::export_to_docx(content, &output_path);
-        assert!(result.is_ok(), "DOCX export with Chinese should succeed");
-
-        // 清理 / Cleanup
-        let _ = std::fs::remove_file(&output_path);
     }
 
     #[test]
@@ -429,28 +371,6 @@ mod tests {
     }
 
     #[test]
-    fn test_export_html_includes_mermaid_and_katex_runtime() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let path = temp.path().join("diagram.html");
-        let md = "```mermaid\ngraph TD; A-->B;\n```\n\n$$E=mc^2$$\n";
-
-        ExportService::export_to_html(md, &path).unwrap();
-        let html = std::fs::read_to_string(path).unwrap();
-
-        assert!(html.contains("class=\"mermaid\"") || html.contains("class='mermaid'"));
-        assert!(html.contains("data-formula-block") || html.contains("katex"));
-        assert!(html.contains("mermaid.min.js"));
-        assert!(html.contains("katex.min.js"));
-        assert!(html.contains("katex.min.css"));
-        assert!(html.contains("markdown-body"));
-        assert!(!html.contains("cdn.jsdelivr.net"));
-        let assets = temp.path().join("diagram_files");
-        assert!(assets.join("mermaid.min.js").exists());
-        assert!(assets.join("katex.min.js").exists());
-        assert!(assets.join("katex.min.css").exists());
-    }
-
-    #[test]
     fn test_export_html_bundles_local_images() {
         let temp = tempfile::TempDir::new().unwrap();
         let img = temp.path().join("shot.png");
@@ -465,32 +385,5 @@ mod tests {
         let assets = temp.path().join("doc_files");
         assert!(assets.is_dir());
         assert!(std::fs::read_dir(&assets).unwrap().next().is_some());
-    }
-
-    #[test]
-    fn test_export_docx_embeds_local_png() {
-        let temp = tempfile::TempDir::new().unwrap();
-        // Minimal valid-enough PNG with IHDR (8 signature + IHDR chunk)
-        let mut png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        png.extend_from_slice(&[0, 0, 0, 13]); // IHDR length
-        png.extend_from_slice(b"IHDR");
-        png.extend_from_slice(&10u32.to_be_bytes()); // width
-        png.extend_from_slice(&10u32.to_be_bytes()); // height
-        png.extend_from_slice(&[8, 2, 0, 0, 0]); // bit depth etc
-        png.extend_from_slice(&[0, 0, 0, 0]); // crc placeholder
-        let img = temp.path().join("pic.png");
-        std::fs::write(&img, &png).unwrap();
-
-        let path = temp.path().join("with-img.docx");
-        let md = "# Title\n\n![diagram](pic.png)\n\nHello\n";
-        ExportService::export_to_docx_with_assets(md, &path, Some(temp.path())).unwrap();
-
-        let file = std::fs::File::open(&path).unwrap();
-        let mut archive = zip::ZipArchive::new(file).unwrap();
-        assert!(archive.by_name("word/media/image1.png").is_ok());
-        let mut doc = String::new();
-        std::io::Read::read_to_string(&mut archive.by_name("word/document.xml").unwrap(), &mut doc)
-            .unwrap();
-        assert!(doc.contains("w:drawing") || doc.contains("a:blip"));
     }
 }

@@ -1,23 +1,21 @@
 //! 设置弹窗组件 / Settings Modal Component
 
-use crate::actions::{AppActions, EditorActions};
+use crate::actions::{AppActions, EditorActions, SettingsActions};
 use crate::components::icons::{CloseIcon, RefreshIcon};
 use crate::config::{LARGE_FILE_THRESHOLD_BYTES, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
-use crate::services::ai::{fetch_available_models, AIService};
-use crate::services::keyring_service;
-use crate::services::settings::{load_settings, save_settings, AISettings, AppSettings};
+use crate::services::ai::fetch_available_models;
 use crate::state::{AIProvider, AppState};
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
-use rfd::AsyncFileDialog;
 
 /// 设置弹窗 / Settings Modal
 #[component]
 pub fn SettingsModal() -> Element {
     let mut state = use_context::<AppState>();
-    let mut ui = state.ui();
-    let mut doc = state.document();
-    let mut ai = state.ai();
+    let ui = state.ui();
+    let ai = state.ai();
+    let desktop = dioxus::desktop::use_window();
+    let settings_window = desktop.window.clone();
     let show = *ui.show_settings.read();
     let lang = *ui.language.read();
 
@@ -44,6 +42,8 @@ pub fn SettingsModal() -> Element {
     let enter_api_key_t = t("enter_api_key", lang);
     let model_name_t = t("model_name", lang);
     let temperature_t = t("temperature", lang);
+    let system_prompt_t = t("system_prompt", lang);
+    let system_prompt_hint_t = t("system_prompt_hint", lang);
     let api_key_label_t = t("api_key_label", lang);
     let api_base_url_label_t = t("api_base_url_label", lang);
     let api_base_url_placeholder_t = t("api_base_url_placeholder", lang);
@@ -55,13 +55,8 @@ pub fn SettingsModal() -> Element {
     let provider_kimi_t = t("provider_kimi", lang);
     let provider_openrouter_t = t("provider_openrouter", lang);
     let large_file_threshold_t = t("large_file_threshold", lang);
-    let pdf_cjk_font_path_t = t("pdf_cjk_font_path", lang);
-    let pdf_cjk_font_path_hint_t = t("pdf_cjk_font_path_hint", lang);
-    let browse_t = t("browse", lang);
-    let clear_path_t = t("clear_path", lang);
     let reset_default_t = t("reset_default", lang);
     let save_close_t = t("save_close", lang);
-    let spell_check_t = t("spell_check", lang);
 
     // 模型下拉列表 i18n / Model dropdown i18n
     let loading_models_t = t("loading_models", lang);
@@ -75,11 +70,7 @@ pub fn SettingsModal() -> Element {
     let mut models_loading: Signal<bool> = use_signal(|| false);
     let mut models_error: Signal<Option<String>> = use_signal(|| None);
     let mut use_custom_model: Signal<bool> = use_signal(|| false);
-    let mut session_restore_enabled: Signal<bool> =
-        use_signal(|| load_settings().session_restore_enabled);
-
     let display_class = if show { "" } else { "hidden" };
-    let pdf_font_value = ui.pdf_cjk_font_path.read().clone().unwrap_or_default();
 
     // 预克隆 i18n 字符串（避免跨闭包 move）/ Pre-clone i18n strings (avoid cross-closure move)
     let no_models_for_effect = no_models_found_t.clone();
@@ -216,20 +207,6 @@ pub fn SettingsModal() -> Element {
                         }
 
                         div { class: "settings-row",
-                            label { "{spell_check_t}" }
-                            input {
-                                r#type: "checkbox",
-                                checked: *doc.spell_check_enabled.read(),
-                                onchange: move |_| {
-                                    let mut state = state;
-                                    spawn(async move {
-                                        EditorActions::toggle_spell_check_flushed(&mut state).await;
-                                    });
-                                },
-                            }
-                        }
-
-                        div { class: "settings-row",
                             label { "{auto_save_t}" }
                             input {
                                 r#type: "checkbox",
@@ -244,10 +221,10 @@ pub fn SettingsModal() -> Element {
                             label { "{session_restore_t}" }
                             input {
                                 r#type: "checkbox",
-                                checked: *session_restore_enabled.read(),
+                                checked: *ui.session_restore_enabled.read(),
                                 onchange: move |_| {
-                                    let next = !*session_restore_enabled.read();
-                                    session_restore_enabled.set(next);
+                                    let next = !*ui.session_restore_enabled.read();
+                                    SettingsActions::set_session_restore(&mut state, next);
                                 },
                             }
                         }
@@ -343,52 +320,6 @@ pub fn SettingsModal() -> Element {
                             label { "{large_file_threshold_t}" }
                             span { "{LARGE_FILE_THRESHOLD_BYTES / 1024 / 1024} MB" }
                         }
-
-                        div { class: "settings-row",
-                            label { "{pdf_cjk_font_path_t}" }
-                            div { class: "settings-path-row",
-                                input {
-                                    r#type: "text",
-                                    class: "settings-path-input",
-                                    placeholder: "C:\\\\Windows\\\\Fonts\\\\msyh.ttc",
-                                    value: "{pdf_font_value}",
-                                    oninput: move |e| {
-                                        let v = e.value();
-                                        *ui.pdf_cjk_font_path.write() = if v.trim().is_empty() {
-                                            None
-                                        } else {
-                                            Some(v)
-                                        };
-                                    },
-                                }
-                                button {
-                                    class: "btn-secondary settings-browse-btn",
-                                    onclick: move |_| {
-                                        let mut ui = ui;
-                                        spawn(async move {
-                                            let file = AsyncFileDialog::new()
-                                                .add_filter("Fonts", &["ttf", "ttc", "otf"])
-                                                .pick_file()
-                                                .await;
-                                            if let Some(file) = file {
-                                                let path = file.path().to_string_lossy().to_string();
-                                                *ui.pdf_cjk_font_path.write() = Some(path);
-                                            }
-                                        });
-                                    },
-                                    "{browse_t}"
-                                }
-                                button {
-                                    class: "btn-secondary settings-browse-btn",
-                                    disabled: pdf_font_value.is_empty(),
-                                    onclick: move |_| {
-                                        *ui.pdf_cjk_font_path.write() = None;
-                                    },
-                                    "{clear_path_t}"
-                                }
-                            }
-                        }
-                        p { class: "settings-hint", "{pdf_cjk_font_path_hint_t}" }
                     }
 
                     // AI 设置 / AI Settings
@@ -401,15 +332,7 @@ pub fn SettingsModal() -> Element {
                                 r#type: "checkbox",
                                 checked: ai.ai_config.read().enabled,
                                 onchange: move |_| {
-                                    let current = ai.ai_config.read().enabled;
-                                    let mut config = ai.ai_config.write();
-                                    config.enabled = !current;
-                                    if config.base_url.is_empty() {
-                                        config.base_url = AIService::default_base_url(&config.provider).to_string();
-                                    }
-                                    if config.model.is_empty() {
-                                        config.model = AIService::default_model(&config.provider).to_string();
-                                    }
+                                    SettingsActions::toggle_ai_enabled(&mut state);
                                 },
                             }
                         }
@@ -475,8 +398,7 @@ pub fn SettingsModal() -> Element {
                                 placeholder: "{enter_api_key_t}",
                                 value: "{ai.ai_config.read().api_key}",
                                 oninput: move |e| {
-                                    let mut config = ai.ai_config.write();
-                                    config.api_key = e.value();
+                                    SettingsActions::set_ai_api_key(&mut state, e.value());
                                 },
                             }
                         }
@@ -488,8 +410,7 @@ pub fn SettingsModal() -> Element {
                                 placeholder: "{api_base_url_placeholder_t}",
                                 value: "{ai.ai_config.read().base_url}",
                                 oninput: move |e| {
-                                    let mut config = ai.ai_config.write();
-                                    config.base_url = e.value();
+                                    SettingsActions::set_ai_base_url(&mut state, e.value());
                                 },
                             }
                         }
@@ -517,8 +438,7 @@ pub fn SettingsModal() -> Element {
                                                     if val == "__custom__" {
                                                         use_custom_model.set(true);
                                                     } else {
-                                                        let mut config = ai.ai_config.write();
-                                                        config.model = val;
+                                                        SettingsActions::set_ai_model(&mut state, val);
                                                     }
                                                 },
                                                 option { value: "", disabled: true, "{select_model_t}" }
@@ -550,8 +470,7 @@ pub fn SettingsModal() -> Element {
                                                 placeholder: "{model_name_t}",
                                                 value: "{ai.ai_config.read().model}",
                                                 oninput: move |e| {
-                                                    let mut config = ai.ai_config.write();
-                                                    config.model = e.value();
+                                                    SettingsActions::set_ai_model(&mut state, e.value());
                                                 },
                                             }
                                         }
@@ -627,9 +546,20 @@ pub fn SettingsModal() -> Element {
                                 value: "{ai.ai_config.read().temperature}",
                                 oninput: move |e| {
                                     if let Ok(temp) = e.value().parse::<f32>() {
-                                        let mut config = ai.ai_config.write();
-                                        config.temperature = temp.clamp(0.0, 1.0);
+                                        SettingsActions::set_ai_temperature(&mut state, temp);
                                     }
+                                },
+                            }
+                        }
+
+                        div { class: "settings-row settings-row-textarea",
+                            label { "{system_prompt_t}" }
+                            textarea {
+                                rows: "5",
+                                placeholder: "{system_prompt_hint_t}",
+                                value: "{ai.ai_config.read().system_prompt}",
+                                oninput: move |e| {
+                                    SettingsActions::set_ai_system_prompt(&mut state, e.value());
                                 },
                             }
                         }
@@ -640,100 +570,20 @@ pub fn SettingsModal() -> Element {
                     button {
                         class: "btn-secondary",
                         onclick: move |_| {
-                            EditorActions::set_font_size(&mut state, 16);
-                            EditorActions::set_preview_font_size(&mut state, 16);
-                            EditorActions::set_word_wrap(&mut state, false);
-                            EditorActions::set_line_numbers(&mut state, true);
-                            EditorActions::set_sync_scroll(&mut state, true);
-                            *doc.spell_check_enabled.write() = false;
-                            *doc.spell_check_results.write() = Vec::new();
-                            *ui.pdf_cjk_font_path.write() = None;
-                            session_restore_enabled.set(true);
-                            AppActions::set_sidebar_width(&mut state, 280);
+                            SettingsActions::reset_editor_defaults(&mut state);
                         },
                         "{reset_default_t}"
                     }
                     button {
                         class: "btn-primary",
                         onclick: move |_| {
-                            let (ai_enabled, ai_provider, ai_model, api_key, base_url, system_prompt, temperature) = {
-                                let config = ai.ai_config.read();
-                                (
-                                    config.enabled,
-                                    config.provider.as_str().to_string(),
-                                    config.model.clone(),
-                                    config.api_key.clone(),
-                                    config.base_url.clone(),
-                                    config.system_prompt.clone(),
-                                    config.temperature,
-                                )
-                            };
-
-                            if !api_key.is_empty() {
-                                let provider_name = ai_provider.as_str();
-                                if let Err(e) = keyring_service::store_api_key(provider_name, &api_key) {
-                                    tracing::warn!("Cannot use keyring, falling back to file: {}", e);
-                                }
-                            } else {
-                                // 空密钥：从密钥环删除该提供商条目 / Empty key: remove provider entry from keyring
-                                let provider_name = ai_provider.as_str();
-                                if let Err(e) = keyring_service::delete_api_key(provider_name) {
-                                    tracing::debug!("No keyring entry to delete for {}: {}", provider_name, e);
-                                }
-                            }
-
-                            let settings = AppSettings {
-                                theme: match *ui.theme.read() {
-                                    crate::state::Theme::Dark => "dark".to_string(),
-                                    crate::state::Theme::Light => "light".to_string(),
-                                    crate::state::Theme::System => "system".to_string(),
-                                },
-                                language: match *ui.language.read() {
-                                    crate::state::Language::ZhCN => "zh-CN".to_string(),
-                                    crate::state::Language::EnUS => "en-US".to_string(),
-                                },
-                                font_size: *ui.font_size.read(),
-                                preview_font_size: *ui.preview_font_size.read(),
-                                word_wrap: *ui.word_wrap.read(),
-                                line_numbers: *ui.line_numbers.read(),
-                                sync_scroll: *ui.sync_scroll.read(),
-                                sidebar_visible: *ui.sidebar_visible.read(),
-                                show_preview: *ui.show_preview.read(),
-                                sidebar_width: *ui.sidebar_width.read(),
-                                auto_save_enabled: *ui.auto_save_enabled.read(),
-                                auto_save_interval: *ui.auto_save_interval.read(),
-                                spell_check_enabled: *doc.spell_check_enabled.read(),
-                                pdf_cjk_font_path: ui.pdf_cjk_font_path.read().clone(),
-                                session_restore_enabled: *session_restore_enabled.read(),
-                                // 窗口尺寸持久化 / Window size persistence
-                                window_width: {
-                                    let desktop = dioxus::desktop::use_window();
-                                    let size = desktop.window.inner_size();
-                                    let scale = desktop.window.scale_factor();
-                                    (size.width as f64 / scale).max(600.0)
-                                },
-                                window_height: {
-                                    let desktop = dioxus::desktop::use_window();
-                                    let size = desktop.window.inner_size();
-                                    let scale = desktop.window.scale_factor();
-                                    (size.height as f64 / scale).max(400.0)
-                                },
-                                ai: AISettings {
-                                    enabled: ai_enabled,
-                                    provider: ai_provider.clone(),
-                                    model: ai_model,
-                                    api_key: None,
-                                    base_url,
-                                    system_prompt,
-                                    temperature,
-                                },
-                            };
-
-                            if let Err(e) = save_settings(&settings) {
-                                tracing::error!("Failed to save settings: {}", e);
-                            }
-
-                            AppActions::hide_settings(&mut state);
+                            let size = settings_window.inner_size();
+                            let scale = settings_window.scale_factor();
+                            SettingsActions::persist_and_close(
+                                &mut state,
+                                (size.width as f64 / scale).max(600.0),
+                                (size.height as f64 / scale).max(400.0),
+                            );
                         },
                         "{save_close_t}"
                     }

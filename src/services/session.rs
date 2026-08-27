@@ -244,7 +244,11 @@ impl SessionService {
                             continue;
                         }
                         let mut tab = if let Some(ref path) = entry.path {
-                            TabInfo::from_file(path.clone(), &content)
+                            let encoding =
+                                crate::actions::FileActions::read_file_with_encoding(path)
+                                    .map(|(_, encoding)| encoding)
+                                    .unwrap_or_default();
+                            TabInfo::from_file_with_encoding(path.clone(), &content, encoding)
                         } else {
                             TabInfo::new(&entry.title)
                         };
@@ -324,7 +328,11 @@ fn try_load_path_tab(path: &Path, report: &mut RestoreReport) -> Option<TabInfo>
         return None;
     }
     match crate::actions::FileActions::read_file_with_encoding(path) {
-        Ok((content, _enc)) => Some(TabInfo::from_file(path.to_path_buf(), &content)),
+        Ok((content, encoding)) => Some(TabInfo::from_file_with_encoding(
+            path.to_path_buf(),
+            &content,
+            encoding,
+        )),
         Err(e) => {
             tracing::warn!("Session restore failed to read {:?}: {}", path, e);
             report.missing += 1;

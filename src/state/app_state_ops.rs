@@ -8,11 +8,22 @@ use std::path::{Path, PathBuf};
 
 use super::app_state::AppState;
 use super::types::History as DocumentHistory;
-use super::types::{OutlineItem, SaveStatus, TabInfo};
+use super::types::{OutlineItem, SaveStatus, TabId, TabInfo};
 use crate::config::{
     OUTLINE_DEBOUNCE_MS, OUTLINE_DEBOUNCE_THRESHOLD_BYTES, OUTLINE_LARGE_FILE_MAX_HEADINGS,
     OUTLINE_LIMIT_THRESHOLD_BYTES,
 };
+use crate::utils::file_encoding::FileEncoding;
+
+/// 将任意字节偏移钳制到字符串内最近的前向 UTF-8 字符边界
+/// Clamp an arbitrary byte offset down to the nearest valid UTF-8 boundary
+fn clamp_to_char_boundary(content: &str, offset: usize) -> usize {
+    let mut offset = offset.min(content.len());
+    while !content.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
 
 impl AppState {
     /// 递增内容修订号（打开/切换/重载等直接改 content 时调用）
@@ -71,53 +82,10 @@ impl AppState {
                 now.duration_since(last) < std::time::Duration::from_millis(OUTLINE_DEBOUNCE_MS)
             });
             if should_skip {
-                // 仍调度防抖拼写检查 / Still schedule debounced spell check
-                Self::schedule_spell_check(*self);
                 return;
             }
         }
         self.update_outline();
-        Self::schedule_spell_check(*self);
-    }
-
-    /// 防抖调度拼写检查，避免每个按键全量扫描 / Debounce spell check to avoid full scan per keystroke
-    fn schedule_spell_check(mut state: AppState) {
-        if !*state.spell_check_enabled.read() {
-            *state.spell_check_results.write() = Vec::new();
-            return;
-        }
-        let revision = *state.content_revision.read();
-        spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(
-                crate::config::SPELL_CHECK_DEBOUNCE_MS,
-            ))
-            .await;
-            // 仅当内容未再变更时执行 / Run only if content has not changed again
-            if *state.content_revision.read() != revision {
-                return;
-            }
-            state.run_spell_check();
-        });
-    }
-
-    /// 运行拼写检查 / Run Spell Check
-    pub fn run_spell_check(&mut self) {
-        if !*self.spell_check_enabled.read() {
-            *self.spell_check_results.write() = Vec::new();
-            return;
-        }
-        let results = {
-            let content = self.content.read();
-            let service = crate::services::spellcheck::SpellCheckService::new();
-            service.check_text(&content)
-        };
-        tracing::debug!(
-            "拼写检查完成，发现 {} 个错误 / Spell check done, {} errors",
-            results.len(),
-            results.len()
-        );
-        *self.spell_check_results.write() = results;
-        *self.spell_error_index.write() = 0;
     }
 
     /// 撤销 / Undo
@@ -146,7 +114,6 @@ impl AppState {
             // Sync hash so subsequent is_different checks work correctly
             self.history.write().is_different(past_content.as_ref());
             self.update_outline();
-            self.run_spell_check();
             return true;
         }
         false
@@ -178,7 +145,6 @@ impl AppState {
             // Sync hash so subsequent is_different checks work correctly
             self.history.write().is_different(future_content.as_ref());
             self.update_outline();
-            self.run_spell_check();
             return true;
         }
         false
@@ -248,6 +214,7 @@ impl AppState {
         *self.modified.write() = false;
         *self.save_status.write() = SaveStatus::Saved;
         *self.last_saved.write() = Some(std::time::Instant::now());
+        self.save_current_tab_content();
         self.refresh_file_watch();
     }
 
@@ -340,7 +307,7 @@ impl AppState {
             return;
         }
         let active = active_index.min(tabs.len() - 1);
-        let (content, path, modified) = {
+        let (content, path, modified, encoding) = {
             let tab = &tabs[active];
             (
                 tab.content
@@ -349,6 +316,7 @@ impl AppState {
                     .unwrap_or_default(),
                 tab.path.clone(),
                 tab.modified,
+                tab.encoding,
             )
         };
 
@@ -364,15 +332,67 @@ impl AppState {
         };
         self.history.write().reset_with_content(&content);
         *self.file_size_bytes.write() = content.len();
-        *self.file_encoding.write() = "UTF-8".to_string();
+        *self.file_encoding.write() = encoding;
         self.bump_content_revision();
         self.update_outline();
-        self.run_spell_check();
         self.touch_current_tab_access();
         self.evict_inactive_tabs();
         // 会话恢复后加载活动标签的 AI 历史 / Load active tab AI history after session restore
         let key = self.current_ai_session_key();
         self.load_ai_history_key(&key);
+    }
+
+    /// 将磁盘快照统一应用到稳定标签，并在目标活动时同步全部文档 Signals
+    /// Apply a disk snapshot to a stable tab and synchronize all document signals when active
+    pub fn apply_disk_snapshot(
+        &mut self,
+        tab_id: TabId,
+        path: PathBuf,
+        content: String,
+        encoding: FileEncoding,
+    ) -> Result<(), String> {
+        let index = self
+            .tabs
+            .read()
+            .iter()
+            .position(|tab| tab.id == tab_id)
+            .ok_or_else(|| "目标标签已不存在 / Target tab no longer exists".to_string())?;
+        let is_current = index == *self.current_tab_index.read();
+        let title = path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Untitled")
+            .to_string();
+        let mut snapshot_history = DocumentHistory::default();
+        snapshot_history.reset_with_content(&content);
+
+        {
+            let mut tabs = self.tabs.write();
+            let tab = &mut tabs[index];
+            tab.path = Some(path.clone());
+            tab.title = title;
+            tab.encoding = encoding;
+            tab.set_content_arc(std::sync::Arc::from(content.as_str()));
+            tab.history = snapshot_history.clone();
+            tab.modified = false;
+        }
+
+        if is_current {
+            *self.current_file.write() = Some(path);
+            *self.content.write() = content.clone();
+            *self.file_encoding.write() = encoding;
+            *self.history.write() = snapshot_history;
+            *self.modified.write() = false;
+            *self.save_status.write() = SaveStatus::Saved;
+            *self.last_saved.write() = Some(std::time::Instant::now());
+            *self.file_size_bytes.write() = content.len();
+            *self.file_external_modified.write() = false;
+            self.bump_content_revision();
+            self.update_outline();
+            self.refresh_file_watch();
+        }
+
+        Ok(())
     }
 
     /// 新建标签页 / Create New Tab
@@ -396,17 +416,27 @@ impl AppState {
         *self.current_file.write() = None;
         *self.modified.write() = false;
         self.history.write().reset_with_content("");
-        *self.file_encoding.write() = "UTF-8".to_string();
+        *self.file_encoding.write() = FileEncoding::Utf8;
         self.bump_content_revision();
         self.update_outline();
-        self.run_spell_check();
         self.touch_current_tab_access();
         self.evict_inactive_tabs();
         self.swap_ai_history(&from_key, &to_key);
     }
 
     /// 打开文件到新标签页 / Open File in New Tab
+    #[cfg(test)]
     pub fn open_file_in_tab(&mut self, path: PathBuf, content: String) {
+        self.open_file_in_tab_with_encoding(path, content, FileEncoding::Utf8);
+    }
+
+    /// 按检测到的编码打开文件到新标签页 / Open a file in a new tab with its detected encoding
+    pub fn open_file_in_tab_with_encoding(
+        &mut self,
+        path: PathBuf,
+        content: String,
+        encoding: FileEncoding,
+    ) {
         tracing::info!("[open_file_in_tab] Attempting to open: {:?}", path);
 
         // 检查文件是否已打开 / Check if file is already open
@@ -426,7 +456,7 @@ impl AppState {
         let from_key = self.current_ai_session_key();
 
         // 创建新标签 / Create new tab
-        let tab = TabInfo::from_file(path.clone(), &content);
+        let tab = TabInfo::from_file_with_encoding(path.clone(), &content, encoding);
         let to_key = tab.ai_session_key.clone();
         self.tabs.write().push(tab);
         *self.current_tab_index.write() = self.tabs.read().len() - 1;
@@ -435,6 +465,7 @@ impl AppState {
         *self.content.write() = content;
         *self.current_file.write() = Some(path.clone());
         *self.modified.write() = false;
+        *self.file_encoding.write() = encoding;
         {
             let body = self.content.read().clone();
             self.history.write().reset_with_content(&body);
@@ -462,7 +493,6 @@ impl AppState {
         // 更新大纲 / Update outline
         tracing::info!("[open_file_in_tab] About to call update_outline()");
         self.update_outline();
-        self.run_spell_check();
         self.touch_current_tab_access();
         self.evict_inactive_tabs();
         self.swap_ai_history(&from_key, &to_key);
@@ -492,7 +522,7 @@ impl AppState {
         *self.current_tab_index.write() = index;
 
         // 获取标签数据（包含历史记录）/ Get tab data (including history)
-        let (content_opt, path, modified, history, needs_reload) = {
+        let (content_opt, path, modified, history, mut encoding, needs_reload) = {
             let tabs = self.tabs.read();
             let tab = &tabs[index];
             (
@@ -500,6 +530,7 @@ impl AppState {
                 tab.path.clone(),
                 tab.modified,
                 tab.history.clone(),
+                tab.encoding,
                 tab.is_evicted(),
             )
         };
@@ -509,8 +540,12 @@ impl AppState {
         let content = if needs_reload {
             if let Some(ref p) = path {
                 match crate::actions::FileActions::read_file_with_encoding(p) {
-                    Ok((text, encoding)) => {
-                        *self.file_encoding.write() = encoding;
+                    Ok((text, detected_encoding)) => {
+                        {
+                            let mut tabs = self.tabs.write();
+                            tabs[index].encoding = detected_encoding;
+                        }
+                        encoding = detected_encoding;
                         text
                     }
                     Err(e) => {
@@ -529,6 +564,7 @@ impl AppState {
         *self.content.write() = content;
         *self.current_file.write() = path;
         *self.modified.write() = modified;
+        *self.file_encoding.write() = encoding;
         *self.history.write() = if needs_reload {
             let mut h = DocumentHistory::default();
             h.reset_with_content(&self.content.read());
@@ -538,7 +574,6 @@ impl AppState {
         };
         self.bump_content_revision();
         self.update_outline();
-        self.run_spell_check();
         self.touch_current_tab_access();
         self.evict_inactive_tabs();
         let to_key = self.current_ai_session_key();
@@ -556,6 +591,7 @@ impl AppState {
             *self.content.write() = String::new();
             *self.current_file.write() = None;
             *self.modified.write() = false;
+            *self.file_encoding.write() = FileEncoding::Utf8;
             self.history.write().reset_with_content("");
             self.bump_content_revision();
 
@@ -563,21 +599,24 @@ impl AppState {
             tabs[0].content = Some(std::sync::Arc::from(""));
             tabs[0].path = None;
             tabs[0].modified = false;
+            tabs[0].encoding = FileEncoding::Utf8;
             tabs[0].title = crate::utils::i18n::untitled_tab_title(*self.language.read());
             tabs[0].history.reset_with_content("");
+            tabs[0].id = crate::state::new_tab_id();
             tabs[0].ai_session_key = crate::state::new_untitled_ai_session_key();
             let to_key = tabs[0].ai_session_key.clone();
             drop(tabs);
 
             self.update_outline();
-            self.run_spell_check();
             self.load_ai_history_key(&to_key);
             return false;
         }
 
         // 检查是否已修改 / Check if modified
         if *self.modified.read() {
-            *self.pending_close_tab_index.write() = Some(*self.current_tab_index.read());
+            let current_index = *self.current_tab_index.read();
+            *self.pending_close_tab_id.write() =
+                self.tabs.read().get(current_index).map(|tab| tab.id);
             *self.show_close_confirm.write() = true;
             return false;
         }
@@ -596,7 +635,7 @@ impl AppState {
         *self.current_tab_index.write() = new_index;
 
         // 恢复到新当前标签（含历史记录）/ Restore to new current tab (including history)
-        let (content_opt, path, modified, history, needs_reload) = {
+        let (content_opt, path, modified, history, mut encoding, needs_reload) = {
             let tabs = self.tabs.read();
             let tab = &tabs[new_index];
             (
@@ -604,6 +643,7 @@ impl AppState {
                 tab.path.clone(),
                 tab.modified,
                 tab.history.clone(),
+                tab.encoding,
                 tab.is_evicted(),
             )
         };
@@ -611,8 +651,12 @@ impl AppState {
         let content = if needs_reload {
             if let Some(ref p) = path {
                 match crate::actions::FileActions::read_file_with_encoding(p) {
-                    Ok((text, encoding)) => {
-                        *self.file_encoding.write() = encoding;
+                    Ok((text, detected_encoding)) => {
+                        {
+                            let mut tabs = self.tabs.write();
+                            tabs[new_index].encoding = detected_encoding;
+                        }
+                        encoding = detected_encoding;
                         text
                     }
                     Err(e) => {
@@ -630,6 +674,7 @@ impl AppState {
         *self.content.write() = content;
         *self.current_file.write() = path;
         *self.modified.write() = modified;
+        *self.file_encoding.write() = encoding;
         *self.history.write() = if needs_reload {
             let mut h = DocumentHistory::default();
             h.reset_with_content(&self.content.read());
@@ -639,7 +684,6 @@ impl AppState {
         };
         self.bump_content_revision();
         self.update_outline();
-        self.run_spell_check();
         self.touch_current_tab_access();
         self.evict_inactive_tabs();
         let to_key = self.current_ai_session_key();
@@ -673,7 +717,7 @@ impl AppState {
         };
 
         if target_modified {
-            *self.pending_close_tab_index.write() = Some(index);
+            *self.pending_close_tab_id.write() = self.tabs.read().get(index).map(|tab| tab.id);
             *self.show_close_confirm.write() = true;
             return false;
         }
@@ -701,6 +745,7 @@ impl AppState {
             let modified = *self.modified.read();
             let path = self.current_file.read().clone();
             let history = self.history.read().clone();
+            let encoding = *self.file_encoding.read();
 
             // 然后写入（Arc 共享，避免再拷一份 String）/ Then write (share via Arc)
             let mut tabs = self.tabs.write();
@@ -708,6 +753,7 @@ impl AppState {
             tabs[current_index].modified = modified;
             tabs[current_index].path = path;
             tabs[current_index].history = history;
+            tabs[current_index].encoding = encoding;
         }
     }
 
@@ -756,8 +802,8 @@ impl AppState {
     /// 在选中文本前后插入格式 / Insert format around selected text
     pub fn insert_format_around_selection(&mut self, prefix: &str, suffix: &str) {
         let content = self.content.read().clone();
-        let start = *self.cursor_start.read();
-        let end = *self.cursor_end.read();
+        let start = clamp_to_char_boundary(&content, *self.cursor_start.read());
+        let end = clamp_to_char_boundary(&content, *self.cursor_end.read());
 
         // 确保 start <= end / Ensure start <= end
         let (real_start, real_end) = if start <= end {
@@ -767,22 +813,14 @@ impl AppState {
         };
 
         // 获取选中的文本 / Get selected text
-        let selected_text = if real_start < content.len() {
-            if real_end <= content.len() {
-                &content[real_start..real_end]
-            } else {
-                &content[real_start..]
-            }
-        } else {
-            ""
-        };
+        let selected_text = &content[real_start..real_end];
 
         // 构建新内容 / Build new content
         let lang = *self.language.read();
         let placeholder = crate::utils::i18n::t("placeholder_text", lang);
         let new_content = format!(
             "{}{}{}{}{}",
-            &content[..real_start.min(content.len())],
+            &content[..real_start],
             prefix,
             if selected_text.is_empty() {
                 &placeholder
@@ -790,17 +828,14 @@ impl AppState {
                 selected_text
             },
             suffix,
-            if real_end < content.len() {
-                &content[real_end..]
-            } else {
-                ""
-            }
+            &content[real_end..]
         );
 
-        // 计算新的光标位置 / Calculate new cursor position
+        // 格式化后保留正文选区；空选区时选中占位文本
+        // Preserve the body selection after formatting; select placeholder for an empty range
         let placeholder_len = placeholder.len();
-        let new_cursor_pos = real_start
-            + prefix.len()
+        let new_selection_start = real_start + prefix.len();
+        let new_selection_end = new_selection_start
             + if selected_text.is_empty() {
                 placeholder_len
             } else {
@@ -818,23 +853,22 @@ impl AppState {
         }
 
         *self.content.write() = new_content;
-        *self.cursor_start.write() = new_cursor_pos;
-        *self.cursor_end.write() = new_cursor_pos;
+        *self.cursor_start.write() = new_selection_start;
+        *self.cursor_end.write() = new_selection_end;
         *self.modified.write() = true;
         *self.save_status.write() = SaveStatus::Unsaved;
         self.bump_content_revision();
 
         self.update_outline();
-        Self::schedule_spell_check(*self);
     }
 
     /// 在行首插入前缀 / Insert prefix at line start
     pub fn insert_line_prefix(&mut self, line_prefix: &str) {
         let content = self.content.read().clone();
-        let cursor_pos = *self.cursor_end.read();
+        let cursor_pos = clamp_to_char_boundary(&content, *self.cursor_end.read());
 
         // 找到当前行的开始位置 / Find current line start
-        let line_start = content[..cursor_pos.min(content.len())]
+        let line_start = content[..cursor_pos]
             .rfind('\n')
             .map(|pos| pos + 1)
             .unwrap_or(0);
@@ -865,23 +899,18 @@ impl AppState {
         self.bump_content_revision();
 
         self.update_outline();
-        Self::schedule_spell_check(*self);
     }
 
     /// 在光标位置插入文本 / Insert text at cursor position
     pub fn insert_at_cursor(&mut self, text: &str) {
         let content = self.content.read().clone();
-        let cursor_pos = *self.cursor_end.read();
+        let cursor_pos = clamp_to_char_boundary(&content, *self.cursor_end.read());
 
         let new_content = format!(
             "{}{}{}",
-            &content[..cursor_pos.min(content.len())],
+            &content[..cursor_pos],
             text,
-            if cursor_pos < content.len() {
-                &content[cursor_pos..]
-            } else {
-                ""
-            }
+            &content[cursor_pos..]
         );
 
         let new_cursor_pos = cursor_pos + text.len();
@@ -902,7 +931,6 @@ impl AppState {
         self.bump_content_revision();
 
         self.update_outline();
-        Self::schedule_spell_check(*self);
     }
 
     // ========== 图片处理 / Image Processing ==========

@@ -7,8 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 导出为 HTML（含 Mermaid / KaTeX 运行时，经 CDN 加载以便离线体积可控）
-/// Export to HTML (Mermaid/KaTeX runtime via CDN to keep file size practical)
+/// 导出为 HTML / Export to HTML
 #[allow(dead_code)] // 经 ExportService 与无资源导出路径使用 / Via ExportService / no-assets path
 pub fn export_to_html(markdown_content: &str, output_path: &Path) -> Result<(), ExportError> {
     export_to_html_with_assets(markdown_content, output_path, None)
@@ -23,19 +22,8 @@ pub fn export_to_html_with_assets(
 ) -> Result<(), ExportError> {
     use crate::services::markdown::MarkdownService;
 
-    let html_content = MarkdownService::new().render_with_highlight(markdown_content);
+    let html_content = MarkdownService::new().render(markdown_content);
     let html_content = rewrite_and_bundle_images(&html_content, source_dir, output_path)?;
-
-    // 将本地 Mermaid/KaTeX 写入旁路目录，导出 HTML 可离线打开
-    // Write local Mermaid/KaTeX into sidecar so exported HTML works offline
-    let assets_dir = assets_dir_for_output(output_path);
-    fs::create_dir_all(&assets_dir)?;
-    let assets_folder = assets_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("export_files")
-        .to_string();
-    write_vendor_runtime(&assets_dir)?;
 
     let full_html = format!(
         r#"<!DOCTYPE html>
@@ -44,7 +32,6 @@ pub fn export_to_html_with_assets(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Markdown Export</title>
-    <link rel="stylesheet" href="{assets_folder}/katex.min.css">
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -86,90 +73,18 @@ pub fn export_to_html_with_assets(
         .markdown-body img {{
             max-width: 100%;
         }}
-        .mermaid {{
-            margin: 1.5em 0;
-            text-align: center;
-        }}
     </style>
 </head>
 <body>
 <article class="markdown-body">
 {}
 </article>
-<script src="{assets_folder}/mermaid.min.js"></script>
-<script src="{assets_folder}/katex.min.js"></script>
-<script>
-(function() {{
-    function renderMath(root) {{
-        if (typeof katex === 'undefined' || !root) return;
-        root.querySelectorAll('[data-formula-block]').forEach(function(el) {{
-            try {{
-                var tex = el.getAttribute('data-formula-block');
-                el.innerHTML = katex.renderToString(tex.trim(), {{ throwOnError: false, displayMode: true }});
-                el.style.textAlign = 'center';
-                el.style.margin = '1em 0';
-                el.removeAttribute('data-formula-block');
-            }} catch (e) {{
-                el.textContent = '$$' + (el.getAttribute('data-formula-block') || '') + '$$';
-                el.removeAttribute('data-formula-block');
-            }}
-        }});
-        root.querySelectorAll('[data-formula-inline]').forEach(function(el) {{
-            try {{
-                var tex = el.getAttribute('data-formula-inline');
-                el.innerHTML = katex.renderToString(tex.trim(), {{ throwOnError: false }});
-                el.removeAttribute('data-formula-inline');
-            }} catch (e) {{
-                el.textContent = '$' + (el.getAttribute('data-formula-inline') || '') + '$';
-                el.removeAttribute('data-formula-inline');
-            }}
-        }});
-    }}
-
-    function boot() {{
-        var root = document.querySelector('.markdown-body');
-        if (typeof mermaid !== 'undefined') {{
-            try {{
-                mermaid.initialize({{ startOnLoad: false, theme: 'default', securityLevel: 'strict' }});
-                if (mermaid.run) {{
-                    mermaid.run({{ querySelector: '.mermaid' }});
-                }} else if (mermaid.init) {{
-                    mermaid.init(undefined, '.mermaid');
-                }}
-            }} catch (e) {{
-                console.warn('Mermaid render failed:', e);
-            }}
-        }}
-        renderMath(root);
-    }}
-
-    if (document.readyState === 'loading') {{
-        document.addEventListener('DOMContentLoaded', boot);
-    }} else {{
-        boot();
-    }}
-}})();
-</script>
 </body>
 </html>"#,
-        html_content,
-        assets_folder = assets_folder
+        html_content
     );
 
     fs::write(output_path, full_html)?;
-
-    Ok(())
-}
-
-/// 写入内置 Mermaid / KaTeX 运行时到旁路目录
-/// Write bundled Mermaid/KaTeX runtime into the sidecar folder
-fn write_vendor_runtime(assets_dir: &Path) -> Result<(), ExportError> {
-    const MERMAID: &str = include_str!("../../../assets/vendor/mermaid.min.js");
-    const KATEX_JS: &str = include_str!("../../../assets/vendor/katex.min.js");
-    const KATEX_CSS: &str = include_str!("../../../assets/vendor/katex.min.css");
-    fs::write(assets_dir.join("mermaid.min.js"), MERMAID)?;
-    fs::write(assets_dir.join("katex.min.js"), KATEX_JS)?;
-    fs::write(assets_dir.join("katex.min.css"), KATEX_CSS)?;
     Ok(())
 }
 
@@ -195,8 +110,6 @@ pub fn rewrite_and_bundle_images(
 ) -> Result<String, ExportError> {
     static IMG_SRC_RE: OnceLock<Regex> = OnceLock::new();
     let re = IMG_SRC_RE.get_or_init(|| {
-        // 无反向引用：分别捕获双引号 / 单引号 src
-        // No backreferences: capture double-quoted or single-quoted src separately
         Regex::new(r#"(?i)(<img\b[^>]*?\bsrc\s*=\s*)(?:"([^"]+)"|'([^']+)')"#)
             .expect("img src regex")
     });
@@ -289,7 +202,7 @@ mod tests {
     fn test_bundle_local_image_rewrites_src() {
         let dir = TempDir::new().unwrap();
         let img = dir.path().join("pic.png");
-        fs::write(&img, [0x89, 0x50, 0x4E, 0x47]).unwrap(); // PNG magic-ish
+        fs::write(&img, [0x89, 0x50, 0x4E, 0x47]).unwrap();
         let out = dir.path().join("out.html");
 
         let html = r#"<p><img src="pic.png" alt="x"></p>"#;

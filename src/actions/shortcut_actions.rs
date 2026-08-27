@@ -5,10 +5,9 @@
 //! 注意：部分功能为预留功能，暂未使用
 //! Note: Some functions are reserved for future use, not yet used
 
-use crate::actions::{AppActions, EditorActions, FileActions};
+use crate::actions::{AppActions, EditorActions, EditorFormat, FileActions, SearchActions};
 use crate::state::AppState;
 use dioxus::prelude::*;
-use rfd::AsyncFileDialog;
 
 /// 快捷键定义 / Shortcut Definition
 pub struct Shortcut {
@@ -20,7 +19,7 @@ pub struct Shortcut {
 }
 
 /// 快捷键动作 / Shortcut Actions
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutAction {
     NewFile,
     OpenFile,
@@ -187,17 +186,25 @@ impl ShortcutActions {
 
     /// 处理快捷键事件 / Handle shortcut event
     pub fn handle(state: &mut AppState, key: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
-        for shortcut in Self::get_all() {
-            if key == shortcut.key
-                && ctrl == shortcut.ctrl
-                && shift == shortcut.shift
-                && alt == shortcut.alt
-            {
-                Self::execute(state, shortcut.action);
-                return true;
-            }
+        if let Some(action) = Self::find_action(key, ctrl, shift, alt) {
+            Self::execute(state, action);
+            return true;
         }
         false
+    }
+
+    /// 纯逻辑匹配快捷键动作，便于无 UI 分发测试
+    /// Match a shortcut action as pure logic for UI-free dispatch tests
+    pub fn find_action(key: &str, ctrl: bool, shift: bool, alt: bool) -> Option<ShortcutAction> {
+        Self::get_all()
+            .into_iter()
+            .find(|shortcut| {
+                key == shortcut.key
+                    && ctrl == shortcut.ctrl
+                    && shift == shortcut.shift
+                    && alt == shortcut.alt
+            })
+            .map(|shortcut| shortcut.action)
     }
 
     /// 处理键盘事件 / Handle keyboard event
@@ -223,17 +230,8 @@ impl ShortcutActions {
             ShortcutAction::OpenFile => {
                 let mut state = *state;
                 spawn(async move {
-                    let file = AsyncFileDialog::new()
-                        .add_filter("Markdown", &["md", "markdown", "txt"])
-                        .pick_file()
-                        .await;
-                    if let Some(file) = file {
-                        let path = file.path().to_path_buf();
-                        if let Err(e) =
-                            FileActions::open_file_and_track_recent_flushed(&mut state, path).await
-                        {
-                            tracing::warn!("Open file shortcut failed: {}", e);
-                        }
+                    if let Err(e) = FileActions::open_file_dialog(&mut state).await {
+                        tracing::warn!("Open file shortcut failed: {}", e);
                     }
                 });
             }
@@ -263,37 +261,25 @@ impl ShortcutActions {
             ShortcutAction::Bold => {
                 let mut state = *state;
                 spawn(async move {
-                    EditorActions::with_flushed_format(&mut state, |s| {
-                        EditorActions::insert_bold(s);
-                    })
-                    .await;
+                    EditorActions::apply_format(&mut state, EditorFormat::Bold).await;
                 });
             }
             ShortcutAction::Italic => {
                 let mut state = *state;
                 spawn(async move {
-                    EditorActions::with_flushed_format(&mut state, |s| {
-                        EditorActions::insert_italic(s);
-                    })
-                    .await;
+                    EditorActions::apply_format(&mut state, EditorFormat::Italic).await;
                 });
             }
             ShortcutAction::Code => {
                 let mut state = *state;
                 spawn(async move {
-                    EditorActions::with_flushed_format(&mut state, |s| {
-                        EditorActions::insert_code(s);
-                    })
-                    .await;
+                    EditorActions::apply_format(&mut state, EditorFormat::Code).await;
                 });
             }
             ShortcutAction::Link => {
                 let mut state = *state;
                 spawn(async move {
-                    EditorActions::with_flushed_format(&mut state, |s| {
-                        EditorActions::insert_link(s);
-                    })
-                    .await;
+                    EditorActions::apply_format(&mut state, EditorFormat::Link).await;
                 });
             }
             ShortcutAction::ToggleSidebar => {
@@ -316,10 +302,10 @@ impl ShortcutActions {
             }
             ShortcutAction::Search => {
                 // Ctrl+F: 打开搜索替换弹窗 / Open search & replace modal
-                *state.ui().show_search.write() = true;
+                SearchActions::show(state);
             }
             ShortcutAction::GlobalSearch => {
-                *state.ui().show_global_search.write() = true;
+                SearchActions::show_global(state);
             }
             ShortcutAction::Close => {
                 AppActions::close_overlays(state);

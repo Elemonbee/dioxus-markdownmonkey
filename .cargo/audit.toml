@@ -2,7 +2,4 @@
 # See: https://docs.rs/cargo-audit/latest/cargo_audit/
 
 [advisories]
-# lopdf is pinned by printpdf 0.9.x to 0.39.0. The advisory is a stack-overflow DoS when
-# *parsing* deeply nested untrusted PDFs. This app only *generates* PDFs via printpdf and
-# never calls lopdf load APIs on untrusted input. Upgrade when printpdf adopts lopdf >=0.42.
-ignore = ["RUSTSEC-2026-0187"]
+ignore = []

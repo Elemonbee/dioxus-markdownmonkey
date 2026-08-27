@@ -150,23 +150,12 @@ pub fn Sidebar() -> Element {
                 },
                 onmouseup: move |_| {
                     resizing.set(false);
-                    // 拖拽结束时持久化宽度 / Persist width when drag ends
-                    let width = *state.ui().sidebar_width.read();
-                    let mut settings = crate::services::settings::load_settings();
-                    settings.sidebar_width = width;
-                    if let Err(err) = crate::services::settings::save_settings(&settings) {
-                        tracing::warn!("Failed to persist sidebar width: {}", err);
-                    }
                 },
                 onmouseleave: move |_| {
                     // 鼠标离开窗口时结束拖拽，避免卡住
                     // End drag if pointer leaves the window to avoid stuck resize
                     if *resizing.read() {
                         resizing.set(false);
-                        let width = *state.ui().sidebar_width.read();
-                        let mut settings = crate::services::settings::load_settings();
-                        settings.sidebar_width = width;
-                        let _ = crate::services::settings::save_settings(&settings);
                     }
                 },
             }

@@ -107,26 +107,6 @@ pub fn AiChatModal() -> Element {
         if show {
             spawn(async move {
                 EditorActions::flush_from_dom(&mut state_for_sel).await;
-                let mut ui = state_for_sel.ui();
-                let mut eval = document::eval(
-                    r#"
-                    (function() {
-                        if (window._mm_getSelection) {
-                            dioxus.send(window._mm_getSelection());
-                            return;
-                        }
-                        const ta = document.querySelector('.editor-textarea');
-                        if (!ta) { dioxus.send([0, 0]); return; }
-                        dioxus.send([ta.selectionStart || 0, ta.selectionEnd || 0]);
-                    })();
-                    "#,
-                );
-                if let Ok(vals) = eval.recv::<Vec<usize>>().await {
-                    if vals.len() >= 2 {
-                        *ui.cursor_start.write() = vals[0];
-                        *ui.cursor_end.write() = vals[1];
-                    }
-                }
                 let _ = document::eval(
                     r#"
                     (function() {
@@ -309,10 +289,8 @@ pub fn AiChatModal() -> Element {
                                                         title: "{copy_label}",
                                                         onclick: move |e| {
                                                             e.stop_propagation();
-                                                            if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                                let _ = cb.set_text(full.clone());
+                                                            crate::utils::clipboard::copy_text(&full);
                                                                 copy_flash.set(Some(idx));
-                                                            }
                                                         },
                                                         "{copy_label}"
                                                     }
@@ -443,32 +421,13 @@ fn AiActionBtn(props: AiActionBtnProps) -> Element {
                 let ep = error_prefix.clone();
 
                 spawn(async move {
-                    let mut ui = state.ui();
+                    let ui = state.ui();
                     let doc = state.document();
                     let ai = state.ai();
 
                     // 发送前 flush + 同步选区，避免非受控模式下上下文过期
                     // Flush + sync selection before send so uncontrolled context is fresh
                     EditorActions::flush_from_dom(&mut state).await;
-                    let mut eval = document::eval(
-                        r#"
-                        (function() {
-                            if (window._mm_getSelection) {
-                                dioxus.send(window._mm_getSelection());
-                                return;
-                            }
-                            const ta = document.querySelector('.editor-textarea');
-                            if (!ta) { dioxus.send([0, 0]); return; }
-                            dioxus.send([ta.selectionStart || 0, ta.selectionEnd || 0]);
-                        })();
-                        "#,
-                    );
-                    if let Ok(vals) = eval.recv::<Vec<usize>>().await {
-                        if vals.len() >= 2 {
-                            *ui.cursor_start.write() = vals[0];
-                            *ui.cursor_end.write() = vals[1];
-                        }
-                    }
 
                     let body = doc.content.read().clone();
                     let content = if *ai.ai_use_selection.read() {
