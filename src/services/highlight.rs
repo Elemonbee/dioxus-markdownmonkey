@@ -88,8 +88,7 @@ pub fn highlight_inner_html(lang: &str, code: &str) -> String {
         return escape_html(code);
     };
 
-    let mut generator =
-        ClassedHTMLGenerator::new_with_class_style(syntax, set, ClassStyle::Spaced);
+    let mut generator = ClassedHTMLGenerator::new_with_class_style(syntax, set, ClassStyle::Spaced);
     for line in LinesWithEndings::from(code) {
         if generator
             .parse_html_for_line_which_includes_newline(line)

@@ -127,11 +127,9 @@ where
                 in_code = true;
                 buffer.clear();
                 language = match kind {
-                    CodeBlockKind::Fenced(info) => info
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or("")
-                        .to_string(),
+                    CodeBlockKind::Fenced(info) => {
+                        info.split_whitespace().next().unwrap_or("").to_string()
+                    }
                     CodeBlockKind::Indented => String::new(),
                 };
             }
@@ -285,9 +283,7 @@ fn resolve_allowed_preview_image(base: &Path, src: &str, allowed: &[PathBuf]) ->
 /// 把本地路径编码为 file:// URL / Encode a local path as a file:// URL
 fn path_to_file_url(path: &Path) -> Option<String> {
     let raw = path.to_string_lossy();
-    let stripped = raw
-        .trim_start_matches(r"\\?\")
-        .replace('\\', "/");
+    let stripped = raw.trim_start_matches(r"\\?\").replace('\\', "/");
     let mut url = String::from("file://");
     if !stripped.starts_with('/') {
         url.push('/');

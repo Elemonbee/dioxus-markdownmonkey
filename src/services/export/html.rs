@@ -343,11 +343,7 @@ mod tests {
     fn test_export_includes_mermaid_and_math() {
         let dir = TempDir::new().unwrap();
         let out = dir.path().join("diagram.html");
-        export_to_html(
-            "```mermaid\ngraph TD\nA-->B\n```\n\n$a^2+b^2=c^2$",
-            &out,
-        )
-        .unwrap();
+        export_to_html("```mermaid\ngraph TD\nA-->B\n```\n\n$a^2+b^2=c^2$", &out).unwrap();
         let html = fs::read_to_string(&out).unwrap();
         assert!(html.contains("class=\"mermaid\""));
         assert!(html.contains("math-inline"));

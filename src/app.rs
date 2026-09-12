@@ -263,9 +263,7 @@ pub fn App() -> Element {
     };
     let _ = use_effect(move || {
         let _ = theme_for_cm.as_str();
-        let _ = document::eval(
-            "if (window._mm_setCmTheme) window._mm_setCmTheme();",
-        );
+        let _ = document::eval("if (window._mm_setCmTheme) window._mm_setCmTheme();");
     });
     let lang_ui = state.ui();
     let _ = use_effect(move || {
