@@ -7,18 +7,11 @@ use crate::actions::EditorActions;
 use crate::config::{
     PREVIEW_DEBOUNCE_MS, PREVIEW_LARGE_FILE_DEBOUNCE_MS, PREVIEW_LARGE_FILE_THRESHOLD_BYTES,
 };
-use crate::services::markdown::MarkdownService;
+use crate::services::markdown::{rewrite_local_preview_images, MarkdownService};
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
 use std::hash::{Hash, Hasher};
-
-/// 计算内容哈希，用于 O(1) 变更检测 / Compute content hash for O(1) change detection
-fn content_hash(s: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
-}
 
 /// 预览组件 / Preview Component
 #[component]
@@ -45,13 +38,25 @@ pub fn Preview() -> Element {
     // 先读哈希判断是否变化，避免无变化时的 O(n) 克隆
     // Read hash first to detect changes, avoiding O(n) clone when unchanged
     let content = doc.content.read();
-    let hash = content_hash(&content);
+    let current_file = doc.current_file.read().clone();
+    let workspace_root = ui.workspace_root.read().clone();
+    let hash = {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        current_file.hash(&mut hasher);
+        workspace_root.hash(&mut hasher);
+        hasher.finish()
+    };
     let content_changed = hash != *cached_content_hash.read();
 
     if content_changed {
         // 仅在变化时克隆 / Clone only when changed
         let content_clone = content.clone();
         let content_len = content.len();
+        let source_dir = current_file
+            .as_ref()
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+        let workspace = workspace_root;
         drop(content);
 
         // 立即占住哈希：打开文件等场景会连续触发多次重渲染，若等渲染完成再写哈希，
@@ -83,7 +88,10 @@ pub fn Preview() -> Element {
                 String::new()
             } else {
                 let md_service = MarkdownService::new();
-                md_service.render(&content_clone)
+                let html = md_service.render(&content_clone);
+                let extra: Vec<&std::path::Path> =
+                    workspace.iter().map(std::path::PathBuf::as_path).collect();
+                rewrite_local_preview_images(&html, source_dir.as_deref(), &extra)
             };
 
             // 渲染完成后再次校验世代号 / Re-check generation after potentially slow render
@@ -117,6 +125,14 @@ pub fn Preview() -> Element {
         let _ = document::eval(&format!(
             "if(window._mm_setSyncScroll) window._mm_setSyncScroll({});",
             if sync { "true" } else { "false" }
+        ));
+    });
+
+    let _ = use_effect(move || {
+        let _html = cached_html.read().clone();
+        let js = include_str!("../../assets/preview_enhance.js");
+        let _ = document::eval(&format!(
+            "{js}\nif (window._mm_enhancePreview) window._mm_enhancePreview();"
         ));
     });
 

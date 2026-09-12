@@ -333,8 +333,8 @@ mod tests {
 
         let md = "```mermaid\ngraph TD\nA-->B\n```";
         let html = render_markdown(md);
-        assert!(html.contains("<pre") || html.contains("<code"));
-        assert!(html.contains("code-block"));
+        assert!(html.contains("<pre"));
+        assert!(html.contains("class=\"mermaid\"") || html.contains("code-block"));
     }
 
     #[test]

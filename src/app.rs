@@ -18,6 +18,15 @@ use crate::state::AppState;
 use crate::state::{AIProvider, Language, Theme};
 use dioxus::prelude::*;
 
+/// 预览公式引擎 / Preview math engine
+const KATEX_JS: Asset = asset!("/assets/vendor/katex.min.js");
+/// 预览图表引擎 / Preview diagram engine
+const MERMAID_JS: Asset = asset!("/assets/vendor/mermaid.min.js");
+/// 编辑器内核 / Editor kernel
+const CODEMIRROR_JS: Asset = asset!("/assets/vendor/codemirror.min.js");
+const CODEMIRROR_XML_JS: Asset = asset!("/assets/vendor/codemirror-xml.min.js");
+const CODEMIRROR_MARKDOWN_JS: Asset = asset!("/assets/vendor/codemirror-markdown.min.js");
+
 // 引入 CSS 样式（模块化）/ Import CSS Styles (Modular)
 const ALL_CSS: &str = concat!(
     include_str!("styles/variables.css"),
@@ -27,7 +36,60 @@ const ALL_CSS: &str = concat!(
     include_str!("styles/editor.css"),
     include_str!("styles/syntax.css"),
     include_str!("styles/modals.css"),
+    include_str!("../assets/vendor/codemirror.min.css"),
+    include_str!("../assets/vendor/codemirror-material-darker.min.css"),
 );
+
+/// 去掉 KaTeX @font-face，避免本地 fonts/ 404 污染全局中文渲染
+/// Drop KaTeX @font-face so missing local fonts/ files cannot break CJK text
+fn katex_layout_css() -> &'static str {
+    static CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CSS.get_or_init(|| {
+        let raw = include_str!("../assets/vendor/katex.min.css");
+        let stripped = strip_at_font_face(raw).replace(
+            "font:normal 1.21em KaTeX_Main,Times New Roman,serif",
+            "font:normal 1.21em 'Times New Roman','Cambria Math','STSong','Songti SC',serif",
+        );
+        stripped.replace(
+            "body{counter-reset:katexEqnNo mmlEqnNo}",
+            ".preview-content,.markdown-body{counter-reset:katexEqnNo mmlEqnNo}",
+        )
+    })
+}
+
+/// 删除 CSS 中的 @font-face 块 / Remove @font-face blocks from CSS
+fn strip_at_font_face(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(start) = rest.find("@font-face") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start..];
+        let Some(brace) = after.find('{') else {
+            break;
+        };
+        let mut depth = 0;
+        let mut end = None;
+        for (idx, ch) in after[brace..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(brace + idx + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = match end {
+            Some(offset) => &after[offset..],
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
+}
 
 /// 主应用组件 / Main Application Component
 pub fn App() -> Element {
@@ -193,6 +255,29 @@ pub fn App() -> Element {
         Theme::System => system_theme.read().clone(),
         Theme::Dark => "dark".to_string(),
     };
+    let theme_for_cm = theme_str.clone();
+    let ui_lang = *state.ui().language.read();
+    let html_lang = match ui_lang {
+        Language::EnUS => "en",
+        Language::ZhCN => "zh-CN",
+    };
+    let _ = use_effect(move || {
+        let _ = theme_for_cm.as_str();
+        let _ = document::eval(
+            "if (window._mm_setCmTheme) window._mm_setCmTheme();",
+        );
+    });
+    let lang_ui = state.ui();
+    let _ = use_effect(move || {
+        let lang = match *lang_ui.language.read() {
+            Language::EnUS => "en",
+            Language::ZhCN => "zh-CN",
+        };
+        let _ = document::eval(&format!(
+            "document.documentElement.lang={};if(document.body)document.body.lang=document.documentElement.lang;",
+            serde_json::to_string(lang).unwrap_or_else(|_| "\"zh-CN\"".to_string())
+        ));
+    });
 
     // 即时设置防抖持久化 / Debounced persistence for immediately applied settings
     {
@@ -449,11 +534,18 @@ pub fn App() -> Element {
     }
 
     rsx! {
+        document::Script { src: CODEMIRROR_JS }
+        document::Script { src: CODEMIRROR_XML_JS }
+        document::Script { src: CODEMIRROR_MARKDOWN_JS }
+        document::Script { src: KATEX_JS }
+        document::Script { src: MERMAID_JS }
         // 注入 CSS 样式 / Inject CSS Styles
         style { dangerous_inner_html: "{ALL_CSS}" }
+        style { dangerous_inner_html: "{katex_layout_css()}" }
 
         div {
             class: "app-container",
+            lang: "{html_lang}",
             "data-theme": "{theme_str}",
 
             // 工具栏 / Toolbar

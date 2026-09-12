@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MarkdownMonkey
+Comment=A modern Markdown editor
+Comment[zh_CN]=现代 Markdown 编辑器
+Exec=markdownmonkey
+Icon=markdownmonkey
+Terminal=false
+Categories=Office;TextEditor;
+MimeType=text/markdown;text/plain;
+StartupNotify=true

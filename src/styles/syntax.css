@@ -159,3 +159,39 @@
 .editor-textarea.syntax-on::placeholder {
   color: transparent;
 }
+
+/* 预览公式：使用系统字体，避免 KaTeX webfont 404 / Preview math uses system fonts */
+.preview-content .katex,
+.preview-content .katex-display {
+  font-family: "Times New Roman", "Cambria Math", "STSong", "Songti SC", serif;
+}
+
+.preview-content .math-inline {
+  display: inline;
+}
+
+.preview-content .math-display {
+  display: block;
+  overflow-x: auto;
+  margin: 1em 0;
+  text-align: center;
+}
+
+/* 预览 Mermaid / Preview Mermaid */
+.preview-content pre.mermaid {
+  background: transparent;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.preview-content pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.preview-content pre.mermaid:not([data-processed]) {
+  text-align: left;
+  background-color: var(--bg-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}

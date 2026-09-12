@@ -100,6 +100,79 @@
   position: relative; /* 为高亮覆盖层提供定位上下文 / Positioning context for highlight overlay */
 }
 
+.editor-content.cm-on .line-numbers,
+.editor-content:has(.CodeMirror) .line-numbers,
+.editor-content.cm-on .editor-textarea,
+.editor-content:has(.CodeMirror) .editor-textarea,
+.editor-content.cm-on .editor-highlight-overlay,
+.editor-content:has(.CodeMirror) .editor-highlight-overlay {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  position: absolute !important;
+}
+
+.editor-content .CodeMirror {
+  flex: 1;
+  height: 100%;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-base);
+  line-height: 1.6;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.editor-content .CodeMirror-measure,
+.editor-content .CodeMirror-measure pre {
+  visibility: hidden !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  position: absolute !important;
+  pointer-events: none !important;
+}
+
+.editor-content .CodeMirror-gutters {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+}
+
+.editor-content .cm-header {
+  color: var(--syntax-heading, #89b4fa);
+  font-weight: 600;
+}
+
+.editor-content .cm-comment,
+.editor-content .cm-quote {
+  color: var(--syntax-comment, #6c7086);
+}
+
+.editor-content .cm-link,
+.editor-content .cm-url {
+  color: var(--syntax-function, #74c7ec);
+}
+
+.editor-content .cm-string,
+.editor-content .cm-attribute {
+  color: var(--syntax-string, #a6e3a1);
+}
+
+.editor-content .search-highlight {
+  background: rgba(250, 204, 21, 0.35);
+}
+
+.editor-content .search-highlight-current {
+  background: rgba(251, 146, 60, 0.55);
+}
+
 /* 行号 / Line Numbers */
 .line-numbers {
   display: flex;
@@ -268,15 +341,22 @@
 .preview-content li { margin: 0.5em 0; }
 
 .preview-content table {
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 1em 0;
+  table-layout: auto;
+  overflow-x: auto;
+  display: block;
 }
 
 .preview-content th, .preview-content td {
   padding: 8px 12px;
   border: 1px solid var(--border-color);
   text-align: left;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .preview-content th {

@@ -9,7 +9,7 @@
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 实时预览（表格 / 删除线 / 任务列表 / 脚注）；原始 HTML 与危险 URL 会被过滤；**编辑器 Markdown 着色**；**预览代码块语法高亮**
+- 📝 **Markdown 编辑** - 实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**）；原始 HTML 与危险 URL 会被过滤；**CodeMirror 编辑器内核**（行号 / Markdown 着色）；**预览代码块语法高亮**
 - 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
 - 🗂️ **多标签页** - 同时编辑多个文件，每标签独立撤销/重做；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
@@ -34,6 +34,8 @@
 | **语言** | Rust | Edition 2021 |
 | **Markdown** | pulldown-cmark + 自写 HTML/URL 过滤 | 0.13 |
 | **语法高亮** | syntect（预览代码块） | 5 |
+| **公式 / 图表** | KaTeX + Mermaid（预览与 HTML 导出） | 0.16 / 11 |
+| **编辑器内核** | CodeMirror 5（Markdown 模式） | 5.65 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |
 | **密钥存储** | keyring-core + 系统凭据库 | 1 |
 | **搜索** | regex | 1 |
@@ -171,7 +173,7 @@ cargo test --all-targets
 
 ## 📦 发布
 
-跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows / Linux / macOS）。
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。
 
 ## ⌨️ 快捷键
 

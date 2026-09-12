@@ -3,7 +3,7 @@
 //! 使用 syntect 生成带 class 的 HTML，颜色由 CSS 变量跟随主题。
 //! Uses syntect to emit classed HTML; colors follow CSS variables / theme.
 
-use crate::config::CODE_HIGHLIGHT_MAX_BYTES;
+use crate::config::{CODE_HIGHLIGHT_MAX_BYTES, MERMAID_MAX_BYTES};
 use std::sync::OnceLock;
 use syntect::html::{ClassStyle, ClassedHTMLGenerator};
 use syntect::parsing::SyntaxSet;
@@ -35,7 +35,7 @@ fn language_token(lang: &str) -> Option<String> {
         "kt" | "kts" => "kotlin",
         "hpp" | "hh" | "cc" | "cxx" => "cpp",
         "htm" => "html",
-        "plaintext" | "text" | "txt" => return None,
+        "plaintext" | "text" | "txt" | "mermaid" => return None,
         other => other,
     };
     Some(token.to_string())
@@ -101,14 +101,29 @@ pub fn highlight_inner_html(lang: &str, code: &str) -> String {
     generator.finalize()
 }
 
+/// 渲染 Mermaid 源码块（由预览 JS 再画成图）
+/// Render a Mermaid source block (preview JS turns it into a diagram)
+fn render_mermaid_block(code: &str) -> String {
+    let escaped = escape_html(code);
+    if code.len() > MERMAID_MAX_BYTES {
+        return format!(
+            "<pre class=\"code-block\" data-lang=\"mermaid\"><code class=\"highlight-code language-mermaid\">{escaped}</code></pre>\n"
+        );
+    }
+    format!("<pre class=\"mermaid\">{escaped}</pre>\n")
+}
+
 /// 渲染带语言标记的高亮代码块 / Render a highlighted code block with a language label
 pub fn render_highlighted_block(lang: &str, code: &str) -> String {
-    let inner = highlight_inner_html(lang, code);
     let lang_clean = lang
         .split_whitespace()
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
+    if lang_clean == "mermaid" {
+        return render_mermaid_block(code);
+    }
+    let inner = highlight_inner_html(lang, code);
     let lang_attr = escape_attr(&lang_clean);
     let lang_class = if lang_clean.is_empty() {
         String::new()
@@ -156,5 +171,20 @@ mod tests {
         assert!(html.contains("data-lang=\"python\""));
         assert!(html.contains("language-python"));
         assert!(html.contains("<pre"));
+    }
+
+    #[test]
+    fn mermaid_block_is_not_syntect_highlighted() {
+        let html = render_highlighted_block("mermaid", "graph TD\nA-->B\n");
+        assert!(html.contains("class=\"mermaid\""));
+        assert!(!html.contains("code-block"));
+        assert!(!html.contains("<script"));
+    }
+
+    #[test]
+    fn mermaid_block_escapes_html() {
+        let html = render_highlighted_block("mermaid", "graph TD\nA[\"<script>x</script>\"]\n");
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
     }
 }

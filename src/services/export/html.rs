@@ -136,15 +136,45 @@ pub fn export_to_html_with_options(
         .highlight-code .constant, .highlight-code .constant-numeric {{ color: {syn_number}; }}
         .highlight-code .entity, .highlight-code .entity-name-function {{ color: {syn_fn}; }}
         .highlight-code .storage-type, .highlight-code .support-type {{ color: {syn_type}; }}
+        .math-display {{ display: block; margin: 1em 0; text-align: center; overflow-x: auto; }}
+        pre.mermaid {{ background: transparent; text-align: center; }}
+        pre.mermaid svg {{ max-width: 100%; height: auto; }}
     </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 </head>
 <body>
 <article class="markdown-body">
 {html_content}
 </article>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+(function() {{
+    var dark = {export_dark};
+    var root = document.querySelector('.markdown-body');
+    if (!root) return;
+    if (window.katex) {{
+        root.querySelectorAll('.math-inline, .math-display').forEach(function(el) {{
+            try {{
+                window.katex.render(el.textContent || '', el, {{
+                    throwOnError: false,
+                    displayMode: el.classList.contains('math-display'),
+                    output: 'html',
+                    trust: false
+                }});
+            }} catch (e) {{}}
+        }});
+    }}
+    if (window.mermaid) {{
+        window.mermaid.initialize({{ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' }});
+        window.mermaid.run({{ querySelector: '.markdown-body pre.mermaid', suppressErrors: true }});
+    }}
+}})();
+</script>
 </body>
 </html>"#,
         color_scheme = if options.dark { "dark" } else { "light" },
+        export_dark = if options.dark { "true" } else { "false" },
     );
 
     fs::write(output_path, full_html)?;
@@ -307,6 +337,22 @@ mod tests {
         assert!(html.contains("code-block"));
         assert!(html.contains("data-lang=\"rust\""));
         assert!(html.contains("highlight-code") || html.contains("<span"));
+    }
+
+    #[test]
+    fn test_export_includes_mermaid_and_math() {
+        let dir = TempDir::new().unwrap();
+        let out = dir.path().join("diagram.html");
+        export_to_html(
+            "```mermaid\ngraph TD\nA-->B\n```\n\n$a^2+b^2=c^2$",
+            &out,
+        )
+        .unwrap();
+        let html = fs::read_to_string(&out).unwrap();
+        assert!(html.contains("class=\"mermaid\""));
+        assert!(html.contains("math-inline"));
+        assert!(html.contains("katex.min.js"));
+        assert!(html.contains("mermaid.min.js"));
     }
 
     #[test]

@@ -25,6 +25,15 @@ window._mm_setSyncScroll = function(enabled) {
 window._mm_initEditor = function() {
     var ta = document.querySelector('.editor-textarea');
     if (!ta) return;
+    // CodeMirror 接管后不再建语法叠加层，避免与内核叠字
+    // After CodeMirror takes over, skip the syntax overlay so text is not painted twice
+    if (window.CodeMirror || window._mm_cmInstance || document.querySelector('.editor-content .CodeMirror')) {
+        document.querySelectorAll('.editor-highlight-overlay').forEach(function (el) {
+            el.remove();
+        });
+        ta._mm_enhanced = true;
+        return;
+    }
     // 如果已有增强且 textarea 未被替换，跳过
     // If already enhanced and textarea hasn't been replaced, skip
     if (ta._mm_enhanced) return;
@@ -389,6 +398,12 @@ window._mm_initEditor = function() {
     }
 
     window._mm_refreshSyntax = function() {
+        if (window._mm_cmInstance) {
+            highlightDiv.style.display = 'none';
+            ta.classList.remove('syntax-on');
+            return;
+        }
+        highlightDiv.style.display = '';
         if (window._mm_searchActive) return;
         var content = ta.value || '';
         if (!content || content.length > SYNTAX_MAX_CHARS) {

@@ -17,6 +17,16 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   APP_NAME: MarkdownMonkey
+  # Declared so later ${{ env.* }} expressions are valid; pack steps overwrite via GITHUB_ENV.
+  # 预先声明供后续 ${{ env.* }} 通过校验，打包步骤再用 GITHUB_ENV 覆盖。
+  PACKAGE_VERSION: ""
+  PACKAGE_ZIP: ""
+  PACKAGE_SHA: ""
+  PACKAGE_SETUP: ""
+  PACKAGE_SETUP_SHA: ""
+  PACKAGE_TAR: ""
+  PACKAGE_DEB: ""
+  PACKAGE_DEB_SHA: ""
 
 jobs:
   windows:
@@ -55,6 +65,7 @@ jobs:
           Copy-Item "target/release/markdownmonkey.exe" (Join-Path $packageDir "${env:APP_NAME}.exe")
           Copy-Item "README.md" (Join-Path $packageDir "README.md")
           Copy-Item "README_EN.md" (Join-Path $packageDir "README_EN.md")
+          Copy-Item "LICENSE" (Join-Path $packageDir "LICENSE")
 
           $zipPath = Join-Path "dist" "$packageName.zip"
           if (Test-Path $zipPath) {
@@ -70,6 +81,23 @@ jobs:
           "PACKAGE_ZIP=$zipPath" >> $env:GITHUB_ENV
           "PACKAGE_SHA=$shaPath" >> $env:GITHUB_ENV
 
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $safeVersion = "${{ env.PACKAGE_VERSION }}"
+          $src = Join-Path "dist" "${env:APP_NAME}-$safeVersion-windows-x64"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DAppVersion=$safeVersion" `
+            "/DSourceDir=$src" `
+            "packaging\windows\MarkdownMonkey.iss"
+          $setup = Join-Path "dist" "${env:APP_NAME}-$safeVersion-windows-x64-setup.exe"
+          if (-not (Test-Path $setup)) { throw "Inno Setup output missing: $setup" }
+          $hash = Get-FileHash -Algorithm SHA256 $setup
+          "$($hash.Hash)  $(Split-Path $setup -Leaf)" | Set-Content -Path "$setup.sha256" -Encoding ascii
+          "PACKAGE_SETUP=$setup" >> $env:GITHUB_ENV
+          "PACKAGE_SETUP_SHA=$setup.sha256" >> $env:GITHUB_ENV
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -77,6 +105,8 @@ jobs:
           path: |
             ${{ env.PACKAGE_ZIP }}
             ${{ env.PACKAGE_SHA }}
+            ${{ env.PACKAGE_SETUP }}
+            ${{ env.PACKAGE_SETUP_SHA }}
           if-no-files-found: error
 
       - name: Publish GitHub release
@@ -86,6 +116,8 @@ jobs:
           files: |
             ${{ env.PACKAGE_ZIP }}
             ${{ env.PACKAGE_SHA }}
+            ${{ env.PACKAGE_SETUP }}
+            ${{ env.PACKAGE_SETUP_SHA }}
           generate_release_notes: true
 
   linux:
@@ -124,16 +156,22 @@ jobs:
           PACKAGE_DIR="dist/${PACKAGE_NAME}"
           mkdir -p "$PACKAGE_DIR"
           cp target/release/markdownmonkey "$PACKAGE_DIR/${APP_NAME}"
-          cp README.md README_EN.md "$PACKAGE_DIR/"
+          cp README.md README_EN.md LICENSE "$PACKAGE_DIR/"
+          cp packaging/linux/markdownmonkey.desktop "$PACKAGE_DIR/"
           chmod +x "$PACKAGE_DIR/${APP_NAME}"
           (
             cd dist
             tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_NAME"
             sha256sum "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
           )
+          chmod +x packaging/linux/build-deb.sh
+          packaging/linux/build-deb.sh "$SAFE_VERSION" target/release/markdownmonkey dist
+          sha256sum "dist/${APP_NAME}-${SAFE_VERSION}-linux-x64.deb" > "dist/${APP_NAME}-${SAFE_VERSION}-linux-x64.deb.sha256"
           echo "PACKAGE_VERSION=${SAFE_VERSION}" >> "$GITHUB_ENV"
           echo "PACKAGE_TAR=dist/${PACKAGE_NAME}.tar.gz" >> "$GITHUB_ENV"
           echo "PACKAGE_SHA=dist/${PACKAGE_NAME}.tar.gz.sha256" >> "$GITHUB_ENV"
+          echo "PACKAGE_DEB=dist/${APP_NAME}-${SAFE_VERSION}-linux-x64.deb" >> "$GITHUB_ENV"
+          echo "PACKAGE_DEB_SHA=dist/${APP_NAME}-${SAFE_VERSION}-linux-x64.deb.sha256" >> "$GITHUB_ENV"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -142,6 +180,8 @@ jobs:
           path: |
             ${{ env.PACKAGE_TAR }}
             ${{ env.PACKAGE_SHA }}
+            ${{ env.PACKAGE_DEB }}
+            ${{ env.PACKAGE_DEB_SHA }}
           if-no-files-found: error
 
       - name: Publish GitHub release
@@ -151,6 +191,8 @@ jobs:
           files: |
             ${{ env.PACKAGE_TAR }}
             ${{ env.PACKAGE_SHA }}
+            ${{ env.PACKAGE_DEB }}
+            ${{ env.PACKAGE_DEB_SHA }}
           generate_release_notes: true
 
   macos:
@@ -187,14 +229,16 @@ jobs:
             *) ARCH_LABEL="$ARCH" ;;
           esac
           PACKAGE_NAME="${APP_NAME}-${SAFE_VERSION}-macos-${ARCH_LABEL}"
-          PACKAGE_DIR="dist/${PACKAGE_NAME}"
-          mkdir -p "$PACKAGE_DIR"
-          cp target/release/markdownmonkey "$PACKAGE_DIR/${APP_NAME}"
-          cp README.md README_EN.md "$PACKAGE_DIR/"
-          chmod +x "$PACKAGE_DIR/${APP_NAME}"
+          APP_DIR="dist/${APP_NAME}.app"
+          mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
+          cp target/release/markdownmonkey "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+          chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+          sed "s/<string>0.5.0<\\/string>/<string>${SAFE_VERSION}<\\/string>/g" \
+            packaging/macos/Info.plist > "${APP_DIR}/Contents/Info.plist"
+          cp README.md README_EN.md LICENSE "${APP_DIR}/Contents/Resources/"
           (
             cd dist
-            tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_NAME"
+            tar -czf "${PACKAGE_NAME}.tar.gz" "${APP_NAME}.app"
             shasum -a 256 "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
           )
           echo "PACKAGE_VERSION=${SAFE_VERSION}" >> "$GITHUB_ENV"

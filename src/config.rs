@@ -89,3 +89,7 @@ pub const SYSTEM_THEME_POLL_SECS: u64 = 2;
 /// 预览代码块超过此尺寸则跳过 syntect（字节）
 /// Skip syntect highlighting for preview code blocks larger than this (bytes)
 pub const CODE_HIGHLIGHT_MAX_BYTES: usize = 64 * 1024;
+
+/// Mermaid 源码超过此尺寸则只转义、不交给图表引擎（字节）
+/// Skip Mermaid rendering for diagrams larger than this (bytes)
+pub const MERMAID_MAX_BYTES: usize = 64 * 1024;

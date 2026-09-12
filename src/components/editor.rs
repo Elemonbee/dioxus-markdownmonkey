@@ -141,9 +141,9 @@ pub fn Editor() -> Element {
     let file_size = (*doc.file_size_bytes.read()).max(content.len());
     let use_uncontrolled = file_size >= UNCONTROLLED_EDITOR_THRESHOLD_BYTES;
 
-    // 非受控：外部修订（撤销/切换/AI）后把 Rust 内容推回 DOM
-    // Uncontrolled: push Rust content into DOM after external revisions
-    if use_uncontrolled && rev != *last_pushed_rev.read() {
+    // CodeMirror 与受控/非受控共用：修订变化时把 Rust 正文推回 DOM（JS 侧相同则跳过）
+    // Shared by CodeMirror and both editor modes: push Rust text on revision; JS no-ops if equal
+    if rev != *last_pushed_rev.read() {
         last_pushed_rev.set(rev);
         EditorActions::push_to_dom(&content);
     }
@@ -228,9 +228,11 @@ pub fn Editor() -> Element {
         let _ = tab_index;
         let sync = *ui.sync_scroll.read();
         let js = include_str!("../../assets/editor_enhance.js");
+        let cm_js = include_str!("../../assets/editor_codemirror.js");
         let _ = document::eval(&format!(
-            "{}\nif (window._mm_initEditor) window._mm_initEditor();\nif (window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            "{}\n{}\nif (window._mm_initEditor) window._mm_initEditor();\nif (window._mm_upgradeToCodeMirror) window._mm_upgradeToCodeMirror();\nif (window._mm_setSyncScroll) window._mm_setSyncScroll({});",
             js,
+            cm_js,
             if sync { "true" } else { "false" }
         ));
     });
@@ -249,6 +251,11 @@ pub fn Editor() -> Element {
             ondrop: move |e| {
                 *is_dragging.write() = false;
                 handle_editor_drop(state, e);
+            },
+            onkeydown: move |e| {
+                if ShortcutActions::handle_event(&mut state, &e) {
+                    e.prevent_default();
+                }
             },
 
             div { class: "editor-header",
@@ -330,15 +337,11 @@ pub fn Editor() -> Element {
                         onmouseup: move |_| {
                             sync_selection_from_dom(&mut state);
                         },
-                        onkeydown: move |e| {
-                            if ShortcutActions::handle_event(&mut state, &e) {
-                                e.prevent_default();
-                            }
-                        },
                     }
                 } else {
                     textarea {
                         class: "editor-textarea",
+                        key: "c-{tab_index}",
                         value: "{content}",
                         placeholder: "{placeholder_text}",
                         spellcheck: false,
@@ -373,11 +376,6 @@ pub fn Editor() -> Element {
                         },
                         onmouseup: move |_| {
                             sync_selection_from_dom(&mut state);
-                        },
-                        onkeydown: move |e| {
-                            if ShortcutActions::handle_event(&mut state, &e) {
-                                e.prevent_default();
-                            }
                         },
                     }
                 }
