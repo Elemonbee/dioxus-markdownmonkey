@@ -2,10 +2,12 @@
 //!
 //! 使用 AsyncFileDialog 避免文件对话框阻塞 UI
 
+use crate::actions::shortcut_actions::ShortcutActions;
 use crate::actions::{AppActions, EditorActions, EditorFormat, FileActions};
 use crate::components::icons::*;
-use crate::services::export::ExportService;
-use crate::state::AppState;
+use crate::services::export::{ExportService, HtmlExportOptions};
+use crate::services::theme_detector::ThemeDetector;
+use crate::state::{AppState, Language, Theme};
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, *};
 use rfd::AsyncFileDialog;
@@ -68,10 +70,25 @@ fn run_export(mut state: AppState, kind: ExportKind, err_title: String) {
             path
         };
 
+        let language = match *state.ui().language.read() {
+            Language::EnUS => "en-US",
+            Language::ZhCN => "zh-CN",
+        }
+        .to_string();
+        let dark = match *state.ui().theme.read() {
+            Theme::Dark => true,
+            Theme::Light => false,
+            Theme::System => ThemeDetector::detect() == "dark",
+        };
+        let options = HtmlExportOptions { language, dark };
+
         let result = tokio::task::spawn_blocking(move || match kind {
-            ExportKind::Html => {
-                ExportService::export_to_html_with_assets(&content, &path, source_dir.as_deref())
-            }
+            ExportKind::Html => ExportService::export_to_html_with_options(
+                &content,
+                &path,
+                source_dir.as_deref(),
+                &options,
+            ),
             ExportKind::Text => ExportService::export_to_text(&content, &path),
         })
         .await;
@@ -191,6 +208,7 @@ pub fn Toolbar() -> Element {
     } else {
         "toolbar-btn"
     };
+    let modifier = ShortcutActions::primary_modifier_label();
     let mut export_menu_open = use_signal(|| false);
     let export_trigger_class = if *export_menu_open.read() {
         "toolbar-btn toolbar-export-trigger active"
@@ -204,7 +222,7 @@ pub fn Toolbar() -> Element {
             div { class: "toolbar-group",
                 button {
                     class: "toolbar-btn",
-                    title: "{new_file_t} (Ctrl+N)",
+                    title: "{new_file_t} ({modifier}+N)",
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
@@ -215,7 +233,7 @@ pub fn Toolbar() -> Element {
                 }
                 button {
                     class: "toolbar-btn",
-                    title: "{open_file_t} (Ctrl+O)",
+                    title: "{open_file_t} ({modifier}+O)",
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
@@ -228,7 +246,7 @@ pub fn Toolbar() -> Element {
                 }
                 button {
                     class: "toolbar-btn",
-                    title: "{save_file_t} (Ctrl+S)",
+                    title: "{save_file_t} ({modifier}+S)",
                     onclick: move |_| {
                         if doc.current_file.read().is_some() {
                             let mut state = state;
@@ -329,7 +347,7 @@ pub fn Toolbar() -> Element {
             div { class: "toolbar-group",
                 button {
                     class: "toolbar-btn",
-                    title: "{undo_t} (Ctrl+Z)",
+                    title: "{undo_t} ({modifier}+Z)",
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
@@ -341,7 +359,7 @@ pub fn Toolbar() -> Element {
                 }
                 button {
                     class: "toolbar-btn",
-                    title: "{redo_t} (Ctrl+Y)",
+                    title: "{redo_t} ({modifier}+Y)",
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
@@ -360,7 +378,7 @@ pub fn Toolbar() -> Element {
             div { class: "toolbar-group",
                 button {
                     class: "toolbar-btn",
-                    title: "{bold_t} (Ctrl+B)",
+                    title: "{bold_t} ({modifier}+B)",
                     onclick: move |_| {
                         run_format(state, EditorFormat::Bold);
                     },
@@ -368,7 +386,7 @@ pub fn Toolbar() -> Element {
                 }
                 button {
                     class: "toolbar-btn",
-                    title: "{italic_t} (Ctrl+I)",
+                    title: "{italic_t} ({modifier}+I)",
                     onclick: move |_| {
                         run_format(state, EditorFormat::Italic);
                     },
@@ -376,7 +394,7 @@ pub fn Toolbar() -> Element {
                 }
                 button {
                     class: "toolbar-btn",
-                    title: "{code_t} (Ctrl+`)",
+                    title: "{code_t} ({modifier}+`)",
                     onclick: move |_| {
                         run_format(state, EditorFormat::Code);
                     },
@@ -384,7 +402,7 @@ pub fn Toolbar() -> Element {
                 }
                 button {
                     class: "toolbar-btn",
-                    title: "{link_t} (Ctrl+K)",
+                    title: "{link_t} ({modifier}+K)",
                     onclick: move |_| {
                         run_format(state, EditorFormat::Link);
                     },
@@ -506,14 +524,14 @@ pub fn Toolbar() -> Element {
             div { class: "toolbar-group",
                 button {
                     class: "{sidebar_class}",
-                    title: "{toggle_sidebar_t} (Ctrl+\\)",
+                    title: "{toggle_sidebar_t} ({modifier}+\\)",
                     aria_pressed: "{show_sidebar}",
                     onclick: move |_| { AppActions::toggle_sidebar(&mut state); },
                     SidebarIcon { size: 18 }
                 }
                 button {
                     class: "{preview_class}",
-                    title: "{toggle_preview_t} (Ctrl+P)",
+                    title: "{toggle_preview_t} ({modifier}+P)",
                     aria_pressed: "{show_preview}",
                     onclick: move |_| { AppActions::toggle_preview(&mut state); },
                     PreviewIcon { size: 18 }

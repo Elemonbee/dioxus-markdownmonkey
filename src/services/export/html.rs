@@ -7,6 +7,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// HTML 导出外观选项 / HTML export appearance options
+#[derive(Debug, Clone)]
+pub struct HtmlExportOptions {
+    /// `html lang` 属性 / `html lang` attribute
+    pub language: String,
+    /// 是否使用深色样式 / Whether to use dark styles
+    pub dark: bool,
+}
+
+impl Default for HtmlExportOptions {
+    fn default() -> Self {
+        Self {
+            language: "zh-CN".to_string(),
+            dark: false,
+        }
+    }
+}
+
 /// 导出为 HTML / Export to HTML
 #[allow(dead_code)] // 经 ExportService 与无资源导出路径使用 / Via ExportService / no-assets path
 pub fn export_to_html(markdown_content: &str, output_path: &Path) -> Result<(), ExportError> {
@@ -20,17 +38,46 @@ pub fn export_to_html_with_assets(
     output_path: &Path,
     source_dir: Option<&Path>,
 ) -> Result<(), ExportError> {
+    export_to_html_with_options(
+        markdown_content,
+        output_path,
+        source_dir,
+        &HtmlExportOptions::default(),
+    )
+}
+
+/// 按语言与主题导出 HTML / Export HTML with language and theme
+pub fn export_to_html_with_options(
+    markdown_content: &str,
+    output_path: &Path,
+    source_dir: Option<&Path>,
+    options: &HtmlExportOptions,
+) -> Result<(), ExportError> {
     use crate::services::markdown::MarkdownService;
 
     let html_content = MarkdownService::new().render(markdown_content);
     let html_content = rewrite_and_bundle_images(&html_content, source_dir, output_path)?;
+    let lang = sanitize_html_lang(&options.language);
+    let (fg, bg, muted, border, code_bg, syn_keyword, syn_string, syn_number, syn_fn, syn_type) =
+        if options.dark {
+            (
+                "#e6edf3", "#0d1117", "#8b949e", "#30363d", "#161b22", "#89b4fa", "#a6e3a1",
+                "#fab387", "#74c7ec", "#cba6f7",
+            )
+        } else {
+            (
+                "#333333", "#ffffff", "#666666", "#dddddd", "#f4f4f4", "#005cc5", "#22863a",
+                "#b35c00", "#0088aa", "#6f42c1",
+            )
+        };
 
     let full_html = format!(
         r#"<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="{lang}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="{color_scheme}">
     <title>Markdown Export</title>
     <style>
         body {{
@@ -39,53 +86,77 @@ pub fn export_to_html_with_assets(
             margin: 0 auto;
             padding: 20px;
             line-height: 1.6;
-            color: #333;
+            color: {fg};
+            background: {bg};
         }}
         .markdown-body pre {{
-            background: #f4f4f4;
+            background: {code_bg};
             padding: 16px;
             border-radius: 4px;
             overflow-x: auto;
         }}
         .markdown-body code {{
-            background: #f4f4f4;
+            background: {code_bg};
             padding: 2px 6px;
             border-radius: 3px;
         }}
         .markdown-body blockquote {{
-            border-left: 4px solid #ddd;
+            border-left: 4px solid {border};
             margin: 0;
             padding-left: 16px;
-            color: #666;
+            color: {muted};
         }}
         .markdown-body table {{
             border-collapse: collapse;
             width: 100%;
         }}
         .markdown-body th, .markdown-body td {{
-            border: 1px solid #ddd;
+            border: 1px solid {border};
             padding: 8px;
             text-align: left;
         }}
         .markdown-body th {{
-            background: #f4f4f4;
+            background: {code_bg};
         }}
         .markdown-body img {{
             max-width: 100%;
         }}
+        .markdown-body pre.code-block {{
+            position: relative;
+        }}
+        .markdown-body pre.code-block[data-lang]:not([data-lang=""])::before {{
+            content: attr(data-lang);
+            float: right;
+            font-size: 11px;
+            color: {muted};
+        }}
+        .highlight-code .keyword, .highlight-code .storage {{ color: {syn_keyword}; }}
+        .highlight-code .string {{ color: {syn_string}; }}
+        .highlight-code .comment {{ color: {muted}; font-style: italic; }}
+        .highlight-code .constant, .highlight-code .constant-numeric {{ color: {syn_number}; }}
+        .highlight-code .entity, .highlight-code .entity-name-function {{ color: {syn_fn}; }}
+        .highlight-code .storage-type, .highlight-code .support-type {{ color: {syn_type}; }}
     </style>
 </head>
 <body>
 <article class="markdown-body">
-{}
+{html_content}
 </article>
 </body>
 </html>"#,
-        html_content
+        color_scheme = if options.dark { "dark" } else { "light" },
     );
 
     fs::write(output_path, full_html)?;
     Ok(())
+}
+
+/// 将语言标签限制为安全的 HTML lang 值 / Restrict language tags to a safe HTML lang value
+fn sanitize_html_lang(language: &str) -> &'static str {
+    match language {
+        "en-US" | "en" => "en",
+        _ => "zh-CN",
+    }
 }
 
 /// 资源旁路目录名：`note.html` → `note_files`
@@ -225,5 +296,36 @@ mod tests {
         let rewritten = rewrite_and_bundle_images(html, Some(dir.path()), &out).unwrap();
         assert_eq!(rewritten, html);
         assert!(!dir.path().join("out_files").exists());
+    }
+
+    #[test]
+    fn test_export_includes_highlighted_rust() {
+        let dir = TempDir::new().unwrap();
+        let out = dir.path().join("hl.html");
+        export_to_html("```rust\nfn main() {}\n```", &out).unwrap();
+        let html = fs::read_to_string(&out).unwrap();
+        assert!(html.contains("code-block"));
+        assert!(html.contains("data-lang=\"rust\""));
+        assert!(html.contains("highlight-code") || html.contains("<span"));
+    }
+
+    #[test]
+    fn test_export_uses_language_and_dark_theme() {
+        let dir = TempDir::new().unwrap();
+        let out = dir.path().join("styled.html");
+        export_to_html_with_options(
+            "# Hello",
+            &out,
+            None,
+            &HtmlExportOptions {
+                language: "en-US".to_string(),
+                dark: true,
+            },
+        )
+        .unwrap();
+        let html = fs::read_to_string(&out).unwrap();
+        assert!(html.contains("lang=\"en\""));
+        assert!(html.contains("color-scheme\" content=\"dark\""));
+        assert!(html.contains("#0d1117"));
     }
 }

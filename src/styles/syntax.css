@@ -1,0 +1,161 @@
+/* ============================================
+   语法高亮 / Syntax Highlighting
+   ============================================ */
+
+:root {
+  --syntax-keyword: #89b4fa;
+  --syntax-string: #a6e3a1;
+  --syntax-comment: #6c7086;
+  --syntax-number: #fab387;
+  --syntax-function: #74c7ec;
+  --syntax-type: #cba6f7;
+  --syntax-operator: #cdd6f4;
+  --syntax-punctuation: #a6adc8;
+  --syntax-variable: #f2cdcd;
+  --syntax-constant: #f9e2af;
+  --syntax-heading: #89b4fa;
+  --syntax-fence: #cba6f7;
+}
+
+[data-theme="light"] {
+  --syntax-keyword: #005cc5;
+  --syntax-string: #22863a;
+  --syntax-comment: #6a737d;
+  --syntax-number: #b35c00;
+  --syntax-function: #0088aa;
+  --syntax-type: #6f42c1;
+  --syntax-operator: #24292e;
+  --syntax-punctuation: #586069;
+  --syntax-variable: #e36209;
+  --syntax-constant: #005cc5;
+  --syntax-heading: #005cc5;
+  --syntax-fence: #6f42c1;
+}
+
+/* 预览代码块 / Preview code blocks */
+.preview-content pre.code-block {
+  position: relative;
+}
+
+.preview-content pre.code-block[data-lang]:not([data-lang=""])::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-muted);
+  text-transform: lowercase;
+  user-select: none;
+}
+
+.preview-content .highlight-code .keyword,
+.preview-content .highlight-code .storage,
+.preview-content .highlight-code .keyword-control {
+  color: var(--syntax-keyword);
+}
+
+.preview-content .highlight-code .string,
+.preview-content .highlight-code .string-quoted {
+  color: var(--syntax-string);
+}
+
+.preview-content .highlight-code .comment {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.preview-content .highlight-code .constant,
+.preview-content .highlight-code .constant-numeric,
+.preview-content .highlight-code .constant-numeric-integer,
+.preview-content .highlight-code .constant-numeric-float {
+  color: var(--syntax-number);
+}
+
+.preview-content .highlight-code .entity,
+.preview-content .highlight-code .entity-name,
+.preview-content .highlight-code .entity-name-function,
+.preview-content .highlight-code .support-function {
+  color: var(--syntax-function);
+}
+
+.preview-content .highlight-code .storage-type,
+.preview-content .highlight-code .support-type,
+.preview-content .highlight-code .entity-name-class,
+.preview-content .highlight-code .entity-name-struct,
+.preview-content .highlight-code .entity-name-type {
+  color: var(--syntax-type);
+}
+
+.preview-content .highlight-code .variable,
+.preview-content .highlight-code .variable-other,
+.preview-content .highlight-code .variable-parameter {
+  color: var(--syntax-variable);
+}
+
+.preview-content .highlight-code .constant-language,
+.preview-content .highlight-code .constant-character,
+.preview-content .highlight-code .support-constant {
+  color: var(--syntax-constant);
+}
+
+.preview-content .highlight-code .keyword-operator,
+.preview-content .highlight-code .punctuation {
+  color: var(--syntax-operator);
+}
+
+/* 编辑器 Markdown 覆盖层 / Editor Markdown overlay */
+.editor-highlight-overlay {
+  color: var(--text-primary);
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.editor-highlight-overlay .md-heading {
+  color: var(--syntax-heading);
+  font-weight: 600;
+}
+
+.editor-highlight-overlay .md-fence,
+.editor-highlight-overlay .md-code,
+.editor-highlight-overlay .md-codeblock {
+  color: var(--syntax-fence);
+}
+
+.editor-highlight-overlay .md-quote {
+  color: var(--syntax-comment);
+}
+
+.editor-highlight-overlay .md-list,
+.editor-highlight-overlay .md-hr {
+  color: var(--syntax-keyword);
+}
+
+.editor-highlight-overlay .md-bold {
+  color: var(--syntax-constant);
+  font-weight: 700;
+}
+
+.editor-highlight-overlay .md-italic {
+  color: var(--syntax-variable);
+  font-style: italic;
+}
+
+.editor-highlight-overlay .md-strike {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.editor-highlight-overlay .md-link,
+.editor-highlight-overlay .md-image {
+  color: var(--syntax-function);
+}
+
+.editor-textarea.syntax-on {
+  color: transparent;
+  caret-color: var(--text-primary);
+}
+
+.editor-textarea.syntax-on::placeholder {
+  color: transparent;
+}

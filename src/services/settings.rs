@@ -247,6 +247,25 @@ impl SettingsService {
         atomic_write(&self.config_path, &content)
     }
 
+    /// 若本文件仍有明文 API Key，立刻重写配置去掉它
+    /// Rewrite this settings file immediately when a plaintext API key is still present
+    pub fn strip_plaintext_api_key_if_present(&self) -> io::Result<bool> {
+        let settings = self.load()?;
+        if settings
+            .ai
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.is_empty())
+        {
+            self.save(&settings)?;
+            tracing::info!(
+                "已从 settings.json 清除明文 API Key / Cleared plaintext API Key from settings.json"
+            );
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     /// 在同一串行化临界区内更新窗口尺寸
     /// Update window dimensions inside the same serialized critical section
     fn save_window_size(&self, width: f64, height: f64) -> io::Result<()> {
@@ -373,6 +392,12 @@ pub fn load_settings() -> AppSettings {
 pub fn save_settings(settings: &AppSettings) -> io::Result<()> {
     let service = SettingsService::new()?;
     service.save(settings)
+}
+
+/// 若磁盘上仍有明文 API Key，立刻重写配置去掉它
+/// Rewrite settings immediately when a plaintext API key is still on disk
+pub fn strip_plaintext_api_key_if_present() -> io::Result<bool> {
+    SettingsService::new()?.strip_plaintext_api_key_if_present()
 }
 
 /// 便捷函数：仅保存窗口尺寸（不影响其他设置）/ Save only window size (doesn't affect other settings)
@@ -660,6 +685,48 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .ends_with(".tmp")));
+    }
+
+    /// 迁移后应立即从已有 settings.json 去掉明文 API Key
+    /// After migration, plaintext API keys must be stripped from an existing settings.json
+    #[test]
+    fn test_strip_plaintext_api_key_rewrites_existing_file() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+                "theme": "dark",
+                "language": "zh-CN",
+                "font_size": 16,
+                "preview_font_size": 16,
+                "word_wrap": false,
+                "line_numbers": true,
+                "sync_scroll": true,
+                "sidebar_visible": true,
+                "show_preview": true,
+                "sidebar_width": 280,
+                "ai": {
+                    "enabled": true,
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "api_key": "sk-legacy-plaintext",
+                    "base_url": "https://api.openai.com/v1",
+                    "system_prompt": "test",
+                    "temperature": 0.7
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let service = SettingsService::from_path(path.clone());
+        assert!(service.strip_plaintext_api_key_if_present().unwrap());
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("sk-legacy-plaintext"));
+        assert!(!raw.contains("api_key"));
+        let saved: AppSettings = serde_json::from_str(&raw).unwrap();
+        assert!(saved.ai.api_key.is_none());
+        assert!(saved.ai.enabled);
     }
 
     /// 并发全量保存与窗口保存应合并，不能互相覆盖

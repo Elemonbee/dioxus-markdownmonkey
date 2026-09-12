@@ -33,25 +33,35 @@ fn init_native_store() -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        match linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::new()) {
+        match zbus_secret_service_keyring_store::Store::new_with_configuration(&HashMap::new()) {
             Ok(store) => {
                 set_default_store(store);
                 return Ok(());
             }
-            Err(keyutils_error) => {
+            Err(secret_error) => {
                 tracing::warn!(
-                    "Linux keyutils 不可用，回退到 Secret Service: {} / \
-                     Linux keyutils unavailable, falling back to Secret Service: {}",
-                    keyutils_error,
-                    keyutils_error
+                    "Linux Secret Service 不可用，回退到会话级 keyutils: {} / \
+                     Linux Secret Service unavailable, falling back to session keyutils: {}",
+                    secret_error,
+                    secret_error
                 );
             }
         }
+
+        let store = linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::new())
+            .map_err(|e| format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e))?;
+        set_default_store(store);
+        return Ok(());
     }
 
     #[cfg(all(
         unix,
-        not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android",
+            target_os = "linux"
+        ))
     ))]
     {
         let store =

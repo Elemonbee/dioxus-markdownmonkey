@@ -6,6 +6,7 @@ pub mod ai;
 pub mod auto_save;
 pub mod export;
 pub mod file_watcher;
+pub mod highlight;
 pub mod image;
 pub mod keyring_service;
 pub mod markdown;

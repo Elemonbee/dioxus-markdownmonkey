@@ -9,7 +9,7 @@ A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framew
 
 ## ✨ Features
 
-- 📝 **Markdown Editing** - Live preview (tables / strikethrough / task lists / footnotes); raw HTML and dangerous URLs are filtered; code blocks render as plain text
+- 📝 **Markdown Editing** - Live preview (tables / strikethrough / task lists / footnotes); raw HTML and dangerous URLs are filtered; **editor Markdown coloring**; **syntax-highlighted preview code blocks**
 - 📁 **File Management** - Workspace folder, file-tree filter, recent files, multi-encoding (UTF-8/GBK/UTF-16); drag-and-drop `.md` / `.txt` to open
 - 🗂️ **Multi-Tab** - Edit multiple files with independent undo/redo per tab; confirm before closing unsaved tabs
 - 📋 **Outline View** - Auto-extract headings for quick navigation
@@ -33,6 +33,7 @@ Versions reflect the current `Cargo.lock` / `Cargo.toml` resolution and may chan
 | **UI Framework** | Dioxus (desktop, no Tauri) | 0.7.10 |
 | **Language** | Rust | Edition 2021 |
 | **Markdown** | pulldown-cmark + in-tree HTML/URL filter | 0.13 |
+| **Highlighting** | syntect (preview code blocks) | 5 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |
 | **Key Storage** | keyring-core + native OS stores | 1 |
 | **Search** | regex | 1 |
@@ -174,27 +175,29 @@ Cross-platform packaging and tagging are documented in **[docs/RELEASE.md](docs/
 
 ## ⌨️ Keyboard Shortcuts
 
+On macOS the primary modifier is ⌘ (Command); on Windows / Linux it is Ctrl.
+
 | Shortcut | Action |
 |----------|--------|
-| Ctrl+N | New File |
-| Ctrl+O | Open File |
-| Ctrl+S | Save |
-| Ctrl+Z | Undo |
-| Ctrl+Y / Ctrl+Shift+Z | Redo |
-| Ctrl+B | Bold |
-| Ctrl+I | Italic |
-| Ctrl+` | Inline Code |
-| Ctrl+K | Insert Link |
-| Ctrl+F | In-document Search & Replace |
-| Ctrl+Shift+F | Workspace Search / Replace |
-| Ctrl+\\ | Toggle Sidebar |
-| Ctrl+P | Toggle Preview |
-| Ctrl+T | Toggle Theme |
-| Ctrl+, | Open Settings |
-| Ctrl+/ | Show Shortcuts |
-| Ctrl+J | AI Assistant |
+| Ctrl/⌘+N | New File |
+| Ctrl/⌘+O | Open File |
+| Ctrl/⌘+S | Save |
+| Ctrl/⌘+Z | Undo |
+| Ctrl/⌘+Y / Ctrl/⌘+Shift+Z | Redo |
+| Ctrl/⌘+B | Bold |
+| Ctrl/⌘+I | Italic |
+| Ctrl/⌘+` | Inline Code |
+| Ctrl/⌘+K | Insert Link |
+| Ctrl/⌘+F | In-document Search & Replace |
+| Ctrl/⌘+Shift+F | Workspace Search / Replace |
+| Ctrl/⌘+\\ | Toggle Sidebar |
+| Ctrl/⌘+P | Toggle Preview |
+| Ctrl/⌘+T | Toggle Theme |
+| Ctrl/⌘+, | Open Settings |
+| Ctrl/⌘+/ | Show Shortcuts |
+| Ctrl/⌘+J | AI Assistant |
 | Escape | Close Modal |
 
 ## 📄 License
 
-MIT License
+MIT License (see [LICENSE](./LICENSE) in the repository root)

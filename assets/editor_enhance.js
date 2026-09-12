@@ -3,6 +3,7 @@
  * Editor enhancement script
  * 
  * 功能/Features:
+ * - Markdown 语法着色 / Markdown syntax coloring
  * - 搜索匹配高亮 / Search match highlighting
  * - Tab 键缩进/反缩进 / Tab indent/outdent
  * - Enter 自动缩进 + Markdown 列表续行 / Enter auto-indent + Markdown list continuation
@@ -105,6 +106,7 @@ window._mm_initEditor = function() {
         if (el.value !== text) {
             el.value = text;
         }
+        if (window._mm_refreshSyntax) window._mm_refreshSyntax();
     };
     window._mm_setEditorState = function(text, byteStart, byteEnd, direction) {
         var el = document.querySelector('.editor-textarea');
@@ -132,6 +134,7 @@ window._mm_initEditor = function() {
         restore();
         queueMicrotask(restore);
         requestAnimationFrame(restore);
+        if (window._mm_refreshSyntax) window._mm_refreshSyntax();
     };
     
     // ========== 搜索高亮层 / Search Highlight Overlay ==========
@@ -155,9 +158,10 @@ window._mm_initEditor = function() {
         highlightDiv.style.font = getComputedStyle(ta).font;
         highlightDiv.style.lineHeight = getComputedStyle(ta).lineHeight;
         highlightDiv.style.letterSpacing = getComputedStyle(ta).letterSpacing;
-        highlightDiv.style.whiteSpace = 'pre-wrap';
+        highlightDiv.style.whiteSpace = getComputedStyle(ta).whiteSpace;
         highlightDiv.style.wordWrap = 'break-word';
         highlightDiv.style.overflow = 'hidden';
+        highlightDiv.style.tabSize = getComputedStyle(ta).tabSize;
         highlightDiv.style.top = ta.offsetTop + 'px';
         highlightDiv.style.left = ta.offsetLeft + 'px';
     }
@@ -200,9 +204,11 @@ window._mm_initEditor = function() {
     // 全局搜索高亮函数 / Global search highlight function
     window._mm_highlightSearch = function(query, caseInsensitive, currentIndex) {
         if (!query) {
-            highlightDiv.innerHTML = '';
+            window._mm_searchActive = false;
+            if (window._mm_refreshSyntax) window._mm_refreshSyntax();
             return;
         }
+        window._mm_searchActive = true;
         var content = ta.value;
         var escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         var flags = caseInsensitive ? 'gi' : 'g';
@@ -232,6 +238,7 @@ window._mm_initEditor = function() {
         }
         result += '\n'; // 末尾换行确保高度一致 / Trailing newline for height consistency
         highlightDiv.innerHTML = result;
+        ta.classList.add('syntax-on');
         syncHighlight();
 
         // 将当前匹配滚入可视区并选中 / Scroll active match into view and select it
@@ -260,6 +267,151 @@ window._mm_initEditor = function() {
     function escapeHtml(s) {
         return s.replace(/\x26/g, '\x26amp;').replace(/\x3C/g, '\x26lt;').replace(/\x3E/g, '\x26gt;');
     }
+
+    var SYNTAX_MAX_CHARS = 200000;
+    var syntaxRaf = null;
+
+    function highlightInline(text) {
+        var out = '';
+        var i = 0;
+        while (i < text.length) {
+            if (text[i] === '`') {
+                var end = text.indexOf('`', i + 1);
+                if (end > i) {
+                    out += '<span class="md-code">' + escapeHtml(text.slice(i, end + 1)) + '</span>';
+                    i = end + 1;
+                    continue;
+                }
+            }
+            if (text[i] === '!' && text[i + 1] === '[') {
+                var img = text.slice(i).match(/^!\[[^\]]*\]\([^)]*\)/);
+                if (img) {
+                    out += '<span class="md-image">' + escapeHtml(img[0]) + '</span>';
+                    i += img[0].length;
+                    continue;
+                }
+            }
+            if (text[i] === '[') {
+                var link = text.slice(i).match(/^\[[^\]]+\]\([^)]*\)/);
+                if (link) {
+                    out += '<span class="md-link">' + escapeHtml(link[0]) + '</span>';
+                    i += link[0].length;
+                    continue;
+                }
+            }
+            if (text.slice(i, i + 2) === '**' || text.slice(i, i + 2) === '__') {
+                var mark = text.slice(i, i + 2);
+                var boldEnd = text.indexOf(mark, i + 2);
+                if (boldEnd > i) {
+                    out += '<span class="md-bold">' + escapeHtml(text.slice(i, boldEnd + 2)) + '</span>';
+                    i = boldEnd + 2;
+                    continue;
+                }
+            }
+            if (text.slice(i, i + 2) === '~~') {
+                var strikeEnd = text.indexOf('~~', i + 2);
+                if (strikeEnd > i) {
+                    out += '<span class="md-strike">' + escapeHtml(text.slice(i, strikeEnd + 2)) + '</span>';
+                    i = strikeEnd + 2;
+                    continue;
+                }
+            }
+            if (text[i] === '*' || text[i] === '_') {
+                var em = text[i];
+                if (text[i + 1] !== em) {
+                    var emEnd = text.indexOf(em, i + 1);
+                    if (emEnd > i && text[emEnd + 1] !== em) {
+                        out += '<span class="md-italic">' + escapeHtml(text.slice(i, emEnd + 1)) + '</span>';
+                        i = emEnd + 1;
+                        continue;
+                    }
+                }
+            }
+            var next = text.slice(i + 1).search(/[`*_\[!]/);
+            var take = next === -1 ? text.length : i + 1 + next;
+            out += escapeHtml(text.slice(i, take));
+            i = take;
+        }
+        return out;
+    }
+
+    function highlightMarkdown(src) {
+        var lines = src.split('\n');
+        var out = '';
+        var inFence = false;
+        var fenceChar = '';
+        var fenceLen = 0;
+        for (var li = 0; li < lines.length; li++) {
+            if (li > 0) out += '\n';
+            var line = lines[li];
+            var fence = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
+            if (fence) {
+                var mark = fence[2];
+                if (!inFence) {
+                    inFence = true;
+                    fenceChar = mark.charAt(0);
+                    fenceLen = mark.length;
+                    out += escapeHtml(fence[1]) + '<span class="md-fence">' + escapeHtml(mark + fence[3]) + '</span>';
+                } else if (mark.charAt(0) === fenceChar && mark.length >= fenceLen && fence[3].trim() === '') {
+                    inFence = false;
+                    out += escapeHtml(fence[1]) + '<span class="md-fence">' + escapeHtml(mark) + '</span>';
+                } else {
+                    out += '<span class="md-codeblock">' + escapeHtml(line) + '</span>';
+                }
+                continue;
+            }
+            if (inFence) {
+                out += '<span class="md-codeblock">' + escapeHtml(line) + '</span>';
+                continue;
+            }
+            var heading = line.match(/^(#{1,6})(\s+)(.*)$/);
+            if (heading) {
+                out += '<span class="md-heading">' + escapeHtml(heading[1] + heading[2]) + highlightInline(heading[3]) + '</span>';
+                continue;
+            }
+            if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+                out += '<span class="md-hr">' + escapeHtml(line) + '</span>';
+                continue;
+            }
+            var quote = line.match(/^(\s*>+\s?)(.*)$/);
+            if (quote) {
+                out += '<span class="md-quote">' + escapeHtml(quote[1]) + '</span>' + highlightInline(quote[2]);
+                continue;
+            }
+            var list = line.match(/^(\s*(?:[-*+]|\d+\.)\s+)(.*)$/);
+            if (list) {
+                out += '<span class="md-list">' + escapeHtml(list[1]) + '</span>' + highlightInline(list[2]);
+                continue;
+            }
+            out += highlightInline(line);
+        }
+        return out;
+    }
+
+    window._mm_refreshSyntax = function() {
+        if (window._mm_searchActive) return;
+        var content = ta.value || '';
+        if (!content || content.length > SYNTAX_MAX_CHARS) {
+            highlightDiv.innerHTML = '';
+            ta.classList.remove('syntax-on');
+            syncHighlight();
+            return;
+        }
+        highlightDiv.innerHTML = highlightMarkdown(content) + '\n';
+        ta.classList.add('syntax-on');
+        syncHighlight();
+    };
+
+    function scheduleSyntaxRefresh() {
+        if (syntaxRaf !== null) return;
+        syntaxRaf = requestAnimationFrame(function() {
+            syntaxRaf = null;
+            window._mm_refreshSyntax();
+        });
+    }
+
+    ta.addEventListener('input', scheduleSyntaxRefresh);
+    window._mm_refreshSyntax();
     
     // ========== 键盘事件处理 / Keyboard Event Handling ==========
     ta.addEventListener('keydown', function(e) {

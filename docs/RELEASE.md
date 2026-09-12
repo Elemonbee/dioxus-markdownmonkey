@@ -32,7 +32,7 @@ artifacts containing platform packages:
 
 - `MarkdownMonkey-<version>-windows-x64.zip` (+ `.sha256`)
 - `MarkdownMonkey-<version>-linux-x64.tar.gz` (+ `.sha256`)
-- `MarkdownMonkey-<version>-macos-universal.tar.gz` (+ `.sha256`)
+- `MarkdownMonkey-<version>-macos-arm64.tar.gz` or `macos-x64` (+ `.sha256`)
 
 Manual workflow runs do not create a GitHub Release.
 

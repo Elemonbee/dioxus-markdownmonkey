@@ -4,13 +4,15 @@ use crate::actions::{AppActions, EditorActions};
 use crate::components::*;
 use crate::config::{
     AUTO_SAVE_ACTIVE_POLL_SECS, AUTO_SAVE_IDLE_POLL_SECS, FILE_WATCH_ACTIVE_INTERVAL_MS,
-    FILE_WATCH_IDLE_INTERVAL_SECS, FILE_WATCH_INTERNAL_WRITE_GRACE_MS,
+    FILE_WATCH_IDLE_INTERVAL_SECS, FILE_WATCH_INTERNAL_WRITE_GRACE_MS, SYSTEM_THEME_POLL_SECS,
 };
 use crate::services::auto_save::AutoSaveService;
 use crate::services::file_watcher::FileModificationChecker;
 use crate::services::keyring_service;
 use crate::services::session::SessionService;
-use crate::services::settings::{load_settings, save_settings, AppSettings};
+use crate::services::settings::{
+    load_settings, save_settings, strip_plaintext_api_key_if_present, AppSettings,
+};
 use crate::services::theme_detector::ThemeDetector;
 use crate::state::AppState;
 use crate::state::{AIProvider, Language, Theme};
@@ -23,6 +25,7 @@ const ALL_CSS: &str = concat!(
     include_str!("styles/toolbar.css"),
     include_str!("styles/sidebar.css"),
     include_str!("styles/editor.css"),
+    include_str!("styles/syntax.css"),
     include_str!("styles/modals.css"),
 );
 
@@ -82,19 +85,45 @@ pub fn App() -> Element {
                 // 如果密钥环中没有，尝试从配置文件迁移
                 // Try keyring first, fallback to settings file, then migrate to keyring
                 config.api_key = match keyring_service::get_api_key(&settings.ai.provider) {
-                    Ok(key) => key,
+                    Ok(key) => {
+                        if settings
+                            .ai
+                            .api_key
+                            .as_deref()
+                            .is_some_and(|value| !value.is_empty())
+                        {
+                            if let Err(error) = strip_plaintext_api_key_if_present() {
+                                tracing::warn!(
+                                    "清除磁盘明文 API Key 失败 / Failed to strip plaintext API Key: {}",
+                                    error
+                                );
+                            }
+                        }
+                        key
+                    }
                     Err(_) => {
                         // 密钥环中没有，尝试迁移明文密钥
                         // No key in keyring, try to migrate plaintext key
                         let plaintext_key = settings.ai.api_key.as_deref();
-                        keyring_service::migrate_api_key_if_needed(
+                        let migrated = keyring_service::migrate_api_key_if_needed(
                             &settings.ai.provider,
                             plaintext_key,
                         );
 
                         // 迁移后再次尝试从密钥环获取
                         match keyring_service::get_api_key(&settings.ai.provider) {
-                            Ok(key) => key,
+                            Ok(key) => {
+                                if migrated {
+                                    if let Err(error) = strip_plaintext_api_key_if_present() {
+                                        tracing::warn!(
+                                            "迁移后清除磁盘明文 API Key 失败 / \
+                                             Failed to strip plaintext API Key after migration: {}",
+                                            error
+                                        );
+                                    }
+                                }
+                                key
+                            }
                             Err(_) => {
                                 // 密钥环完全不可用，使用明文密钥但发出安全警告
                                 // Keyring unavailable, use plaintext key but warn
@@ -146,10 +175,23 @@ pub fn App() -> Element {
 
     // 获取当前主题 / Get current theme
     let theme = *state.ui().theme.read();
+    let system_theme = use_signal(|| ThemeDetector::detect().to_string());
+    use_future(move || {
+        let mut system_theme = system_theme;
+        async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(SYSTEM_THEME_POLL_SECS)).await;
+                let detected = ThemeDetector::detect();
+                if *system_theme.peek() != detected {
+                    system_theme.set(detected.to_string());
+                }
+            }
+        }
+    });
     let theme_str = match theme {
-        Theme::Light => "light",
-        Theme::System => ThemeDetector::detect(),
-        Theme::Dark => "dark",
+        Theme::Light => "light".to_string(),
+        Theme::System => system_theme.read().clone(),
+        Theme::Dark => "dark".to_string(),
     };
 
     // 即时设置防抖持久化 / Debounced persistence for immediately applied settings

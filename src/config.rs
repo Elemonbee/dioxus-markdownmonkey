@@ -73,3 +73,19 @@ pub const UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS: u64 = 350;
 /// 非活动标签在内存中保留的最大数量（其余未修改已保存标签可驱逐）
 /// Max resident inactive tabs kept in memory (others may be evicted if saved).
 pub const MAX_RESIDENT_INACTIVE_TABS: usize = 3;
+
+/// 工作区搜索最大目录深度 / Max workspace-search directory depth
+pub const WORKSPACE_SEARCH_MAX_DEPTH: usize = 10;
+/// 工作区搜索最多扫描的文件数 / Max files scanned during workspace search
+pub const WORKSPACE_SEARCH_MAX_FILES: usize = 1000;
+/// 工作区搜索最多返回的命中数 / Max workspace-search hits returned
+pub const WORKSPACE_SEARCH_MAX_RESULTS: usize = 200;
+/// 工作区搜索跳过大于此尺寸的文件（字节）/ Skip files larger than this during workspace search
+pub const WORKSPACE_SEARCH_MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// 跟随系统主题时的轮询间隔（秒）/ Poll interval when following the OS theme
+pub const SYSTEM_THEME_POLL_SECS: u64 = 2;
+
+/// 预览代码块超过此尺寸则跳过 syntect（字节）
+/// Skip syntect highlighting for preview code blocks larger than this (bytes)
+pub const CODE_HIGHLIGHT_MAX_BYTES: usize = 64 * 1024;

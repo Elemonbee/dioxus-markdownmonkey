@@ -647,8 +647,8 @@ impl FileActions {
         Ok(())
     }
 
-    /// 工作区字面全部替换（大小写不敏感），同步打开标签缓冲区并写回磁盘
-    /// Literal case-insensitive replace-all in workspace; sync open tabs and write disk
+    /// 工作区字面全部替换（沿用当前大小写选项），同步打开标签缓冲区并按原编码写回磁盘
+    /// Literal replace-all in workspace using the current case option; sync tabs and write with original encoding
     pub fn replace_in_workspace(
         state: &mut AppState,
         query: &str,
@@ -656,7 +656,8 @@ impl FileActions {
     ) -> crate::utils::workspace_search::WorkspaceReplaceReport {
         use crate::utils::replace::{count_matches, replace_all_in_text};
         use crate::utils::workspace_search::{
-            apply_workspace_replace, collect_open_buffer_overrides, collect_workspace_files,
+            apply_workspace_replace_with_options, collect_open_buffer_overrides,
+            collect_workspace_files_with_encoding, write_workspace_replacements,
             WorkspaceReplaceReport,
         };
 
@@ -665,14 +666,15 @@ impl FileActions {
             return report;
         }
 
+        let case_insensitive = *state.ui().search_case_insensitive.read();
         let workspace = state.ui().workspace_root.read().clone();
         let Some(root) = workspace else {
             let content = state.document().content.read().clone();
-            let n = count_matches(&content, query, true, false);
+            let n = count_matches(&content, query, case_insensitive, false);
             if n == 0 {
                 return report;
             }
-            let next = replace_all_in_text(&content, query, replacement, true, false);
+            let next = replace_all_in_text(&content, query, replacement, case_insensitive, false);
             state.update_content(next);
             crate::actions::EditorActions::push_to_dom(&state.document().content.read());
             report.files_touched = 1;
@@ -681,9 +683,17 @@ impl FileActions {
         };
 
         let overrides = collect_open_buffer_overrides(state);
-        let files = collect_workspace_files(&root, &overrides);
-        let (changed, apply_report) = apply_workspace_replace(&files, query, replacement);
+        let files = collect_workspace_files_with_encoding(&root, &overrides);
+        let pairs: Vec<(std::path::PathBuf, String)> = files
+            .iter()
+            .map(|file| (file.path.clone(), file.content.clone()))
+            .collect();
+        let (changed, apply_report) =
+            apply_workspace_replace_with_options(&pairs, query, replacement, case_insensitive);
         report = apply_report;
+        report
+            .errors
+            .extend(write_workspace_replacements(&files, &changed));
 
         for (path, new_content) in changed {
             let open_idx = {
@@ -692,8 +702,11 @@ impl FileActions {
                 tabs.iter().position(|t| t.path.as_ref() == Some(&path))
             };
 
-            if let Err(e) = fs::write(&path, &new_content) {
-                report.errors.push(format!("{}: {}", path.display(), e));
+            if report
+                .errors
+                .iter()
+                .any(|error| error.starts_with(&format!("{}:", path.display())))
+            {
                 continue;
             }
 

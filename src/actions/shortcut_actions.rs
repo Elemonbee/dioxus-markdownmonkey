@@ -34,7 +34,7 @@ pub enum ShortcutAction {
     ShowShortcuts,
     ToggleTheme,
     OpenAI,
-    Search, // 搜索替换 / Search & Replace (Ctrl+F)
+    Search, // 搜索替换 / Search & Replace (Ctrl/⌘+F)
     GlobalSearch,
     Close,
 }
@@ -205,12 +205,27 @@ impl ShortcutActions {
             .map(|shortcut| shortcut.action)
     }
 
+    /// 主键修饰键是否按下（Windows/Linux 的 Ctrl，macOS 的 Cmd）
+    /// Whether the primary modifier is down (Ctrl on Windows/Linux, Cmd on macOS)
+    pub fn has_primary_modifier(event: &KeyboardEvent) -> bool {
+        event.modifiers().ctrl() || event.modifiers().meta()
+    }
+
+    /// 当前平台主键修饰键的显示名 / Display name of the primary modifier on this platform
+    pub fn primary_modifier_label() -> &'static str {
+        if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Ctrl"
+        }
+    }
+
     /// 处理键盘事件 / Handle keyboard event
     pub fn handle_event(state: &mut AppState, event: &KeyboardEvent) -> bool {
         Self::handle(
             state,
             &event.key().to_string(),
-            event.modifiers().ctrl(),
+            Self::has_primary_modifier(event),
             event.modifiers().shift(),
             event.modifiers().alt(),
         )
@@ -299,7 +314,7 @@ impl ShortcutActions {
                 AppActions::show_ai_chat(state);
             }
             ShortcutAction::Search => {
-                // Ctrl+F: 打开搜索替换弹窗 / Open search & replace modal
+                // Ctrl/⌘+F: 打开搜索替换弹窗 / Open search & replace modal
                 SearchActions::show(state);
             }
             ShortcutAction::GlobalSearch => {

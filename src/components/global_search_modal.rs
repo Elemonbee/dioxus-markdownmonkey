@@ -9,8 +9,9 @@ use crate::components::icons::CloseIcon;
 use crate::state::AppState;
 use crate::utils::i18n::t;
 use crate::utils::workspace_search::{
-    collect_open_buffer_overrides, collect_workspace_files, preview_workspace_replace_counts,
-    search_in_content, search_in_directory, WorkspaceSearchHit,
+    collect_open_buffer_overrides, collect_workspace_files,
+    preview_workspace_replace_counts_with_options, search_in_content,
+    search_in_directory_with_options, WorkspaceSearchHit,
 };
 use dioxus::prelude::*;
 use std::collections::HashMap;
@@ -38,35 +39,45 @@ impl From<WorkspaceSearchHit> for SearchResult {
     }
 }
 
-/// 在后台线程启动工作区搜索 / Start workspace search on a background thread
-fn spawn_workspace_search(
+/// 后台工作区搜索请求 / Background workspace-search request
+struct WorkspaceSearchRequest {
     query: String,
     workspace: Option<PathBuf>,
     current_content: String,
     current_file_label: String,
     open_overrides: HashMap<PathBuf, String>,
+    case_insensitive: bool,
+}
+
+/// 在后台线程启动工作区搜索 / Start workspace search on a background thread
+fn spawn_workspace_search(
+    request: WorkspaceSearchRequest,
     mut results: Signal<Vec<SearchResult>>,
     mut searching: Signal<bool>,
 ) {
-    if query.is_empty() {
+    if request.query.is_empty() {
         return;
     }
     *searching.write() = true;
 
     spawn(async move {
         let found = match tokio::task::spawn_blocking(move || {
-            if let Some(root) = workspace {
-                search_in_directory(&root, &query, &open_overrides)
-                    .into_iter()
-                    .map(SearchResult::from)
-                    .collect()
+            if let Some(root) = request.workspace {
+                search_in_directory_with_options(
+                    &root,
+                    &request.query,
+                    &request.open_overrides,
+                    request.case_insensitive,
+                )
+                .into_iter()
+                .map(SearchResult::from)
+                .collect()
             } else {
-                let query_lower = query.to_lowercase();
                 search_in_content(
-                    &PathBuf::from(current_file_label),
-                    &current_content,
-                    &query_lower,
-                    false,
+                    &PathBuf::from(request.current_file_label),
+                    &request.current_content,
+                    &request.query,
+                    request.case_insensitive,
                 )
                 .into_iter()
                 .map(SearchResult::from)
@@ -116,6 +127,8 @@ pub fn GlobalSearchModal() -> Element {
     let replacing_t = t("replacing", lang);
     let replace_confirm_title_t = t("replace_workspace_confirm_title", lang);
     let replace_confirm_msg_t = t("replace_workspace_confirm_msg", lang);
+    let case_sensitive_text = t("case_sensitive", lang);
+    let case_insensitive = *ui.search_case_insensitive.read();
     let current_file_t_enter = current_file_t.clone();
     let current_file_t_click = current_file_t;
 
@@ -172,11 +185,21 @@ pub fn GlobalSearchModal() -> Element {
                                         EditorActions::flush_from_dom(&mut state).await;
                                         let overrides = collect_open_buffer_overrides(&state);
                                         spawn_workspace_search(
-                                            query,
-                                            workspace,
-                                            state.document().content.read().clone(),
-                                            label,
-                                            overrides,
+                                            WorkspaceSearchRequest {
+                                                query,
+                                                workspace,
+                                                current_content: state
+                                                    .document()
+                                                    .content
+                                                    .read()
+                                                    .clone(),
+                                                current_file_label: label,
+                                                open_overrides: overrides,
+                                                case_insensitive: *state
+                                                    .ui()
+                                                    .search_case_insensitive
+                                                    .read(),
+                                            },
                                             results,
                                             searching,
                                         );
@@ -219,11 +242,17 @@ pub fn GlobalSearchModal() -> Element {
                                 EditorActions::flush_from_dom(&mut state).await;
                                 let overrides = collect_open_buffer_overrides(&state);
                                 spawn_workspace_search(
-                                    query,
-                                    workspace,
-                                    state.document().content.read().clone(),
-                                    label,
-                                    overrides,
+                                    WorkspaceSearchRequest {
+                                        query,
+                                        workspace,
+                                        current_content: state.document().content.read().clone(),
+                                        current_file_label: label,
+                                        open_overrides: overrides,
+                                        case_insensitive: *state
+                                            .ui()
+                                            .search_case_insensitive
+                                            .read(),
+                                    },
                                     results,
                                     searching,
                                 );
@@ -231,6 +260,14 @@ pub fn GlobalSearchModal() -> Element {
                         },
                         disabled: *searching.read(),
                         if *searching.read() { "{searching_t}" } else { "{search_t}" }
+                    }
+                    button {
+                        class: if case_insensitive { "search-option-btn active" } else { "search-option-btn" },
+                        title: "{case_sensitive_text}",
+                        onclick: move |_| {
+                            SearchActions::toggle_case_insensitive(&mut state);
+                        },
+                        "Aa"
                     }
                 }
 
@@ -267,11 +304,18 @@ pub fn GlobalSearchModal() -> Element {
                                     state.ui().workspace_root.read().clone()
                                 {
                                     let files = collect_workspace_files(&root, &overrides);
-                                    preview_workspace_replace_counts(&files, &query)
+                                    preview_workspace_replace_counts_with_options(
+                                        &files,
+                                        &query,
+                                        *state.ui().search_case_insensitive.read(),
+                                    )
                                 } else {
                                     let content = state.document().content.read().clone();
                                     let n = crate::utils::replace::count_matches(
-                                        &content, &query, true, false,
+                                        &content,
+                                        &query,
+                                        *state.ui().search_case_insensitive.read(),
+                                        false,
                                     );
                                     if n > 0 { (1, n) } else { (0, 0) }
                                 };
@@ -317,11 +361,17 @@ pub fn GlobalSearchModal() -> Element {
                                 let workspace = state.ui().workspace_root.read().clone();
                                 let overrides = collect_open_buffer_overrides(&state);
                                 spawn_workspace_search(
-                                    query,
-                                    workspace,
-                                    state.document().content.read().clone(),
-                                    t("current_file", lang),
-                                    overrides,
+                                    WorkspaceSearchRequest {
+                                        query,
+                                        workspace,
+                                        current_content: state.document().content.read().clone(),
+                                        current_file_label: t("current_file", lang),
+                                        open_overrides: overrides,
+                                        case_insensitive: *state
+                                            .ui()
+                                            .search_case_insensitive
+                                            .read(),
+                                    },
                                     results,
                                     searching,
                                 );

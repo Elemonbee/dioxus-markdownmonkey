@@ -2,6 +2,7 @@
 //!
 //! 遵循 PAL 架构：使用 Actions 处理业务逻辑
 
+use crate::actions::shortcut_actions::ShortcutActions;
 use crate::actions::FileActions;
 use crate::components::icons::{CloseIcon, PlusIcon};
 use crate::state::AppState;
@@ -28,6 +29,7 @@ pub fn TabBar() -> Element {
     let lang = *ui.language.read();
     let new_tab_t = t("new_tab", lang);
     let aria_open_tabs_t = t("aria_open_tabs", lang);
+    let modifier = ShortcutActions::primary_modifier_label();
 
     // 获取标签数据
     let tabs_data: Vec<(usize, crate::state::TabId, String, bool, bool)> = {
@@ -62,7 +64,7 @@ pub fn TabBar() -> Element {
             // 新建标签按钮
             button {
                 class: "tab-new",
-                title: "{new_tab_t} (Ctrl+N)",
+                title: "{new_tab_t} ({modifier}+N)",
                 onclick: move |_| {
                     let mut state = state;
                     spawn(async move {

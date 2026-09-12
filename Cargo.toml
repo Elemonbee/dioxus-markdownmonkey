@@ -13,6 +13,14 @@ dioxus = { version = "0.7.10", features = ["macro", "desktop"] }
 # Markdown 解析
 pulldown-cmark = "0.13"
 
+# 代码块语法高亮（预览）/ Code-block syntax highlighting (preview)
+syntect = { version = "5", default-features = false, features = [
+    "default-syntaxes",
+    "html",
+    "dump-load",
+    "regex-fancy",
+] }
+
 # HTTP 客户端 (AI API)
 reqwest = { version = "0.13", features = ["json", "stream", "rustls"], default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

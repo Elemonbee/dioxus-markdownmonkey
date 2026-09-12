@@ -161,6 +161,18 @@ mod shortcut_dispatch_tests {
         assert_eq!(ShortcutActions::find_action("o", false, false, false), None);
     }
 
+    /// 主键修饰键标签在 macOS 为 ⌘，其它平台为 Ctrl
+    /// Primary modifier label is ⌘ on macOS and Ctrl elsewhere
+    #[test]
+    fn test_primary_modifier_label() {
+        let label = ShortcutActions::primary_modifier_label();
+        if cfg!(target_os = "macos") {
+            assert_eq!(label, "⌘");
+        } else {
+            assert_eq!(label, "Ctrl");
+        }
+    }
+
     /// 打开对话框守卫存活期间应拒绝连续触发 / Repeated triggers are rejected while the dialog guard is alive
     #[test]
     fn test_open_dialog_rejects_reentry() {
@@ -194,6 +206,7 @@ mod export_tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("<!DOCTYPE html>"));
         assert!(content.contains("</html>"));
+        assert!(content.contains("lang=\"zh-CN\""));
     }
 
     #[test]

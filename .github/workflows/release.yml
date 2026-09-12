@@ -180,7 +180,13 @@ jobs:
             VERSION="dev-${{ github.run_number }}"
           fi
           SAFE_VERSION=$(echo "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')
-          PACKAGE_NAME="${APP_NAME}-${SAFE_VERSION}-macos-universal"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            arm64|aarch64) ARCH_LABEL="arm64" ;;
+            x86_64) ARCH_LABEL="x64" ;;
+            *) ARCH_LABEL="$ARCH" ;;
+          esac
+          PACKAGE_NAME="${APP_NAME}-${SAFE_VERSION}-macos-${ARCH_LABEL}"
           PACKAGE_DIR="dist/${PACKAGE_NAME}"
           mkdir -p "$PACKAGE_DIR"
           cp target/release/markdownmonkey "$PACKAGE_DIR/${APP_NAME}"

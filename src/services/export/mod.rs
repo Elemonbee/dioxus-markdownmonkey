@@ -6,6 +6,7 @@ mod html;
 mod shared;
 mod text;
 
+pub use html::HtmlExportOptions;
 pub use shared::ExportError;
 
 /// 导出服务 / Export Service
@@ -22,12 +23,24 @@ impl ExportService {
     }
 
     /// 导出 HTML 并打包本地图片 / Export HTML and bundle local images
+    #[allow(dead_code)] // 测试与无外观选项场景 / Tests and default-style export path
     pub fn export_to_html_with_assets(
         markdown_content: &str,
         output_path: &std::path::Path,
         source_dir: Option<&std::path::Path>,
     ) -> Result<(), ExportError> {
         html::export_to_html_with_assets(markdown_content, output_path, source_dir)
+    }
+
+    /// 按语言与主题导出 HTML 并打包本地图片
+    /// Export HTML with language/theme and bundle local images
+    pub fn export_to_html_with_options(
+        markdown_content: &str,
+        output_path: &std::path::Path,
+        source_dir: Option<&std::path::Path>,
+        options: &HtmlExportOptions,
+    ) -> Result<(), ExportError> {
+        html::export_to_html_with_options(markdown_content, output_path, source_dir, options)
     }
 
     /// 导出为纯文本 / Export to Plain Text

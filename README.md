@@ -9,7 +9,7 @@
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 实时预览（表格 / 删除线 / 任务列表 / 脚注）；原始 HTML 与危险 URL 会被过滤；代码块以纯文本展示
+- 📝 **Markdown 编辑** - 实时预览（表格 / 删除线 / 任务列表 / 脚注）；原始 HTML 与危险 URL 会被过滤；**编辑器 Markdown 着色**；**预览代码块语法高亮**
 - 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
 - 🗂️ **多标签页** - 同时编辑多个文件，每标签独立撤销/重做；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
@@ -33,6 +33,7 @@
 | **UI 框架** | Dioxus (desktop，无 Tauri) | 0.7.10 |
 | **语言** | Rust | Edition 2021 |
 | **Markdown** | pulldown-cmark + 自写 HTML/URL 过滤 | 0.13 |
+| **语法高亮** | syntect（预览代码块） | 5 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |
 | **密钥存储** | keyring-core + 系统凭据库 | 1 |
 | **搜索** | regex | 1 |
@@ -174,27 +175,29 @@ cargo test --all-targets
 
 ## ⌨️ 快捷键
 
+macOS 使用 ⌘（Command），Windows / Linux 使用 Ctrl。
+
 | 快捷键 | 功能 |
 |--------|------|
-| Ctrl+N | 新建文件 |
-| Ctrl+O | 打开文件 |
-| Ctrl+S | 保存 |
-| Ctrl+Z | 撤销 |
-| Ctrl+Y / Ctrl+Shift+Z | 重做 |
-| Ctrl+B | 粗体 |
-| Ctrl+I | 斜体 |
-| Ctrl+` | 行内代码 |
-| Ctrl+K | 插入链接 |
-| Ctrl+F | 文档内搜索替换 |
-| Ctrl+Shift+F | 工作区全局搜索 / 替换 |
-| Ctrl+\\ | 切换侧边栏 |
-| Ctrl+P | 切换预览 |
-| Ctrl+T | 切换主题 |
-| Ctrl+, | 打开设置 |
-| Ctrl+/ | 显示快捷键 |
-| Ctrl+J | AI 助手 |
+| Ctrl/⌘+N | 新建文件 |
+| Ctrl/⌘+O | 打开文件 |
+| Ctrl/⌘+S | 保存 |
+| Ctrl/⌘+Z | 撤销 |
+| Ctrl/⌘+Y / Ctrl/⌘+Shift+Z | 重做 |
+| Ctrl/⌘+B | 粗体 |
+| Ctrl/⌘+I | 斜体 |
+| Ctrl/⌘+` | 行内代码 |
+| Ctrl/⌘+K | 插入链接 |
+| Ctrl/⌘+F | 文档内搜索替换 |
+| Ctrl/⌘+Shift+F | 工作区全局搜索 / 替换 |
+| Ctrl/⌘+\\ | 切换侧边栏 |
+| Ctrl/⌘+P | 切换预览 |
+| Ctrl/⌘+T | 切换主题 |
+| Ctrl/⌘+, | 打开设置 |
+| Ctrl/⌘+/ | 显示快捷键 |
+| Ctrl/⌘+J | AI 助手 |
 | Escape | 关闭弹窗 |
 
 ## 📄 许可证
 
-MIT License
+MIT License（见仓库根目录 [LICENSE](./LICENSE)）

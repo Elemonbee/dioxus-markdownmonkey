@@ -29,6 +29,13 @@ fn main() {
     let win_w = saved.window_width.max(600.0);
     let win_h = saved.window_height.max(400.0);
 
+    // 生产包默认关闭右键检查；调试构建或 MARKDOWNMONKEY_DEVTOOLS=1 时保留
+    // Disable inspect menu in release; keep it in debug or when MARKDOWNMONKEY_DEVTOOLS=1
+    let enable_devtools = cfg!(debug_assertions)
+        || std::env::var("MARKDOWNMONKEY_DEVTOOLS")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
     // 启动 Dioxus Desktop 应用 / Launch Dioxus Desktop Application
     dioxus::LaunchBuilder::new()
         .with_cfg(
@@ -41,9 +48,7 @@ fn main() {
                         // 不置顶窗口 / Don't keep window always on top
                         .with_always_on_top(false),
                 )
-                // 不禁用右键菜单（启用右键"检查"开发者工具）
-                // Don't disable context menu (enable right-click "Inspect" devtools)
-                .with_disable_context_menu(false),
+                .with_disable_context_menu(!enable_devtools),
         )
         .launch(app::App);
 }

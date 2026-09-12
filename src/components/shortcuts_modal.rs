@@ -1,5 +1,6 @@
 //! 快捷键弹窗组件 / Keyboard Shortcuts Modal Component
 
+use crate::actions::shortcut_actions::ShortcutActions;
 use crate::actions::AppActions;
 use crate::components::icons::CloseIcon;
 use crate::state::AppState;
@@ -38,6 +39,7 @@ pub fn ShortcutsModal() -> Element {
 
     // 始终渲染，但用 CSS 控制显示/隐藏
     let display_class = if show { "" } else { "hidden" };
+    let modifier = ShortcutActions::primary_modifier_label();
 
     rsx! {
         div {
@@ -66,23 +68,23 @@ pub fn ShortcutsModal() -> Element {
                 div { class: "modal-body",
                     table { class: "shortcuts-table",
                         tbody {
-                            tr { td { "Ctrl+N" } td { "{new_file_t}" } }
-                            tr { td { "Ctrl+O" } td { "{open_file_t}" } }
-                            tr { td { "Ctrl+S" } td { "{save_file_t}" } }
-                            tr { td { "Ctrl+Z" } td { "{undo_t}" } }
-                            tr { td { "Ctrl+Y / Ctrl+Shift+Z" } td { "{redo_t}" } }
-                            tr { td { "Ctrl+B" } td { "{bold_t}" } }
-                            tr { td { "Ctrl+I" } td { "{italic_t}" } }
-                            tr { td { "Ctrl+`" } td { "{code_t}" } }
-                            tr { td { "Ctrl+K" } td { "{insert_link_t}" } }
-                            tr { td { "Ctrl+F" } td { "{search_t}" } }
-                            tr { td { "Ctrl+Shift+F" } td { "{global_search_t}" } }
-                            tr { td { "Ctrl+\\" } td { "{toggle_sidebar_t}" } }
-                            tr { td { "Ctrl+P" } td { "{toggle_preview_t}" } }
-                            tr { td { "Ctrl+T" } td { "{theme_t}" } }
-                            tr { td { "Ctrl+," } td { "{settings_t}" } }
-                            tr { td { "Ctrl+/" } td { "{show_shortcuts_t}" } }
-                            tr { td { "Ctrl+J" } td { "{ai_t}" } }
+                            tr { td { "{modifier}+N" } td { "{new_file_t}" } }
+                            tr { td { "{modifier}+O" } td { "{open_file_t}" } }
+                            tr { td { "{modifier}+S" } td { "{save_file_t}" } }
+                            tr { td { "{modifier}+Z" } td { "{undo_t}" } }
+                            tr { td { "{modifier}+Y / {modifier}+Shift+Z" } td { "{redo_t}" } }
+                            tr { td { "{modifier}+B" } td { "{bold_t}" } }
+                            tr { td { "{modifier}+I" } td { "{italic_t}" } }
+                            tr { td { "{modifier}+`" } td { "{code_t}" } }
+                            tr { td { "{modifier}+K" } td { "{insert_link_t}" } }
+                            tr { td { "{modifier}+F" } td { "{search_t}" } }
+                            tr { td { "{modifier}+Shift+F" } td { "{global_search_t}" } }
+                            tr { td { "{modifier}+\\" } td { "{toggle_sidebar_t}" } }
+                            tr { td { "{modifier}+P" } td { "{toggle_preview_t}" } }
+                            tr { td { "{modifier}+T" } td { "{theme_t}" } }
+                            tr { td { "{modifier}+," } td { "{settings_t}" } }
+                            tr { td { "{modifier}+/" } td { "{show_shortcuts_t}" } }
+                            tr { td { "{modifier}+J" } td { "{ai_t}" } }
                             tr { td { "Escape" } td { "{close_modal_t}" } }
                         }
                     }
