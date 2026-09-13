@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version label, for example v0.5.0"
+        description: "Release version label, for example v0.5.1"
         required: false
         type: string
 
@@ -242,7 +242,7 @@ jobs:
           mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
           cp target/release/markdownmonkey "${APP_DIR}/Contents/MacOS/${APP_NAME}"
           chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
-          sed "s/<string>0.5.0<\\/string>/<string>${SAFE_VERSION}<\\/string>/g" \
+          sed "s/<string>0.5.1<\\/string>/<string>${SAFE_VERSION}<\\/string>/g" \
             packaging/macos/Info.plist > "${APP_DIR}/Contents/Info.plist"
           cp README.md README_EN.md LICENSE "${APP_DIR}/Contents/Resources/"
           (
