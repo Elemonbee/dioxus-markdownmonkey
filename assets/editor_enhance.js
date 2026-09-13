@@ -25,12 +25,13 @@ window._mm_setSyncScroll = function(enabled) {
 window._mm_initEditor = function() {
     var ta = document.querySelector('.editor-textarea');
     if (!ta) return;
-    // CodeMirror 接管后不再建语法叠加层，避免与内核叠字
-    // After CodeMirror takes over, skip the syntax overlay so text is not painted twice
-    if (window.CodeMirror || window._mm_cmInstance || document.querySelector('.editor-content .CodeMirror')) {
-        document.querySelectorAll('.editor-highlight-overlay').forEach(function (el) {
-            el.remove();
-        });
+    // 叠加层会把 textarea 藏起来；内核未挂上时只剩“框选才看得见”
+    // The overlay hides the textarea; if the kernel is not mounted, only a selection reveals text
+    document.querySelectorAll('.editor-highlight-overlay').forEach(function (el) {
+        el.remove();
+    });
+    ta.classList.remove('syntax-on');
+    if (window._mm_cmInstance || document.querySelector('.editor-content .CodeMirror')) {
         ta._mm_enhanced = true;
         return;
     }
@@ -146,41 +147,43 @@ window._mm_initEditor = function() {
         if (window._mm_refreshSyntax) window._mm_refreshSyntax();
     };
     
-    // ========== 搜索高亮层 / Search Highlight Overlay ==========
-    var highlightDiv = document.createElement('div');
-    highlightDiv.className = 'editor-highlight-overlay';
-    highlightDiv.id = 'editor-highlight-overlay';
-    // 必须设置 position:absolute 防止占据正常流空间导致编辑区偏移
-    // Must set position:absolute to prevent taking flow space and shifting editor
-    highlightDiv.style.position = 'absolute';
-    highlightDiv.style.pointerEvents = 'none';
-    highlightDiv.style.zIndex = '0';
-    ta.parentNode.insertBefore(highlightDiv, ta);
-    // 确保 textarea 在高亮层之上 / Ensure textarea is above highlight overlay
-    ta.style.position = 'relative';
-    ta.style.zIndex = '1';
-    
-    function syncHighlight() {
-        highlightDiv.style.width = ta.clientWidth + 'px';
-        highlightDiv.style.height = ta.clientHeight + 'px';
-        highlightDiv.style.padding = getComputedStyle(ta).padding;
-        highlightDiv.style.font = getComputedStyle(ta).font;
-        highlightDiv.style.lineHeight = getComputedStyle(ta).lineHeight;
-        highlightDiv.style.letterSpacing = getComputedStyle(ta).letterSpacing;
-        highlightDiv.style.whiteSpace = getComputedStyle(ta).whiteSpace;
-        highlightDiv.style.wordWrap = 'break-word';
-        highlightDiv.style.overflow = 'hidden';
-        highlightDiv.style.tabSize = getComputedStyle(ta).tabSize;
-        highlightDiv.style.top = ta.offsetTop + 'px';
-        highlightDiv.style.left = ta.offsetLeft + 'px';
-    }
-    syncHighlight();
-    
-    // 滚动同步 / Scroll sync
-    ta.addEventListener('scroll', function() {
-        highlightDiv.scrollTop = ta.scrollTop;
-        highlightDiv.scrollLeft = ta.scrollLeft;
-    });
+    /**
+     * 清掉残留叠加层，保证回退 textarea 始终可见
+     * Strip leftover overlays so the fallback textarea stays visible
+     */
+    window._mm_refreshSyntax = function() {
+        ta.classList.remove('syntax-on');
+        document.querySelectorAll('.editor-highlight-overlay').forEach(function (el) {
+            el.remove();
+        });
+    };
+    /**
+     * 无内核时用原生选区定位搜索命中
+     * Fall back to native selection when the editor kernel is not mounted
+     */
+    window._mm_highlightSearch = function(query, caseInsensitive, currentIndex) {
+        if (!query) return;
+        var content = ta.value || '';
+        var hay = caseInsensitive ? content.toLowerCase() : content;
+        var needle = caseInsensitive ? String(query).toLowerCase() : String(query);
+        if (!needle) return;
+        var from = 0;
+        var idx = 0;
+        while (from <= hay.length) {
+            var found = hay.indexOf(needle, from);
+            if (found < 0) break;
+            if (idx === (currentIndex || 0)) {
+                try { ta.focus({ preventScroll: true }); } catch (err) { ta.focus(); }
+                ta.setSelectionRange(found, found + query.length);
+                var lineNum = (content.substring(0, found).match(/\n/g) || []).length;
+                var lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 22;
+                ta.scrollTop = Math.max(0, lineNum * lineHeight - ta.clientHeight / 3);
+                break;
+            }
+            idx += 1;
+            from = found + Math.max(1, needle.length);
+        }
+    };
 
     // 同步滚动：在 JS 侧直接处理，避免经过 Dioxus 信号路由造成性能开销
     // Sync scroll: handled directly in JS to avoid Dioxus signal routing overhead
@@ -188,16 +191,12 @@ window._mm_initEditor = function() {
     var lastRatio = -1;
     ta.addEventListener('scroll', function() {
         if (!window._mm_syncScrollEnabled) return;
-        // rAF 节流，最多每帧一次(约16ms)
-        // rAF throttle, at most once per frame (~16ms)
         if (rafId !== null) return;
         rafId = requestAnimationFrame(function() {
             rafId = null;
             var sh = ta.scrollHeight - ta.clientHeight;
             if (sh <= 0) return;
             var ratio = ta.scrollTop / sh;
-            // 只有比例变化超过阈值才更新，减少 DOM 操作
-            // Only update when ratio changes beyond threshold to reduce DOM operations
             if (Math.abs(ratio - lastRatio) < 0.002) return;
             lastRatio = ratio;
             var el = document.getElementById('preview-scroll');
@@ -209,224 +208,6 @@ window._mm_initEditor = function() {
             }
         });
     });
-    
-    // 全局搜索高亮函数 / Global search highlight function
-    window._mm_highlightSearch = function(query, caseInsensitive, currentIndex) {
-        if (!query) {
-            window._mm_searchActive = false;
-            if (window._mm_refreshSyntax) window._mm_refreshSyntax();
-            return;
-        }
-        window._mm_searchActive = true;
-        var content = ta.value;
-        var escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        var flags = caseInsensitive ? 'gi' : 'g';
-        var regex = new RegExp(escaped, flags);
-        var result = '';
-        var lastIndex = 0;
-        var matchIndex = 0;
-        var match;
-        var currentMatchStart = -1;
-        var currentMatchEnd = -1;
-        while ((match = regex.exec(content)) !== null) {
-            if (match.index > lastIndex) {
-                result += escapeHtml(content.substring(lastIndex, match.index));
-            }
-            var cls = (matchIndex === currentIndex) ? 'search-highlight-current' : 'search-highlight';
-            result += '<mark class="' + cls + '">' + escapeHtml(match[0]) + '</mark>';
-            if (matchIndex === currentIndex) {
-                currentMatchStart = match.index;
-                currentMatchEnd = match.index + match[0].length;
-            }
-            lastIndex = regex.lastIndex;
-            matchIndex++;
-            if (matchIndex > 2000) break; // 安全限制 / Safety limit
-        }
-        if (lastIndex < content.length) {
-            result += escapeHtml(content.substring(lastIndex));
-        }
-        result += '\n'; // 末尾换行确保高度一致 / Trailing newline for height consistency
-        highlightDiv.innerHTML = result;
-        ta.classList.add('syntax-on');
-        syncHighlight();
-
-        // 将当前匹配滚入可视区并选中 / Scroll active match into view and select it
-        if (currentMatchStart >= 0) {
-            try {
-                ta.focus({ preventScroll: true });
-            } catch (e) {
-                ta.focus();
-            }
-            ta.setSelectionRange(currentMatchStart, currentMatchEnd);
-            var style = window.getComputedStyle(ta);
-            var lineHeight = parseFloat(style.lineHeight);
-            if (!lineHeight || isNaN(lineHeight)) {
-                lineHeight = parseFloat(style.fontSize) * 1.5 || 20;
-            }
-            var textBefore = content.substring(0, currentMatchStart);
-            var lineNum = (textBefore.match(/\n/g) || []).length;
-            var targetScroll = Math.max(0, lineNum * lineHeight - ta.clientHeight / 3);
-            ta.scrollTop = targetScroll;
-            if (highlightDiv) {
-                highlightDiv.scrollTop = ta.scrollTop;
-            }
-        }
-    };
-    
-    function escapeHtml(s) {
-        return s.replace(/\x26/g, '\x26amp;').replace(/\x3C/g, '\x26lt;').replace(/\x3E/g, '\x26gt;');
-    }
-
-    var SYNTAX_MAX_CHARS = 200000;
-    var syntaxRaf = null;
-
-    function highlightInline(text) {
-        var out = '';
-        var i = 0;
-        while (i < text.length) {
-            if (text[i] === '`') {
-                var end = text.indexOf('`', i + 1);
-                if (end > i) {
-                    out += '<span class="md-code">' + escapeHtml(text.slice(i, end + 1)) + '</span>';
-                    i = end + 1;
-                    continue;
-                }
-            }
-            if (text[i] === '!' && text[i + 1] === '[') {
-                var img = text.slice(i).match(/^!\[[^\]]*\]\([^)]*\)/);
-                if (img) {
-                    out += '<span class="md-image">' + escapeHtml(img[0]) + '</span>';
-                    i += img[0].length;
-                    continue;
-                }
-            }
-            if (text[i] === '[') {
-                var link = text.slice(i).match(/^\[[^\]]+\]\([^)]*\)/);
-                if (link) {
-                    out += '<span class="md-link">' + escapeHtml(link[0]) + '</span>';
-                    i += link[0].length;
-                    continue;
-                }
-            }
-            if (text.slice(i, i + 2) === '**' || text.slice(i, i + 2) === '__') {
-                var mark = text.slice(i, i + 2);
-                var boldEnd = text.indexOf(mark, i + 2);
-                if (boldEnd > i) {
-                    out += '<span class="md-bold">' + escapeHtml(text.slice(i, boldEnd + 2)) + '</span>';
-                    i = boldEnd + 2;
-                    continue;
-                }
-            }
-            if (text.slice(i, i + 2) === '~~') {
-                var strikeEnd = text.indexOf('~~', i + 2);
-                if (strikeEnd > i) {
-                    out += '<span class="md-strike">' + escapeHtml(text.slice(i, strikeEnd + 2)) + '</span>';
-                    i = strikeEnd + 2;
-                    continue;
-                }
-            }
-            if (text[i] === '*' || text[i] === '_') {
-                var em = text[i];
-                if (text[i + 1] !== em) {
-                    var emEnd = text.indexOf(em, i + 1);
-                    if (emEnd > i && text[emEnd + 1] !== em) {
-                        out += '<span class="md-italic">' + escapeHtml(text.slice(i, emEnd + 1)) + '</span>';
-                        i = emEnd + 1;
-                        continue;
-                    }
-                }
-            }
-            var next = text.slice(i + 1).search(/[`*_\[!]/);
-            var take = next === -1 ? text.length : i + 1 + next;
-            out += escapeHtml(text.slice(i, take));
-            i = take;
-        }
-        return out;
-    }
-
-    function highlightMarkdown(src) {
-        var lines = src.split('\n');
-        var out = '';
-        var inFence = false;
-        var fenceChar = '';
-        var fenceLen = 0;
-        for (var li = 0; li < lines.length; li++) {
-            if (li > 0) out += '\n';
-            var line = lines[li];
-            var fence = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
-            if (fence) {
-                var mark = fence[2];
-                if (!inFence) {
-                    inFence = true;
-                    fenceChar = mark.charAt(0);
-                    fenceLen = mark.length;
-                    out += escapeHtml(fence[1]) + '<span class="md-fence">' + escapeHtml(mark + fence[3]) + '</span>';
-                } else if (mark.charAt(0) === fenceChar && mark.length >= fenceLen && fence[3].trim() === '') {
-                    inFence = false;
-                    out += escapeHtml(fence[1]) + '<span class="md-fence">' + escapeHtml(mark) + '</span>';
-                } else {
-                    out += '<span class="md-codeblock">' + escapeHtml(line) + '</span>';
-                }
-                continue;
-            }
-            if (inFence) {
-                out += '<span class="md-codeblock">' + escapeHtml(line) + '</span>';
-                continue;
-            }
-            var heading = line.match(/^(#{1,6})(\s+)(.*)$/);
-            if (heading) {
-                out += '<span class="md-heading">' + escapeHtml(heading[1] + heading[2]) + highlightInline(heading[3]) + '</span>';
-                continue;
-            }
-            if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-                out += '<span class="md-hr">' + escapeHtml(line) + '</span>';
-                continue;
-            }
-            var quote = line.match(/^(\s*>+\s?)(.*)$/);
-            if (quote) {
-                out += '<span class="md-quote">' + escapeHtml(quote[1]) + '</span>' + highlightInline(quote[2]);
-                continue;
-            }
-            var list = line.match(/^(\s*(?:[-*+]|\d+\.)\s+)(.*)$/);
-            if (list) {
-                out += '<span class="md-list">' + escapeHtml(list[1]) + '</span>' + highlightInline(list[2]);
-                continue;
-            }
-            out += highlightInline(line);
-        }
-        return out;
-    }
-
-    window._mm_refreshSyntax = function() {
-        if (window._mm_cmInstance) {
-            highlightDiv.style.display = 'none';
-            ta.classList.remove('syntax-on');
-            return;
-        }
-        highlightDiv.style.display = '';
-        if (window._mm_searchActive) return;
-        var content = ta.value || '';
-        if (!content || content.length > SYNTAX_MAX_CHARS) {
-            highlightDiv.innerHTML = '';
-            ta.classList.remove('syntax-on');
-            syncHighlight();
-            return;
-        }
-        highlightDiv.innerHTML = highlightMarkdown(content) + '\n';
-        ta.classList.add('syntax-on');
-        syncHighlight();
-    };
-
-    function scheduleSyntaxRefresh() {
-        if (syntaxRaf !== null) return;
-        syntaxRaf = requestAnimationFrame(function() {
-            syntaxRaf = null;
-            window._mm_refreshSyntax();
-        });
-    }
-
-    ta.addEventListener('input', scheduleSyntaxRefresh);
-    window._mm_refreshSyntax();
     
     // ========== 键盘事件处理 / Keyboard Event Handling ==========
     ta.addEventListener('keydown', function(e) {

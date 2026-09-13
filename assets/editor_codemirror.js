@@ -83,9 +83,12 @@
         var ta = document.querySelector('.editor-textarea');
         if (!ta || window._mm_cmUpgrading) return;
         if (!window.CodeMirror) {
-            if (window._mm_cmRetries < 40) {
+            if (window._mm_cmRetries < 80) {
                 window._mm_cmRetries += 1;
                 setTimeout(window._mm_upgradeToCodeMirror, 80);
+            } else if (ta) {
+                ta.classList.remove('syntax-on');
+                ta.removeAttribute('aria-hidden');
             }
             return;
         }
@@ -106,6 +109,11 @@
             hideOverlay(ta);
             installCmBridge();
             watchEditorHost();
+            applyPendingEditorValue();
+            window._mm_setCmTheme();
+            requestAnimationFrame(function () {
+                if (window._mm_cmInstance) window._mm_cmInstance.refresh();
+            });
             return;
         }
 
@@ -184,10 +192,34 @@
         });
         installCmBridge();
         watchEditorHost();
+        applyPendingEditorValue();
+        window._mm_setCmTheme();
+        requestAnimationFrame(function () {
+            if (window._mm_cmInstance) window._mm_cmInstance.refresh();
+        });
+        } catch (err) {
+            // 挂载失败时恢复可见的 textarea，避免空白编辑区
+            // Restore a visible textarea if the kernel fails to mount
+            if (ta) {
+                ta.classList.remove('syntax-on');
+                ta.removeAttribute('aria-hidden');
+            }
+            var host = document.querySelector('.editor-content');
+            if (host) host.classList.remove('cm-on');
         } finally {
             window._mm_cmUpgrading = false;
         }
     };
+
+    /**
+     * 套用内核挂载前缓存的正文 / Apply text queued before the kernel mounted
+     */
+    function applyPendingEditorValue() {
+        if (typeof window._mm_pendingEditorValue !== 'string') return;
+        var pending = window._mm_pendingEditorValue;
+        window._mm_pendingEditorValue = null;
+        if (window._mm_setEditorValue) window._mm_setEditorValue(pending);
+    }
 
     /**
      * 监视 Dioxus 补丁，避免旧实例和叠加层再次露出来
@@ -289,6 +321,21 @@
                 utf16ToUtf8Offset(text, el.selectionEnd || 0),
                 el.selectionDirection || 'none'
             ];
+        };
+
+        /**
+         * 执行内核撤销/重做；没有实例时返回 false
+         * Run kernel undo/redo; return false when no instance is mounted
+         */
+        window._mm_cmHistory = function (op) {
+            if (!window._mm_cmInstance) return false;
+            if (op === 'redo') window._mm_cmInstance.redo();
+            else window._mm_cmInstance.undo();
+            window._mm_cmInstance.save();
+            window._mm_cmLastSent = null;
+            var el = document.querySelector('.editor-textarea');
+            if (el) el.dispatchEvent(new Event('input', { bubbles: true }));
+            return true;
         };
 
         window._mm_getEditorValue = function () {

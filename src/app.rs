@@ -4,10 +4,14 @@ use crate::actions::{AppActions, EditorActions};
 use crate::components::*;
 use crate::config::{
     AUTO_SAVE_ACTIVE_POLL_SECS, AUTO_SAVE_IDLE_POLL_SECS, FILE_WATCH_ACTIVE_INTERVAL_MS,
-    FILE_WATCH_IDLE_INTERVAL_SECS, FILE_WATCH_INTERNAL_WRITE_GRACE_MS, SYSTEM_THEME_POLL_SECS,
+    FILE_WATCH_FALLBACK_INTERVAL_SECS, FILE_WATCH_IDLE_INTERVAL_SECS,
+    FILE_WATCH_INTERNAL_WRITE_GRACE_MS, SYSTEM_THEME_POLL_SECS,
 };
 use crate::services::auto_save::AutoSaveService;
-use crate::services::file_watcher::FileModificationChecker;
+use crate::services::file_watcher::{FileEventHub, FileModificationChecker};
+use crate::services::katex_css::{
+    drop_katex_woff_ttf, replace_katex_font_urls, scope_katex_counters,
+};
 use crate::services::keyring_service;
 use crate::services::session::SessionService;
 use crate::services::settings::{
@@ -20,8 +24,6 @@ use dioxus::prelude::*;
 
 /// 预览公式引擎 / Preview math engine
 const KATEX_JS: Asset = asset!("/assets/vendor/katex.min.js");
-/// 预览图表引擎 / Preview diagram engine
-const MERMAID_JS: Asset = asset!("/assets/vendor/mermaid.min.js");
 /// 编辑器内核 / Editor kernel
 const CODEMIRROR_JS: Asset = asset!("/assets/vendor/codemirror.min.js");
 const CODEMIRROR_XML_JS: Asset = asset!("/assets/vendor/codemirror-xml.min.js");
@@ -38,57 +40,109 @@ const ALL_CSS: &str = concat!(
     include_str!("styles/modals.css"),
     include_str!("../assets/vendor/codemirror.min.css"),
     include_str!("../assets/vendor/codemirror-material-darker.min.css"),
+    /* 盖过 vendor 默认 color:#000，避免深色背景下正文不可见 / Override vendor #000 so dark theme text stays visible */
+    ".editor-content .CodeMirror,.editor-content .CodeMirror-scroll{color:var(--text-primary);background:var(--bg-primary);}",
 );
 
-/// 去掉 KaTeX @font-face，避免本地 fonts/ 404 污染全局中文渲染
-/// Drop KaTeX @font-face so missing local fonts/ files cannot break CJK text
+/// 打包后的 KaTeX woff2 资源 / Bundled KaTeX woff2 assets
+fn katex_font_assets() -> [(&'static str, Asset); 20] {
+    [
+        (
+            "KaTeX_AMS-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_AMS-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Caligraphic-Bold.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Caligraphic-Bold.woff2"),
+        ),
+        (
+            "KaTeX_Caligraphic-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Caligraphic-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Fraktur-Bold.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Fraktur-Bold.woff2"),
+        ),
+        (
+            "KaTeX_Fraktur-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Fraktur-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Main-Bold.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Main-Bold.woff2"),
+        ),
+        (
+            "KaTeX_Main-BoldItalic.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Main-BoldItalic.woff2"),
+        ),
+        (
+            "KaTeX_Main-Italic.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Main-Italic.woff2"),
+        ),
+        (
+            "KaTeX_Main-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Main-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Math-BoldItalic.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Math-BoldItalic.woff2"),
+        ),
+        (
+            "KaTeX_Math-Italic.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Math-Italic.woff2"),
+        ),
+        (
+            "KaTeX_SansSerif-Bold.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_SansSerif-Bold.woff2"),
+        ),
+        (
+            "KaTeX_SansSerif-Italic.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_SansSerif-Italic.woff2"),
+        ),
+        (
+            "KaTeX_SansSerif-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_SansSerif-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Script-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Script-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size1-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Size1-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size2-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Size2-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size3-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Size3-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size4-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Size4-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Typewriter-Regular.woff2",
+            asset!("/assets/vendor/fonts/KaTeX_Typewriter-Regular.woff2"),
+        ),
+    ]
+}
+
+/// 注入带本地字体的 KaTeX 样式，避免 fonts/ 404
+/// Inject KaTeX CSS with local fonts so fonts/ URLs do not 404
 fn katex_layout_css() -> &'static str {
     static CSS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     CSS.get_or_init(|| {
         let raw = include_str!("../assets/vendor/katex.min.css");
-        let stripped = strip_at_font_face(raw).replace(
-            "font:normal 1.21em KaTeX_Main,Times New Roman,serif",
-            "font:normal 1.21em 'Times New Roman','Cambria Math','STSong','Songti SC',serif",
-        );
-        stripped.replace(
-            "body{counter-reset:katexEqnNo mmlEqnNo}",
-            ".preview-content,.markdown-body{counter-reset:katexEqnNo mmlEqnNo}",
-        )
+        let pairs: Vec<(&str, String)> = katex_font_assets()
+            .into_iter()
+            .map(|(name, asset)| (name, asset.to_string()))
+            .collect();
+        let refs: Vec<(&str, &str)> = pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
+        scope_katex_counters(&replace_katex_font_urls(&drop_katex_woff_ttf(raw), &refs))
     })
-}
-
-/// 删除 CSS 中的 @font-face 块 / Remove @font-face blocks from CSS
-fn strip_at_font_face(css: &str) -> String {
-    let mut out = String::with_capacity(css.len());
-    let mut rest = css;
-    while let Some(start) = rest.find("@font-face") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start..];
-        let Some(brace) = after.find('{') else {
-            break;
-        };
-        let mut depth = 0;
-        let mut end = None;
-        for (idx, ch) in after[brace..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = Some(brace + idx + 1);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        rest = match end {
-            Some(offset) => &after[offset..],
-            None => "",
-        };
-    }
-    out.push_str(rest);
-    out
 }
 
 /// 主应用组件 / Main Application Component
@@ -415,20 +469,31 @@ pub fn App() -> Element {
         use_future(move || {
             let mut doc = state_clone.document();
             let mut checker = FileModificationChecker::new();
+            let mut hub = FileEventHub::spawn();
+            let mut events_alive = true;
             let mut last_file: Option<std::path::PathBuf> = None;
             let mut last_refresh_seq = 0_u64;
 
             async move {
                 loop {
-                    // 动态调整检测频率：有文件时快速检查，无文件时低频轮询
-                    // Dynamic check interval: fast checks with open file, low-frequency when idle
+                    // 有事件时用较长 mtime 兜底；事件通道挂了再回到快速轮询
+                    // Use a longer mtime fallback while events work; poll fast if the hub dies
                     let has_file = doc.current_file.read().is_some();
-                    let check_interval = if has_file {
-                        std::time::Duration::from_millis(FILE_WATCH_ACTIVE_INTERVAL_MS)
-                    } else {
+                    let check_interval = if !has_file {
                         std::time::Duration::from_secs(FILE_WATCH_IDLE_INTERVAL_SECS)
+                    } else if events_alive {
+                        std::time::Duration::from_secs(FILE_WATCH_FALLBACK_INTERVAL_SECS)
+                    } else {
+                        std::time::Duration::from_millis(FILE_WATCH_ACTIVE_INTERVAL_MS)
                     };
-                    tokio::time::sleep(check_interval).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(check_interval) => {}
+                        ev = hub.recv(), if events_alive => {
+                            if ev.is_none() {
+                                events_alive = false;
+                            }
+                        }
+                    }
 
                     let current_file = doc.current_file.read().clone();
                     let refresh_seq = *doc.file_watch_refresh_seq.read();
@@ -437,9 +502,11 @@ pub fn App() -> Element {
                     if current_file != last_file {
                         if let Some(ref path) = current_file {
                             checker.set_file(path);
+                            hub.watch_file(Some(path));
                             *doc.file_external_modified.write() = false;
                         } else {
                             checker.clear();
+                            hub.watch_file(None);
                         }
                         last_file = current_file;
                         last_refresh_seq = refresh_seq;
@@ -536,7 +603,6 @@ pub fn App() -> Element {
         document::Script { src: CODEMIRROR_XML_JS }
         document::Script { src: CODEMIRROR_MARKDOWN_JS }
         document::Script { src: KATEX_JS }
-        document::Script { src: MERMAID_JS }
         // 注入 CSS 样式 / Inject CSS Styles
         style { dangerous_inner_html: "{ALL_CSS}" }
         style { dangerous_inner_html: "{katex_layout_css()}" }

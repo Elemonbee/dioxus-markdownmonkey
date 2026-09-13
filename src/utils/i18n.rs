@@ -229,6 +229,8 @@ impl I18n {
         texts.insert("new_file", lang_map("新建文件", "New File"));
         texts.insert("export_html", lang_map("导出 HTML", "Export HTML"));
         texts.insert("export_text", lang_map("导出纯文本", "Export Plain Text"));
+        texts.insert("export_print", lang_map("打印 / PDF", "Print / PDF"));
+        texts.insert("print_failed", lang_map("打印失败", "Print Failed"));
         texts.insert("bold", lang_map("粗体", "Bold"));
         texts.insert("italic", lang_map("斜体", "Italic"));
         texts.insert("code", lang_map("代码", "Code"));
@@ -333,6 +335,10 @@ impl I18n {
         texts.insert(
             "shortcut_global_search",
             lang_map("工作区全局搜索 / 替换", "Workspace Search / Replace"),
+        );
+        texts.insert(
+            "shortcut_print",
+            lang_map("打印 / 另存 PDF", "Print / Save as PDF"),
         );
 
         // 设置弹窗 / Settings Modal

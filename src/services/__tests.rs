@@ -290,7 +290,8 @@ mod tests {
         use crate::services::markdown::render_markdown;
 
         let html = render_markdown("# Hello World");
-        assert!(html.contains("<h1>Hello World</h1>") || html.contains("<h1>"));
+        assert!(html.contains("<h1") && html.contains("Hello World"));
+        assert!(html.contains("data-source-line=\"0\""));
     }
 
     #[test]
@@ -324,7 +325,7 @@ mod tests {
 
         let md = "| A | B |\n|---|---|\n| 1 | 2 |";
         let html = render_markdown(md);
-        assert!(html.contains("<table>"));
+        assert!(html.contains("<table"));
     }
 
     #[test]
@@ -369,7 +370,7 @@ mod tests {
         let html = std::fs::read_to_string(path).unwrap();
         assert!(html.contains("<h1>Title</h1>") || html.contains("<h1"));
         assert!(html.contains("<strong>bold</strong>") || html.contains("bold"));
-        assert!(html.contains("<table>"));
+        assert!(html.contains("<table"));
     }
 
     #[test]

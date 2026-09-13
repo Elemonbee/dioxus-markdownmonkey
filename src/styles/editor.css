@@ -131,13 +131,13 @@
   color: var(--text-primary);
 }
 
-.editor-content .CodeMirror-measure,
-.editor-content .CodeMirror-measure pre {
-  visibility: hidden !important;
-  height: 0 !important;
-  overflow: hidden !important;
-  position: absolute !important;
-  pointer-events: none !important;
+.editor-content .CodeMirror-scroll {
+  min-height: 100%;
+}
+
+.editor-content .CodeMirror pre.CodeMirror-line,
+.editor-content .CodeMirror pre.CodeMirror-line-like {
+  color: inherit;
 }
 
 .editor-content .CodeMirror-gutters {
@@ -283,6 +283,15 @@
 
 .preview-html-root {
   min-height: 1em;
+}
+
+.preview-html-root [data-source-line] {
+  cursor: pointer;
+}
+
+.preview-html-root [data-source-line]:hover {
+  outline: 1px dashed color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  outline-offset: 2px;
 }
 
 /* Markdown 预览样式 / Markdown Preview Styles */

@@ -47,4 +47,14 @@ impl ExportService {
     pub fn export_to_text(content: &str, output_path: &std::path::Path) -> Result<(), ExportError> {
         text::export_to_text(content, output_path)
     }
+
+    /// 生成打印用 HTML（本地图嵌 data URI，不写盘）
+    /// Build print HTML with local images as data URIs, without writing a file
+    pub fn render_html_for_print(
+        markdown_content: &str,
+        source_dir: Option<&std::path::Path>,
+        options: &HtmlExportOptions,
+    ) -> Result<String, ExportError> {
+        html::render_html_for_print(markdown_content, source_dir, options)
+    }
 }

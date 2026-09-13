@@ -161,6 +161,24 @@ mod shortcut_dispatch_tests {
         assert_eq!(ShortcutActions::find_action("o", false, false, false), None);
     }
 
+    /// Ctrl+P 仍切换预览；Ctrl+Shift+P 打开打印
+    /// Ctrl+P still toggles preview; Ctrl+Shift+P opens print
+    #[test]
+    fn test_ctrl_shift_p_dispatches_print() {
+        assert_eq!(
+            ShortcutActions::find_action("p", true, false, false),
+            Some(ShortcutAction::TogglePreview)
+        );
+        assert_eq!(
+            ShortcutActions::find_action("p", true, true, false),
+            Some(ShortcutAction::Print)
+        );
+        assert_eq!(
+            ShortcutActions::find_action("P", true, true, false),
+            Some(ShortcutAction::Print)
+        );
+    }
+
     /// 主键修饰键标签在 macOS 为 ⌘，其它平台为 Ctrl
     /// Primary modifier label is ⌘ on macOS and Ctrl elsewhere
     #[test]
@@ -186,7 +204,7 @@ mod shortcut_dispatch_tests {
 /// 导出服务测试 / Export Service Tests
 #[cfg(test)]
 mod export_tests {
-    use crate::services::export::ExportService;
+    use crate::services::export::{ExportService, HtmlExportOptions};
     use tempfile::TempDir;
 
     #[test]
@@ -217,8 +235,8 @@ mod export_tests {
             "# Heading\n\n- item1\n- item2\n\n**bold** and *italic*\n\n> quote\n\n```\ncode\n```";
         ExportService::export_to_html(md, &path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("<h1>"));
-        assert!(content.contains("<li>"));
+        assert!(content.contains("<h1"));
+        assert!(content.contains("<li"));
     }
 
     #[test]
@@ -228,6 +246,15 @@ mod export_tests {
         ExportService::export_to_text("", &path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, "");
+    }
+
+    #[test]
+    fn test_render_html_for_print_has_print_css() {
+        let html =
+            ExportService::render_html_for_print("# Hello", None, &HtmlExportOptions::default())
+                .unwrap();
+        assert!(html.contains("@media print"));
+        assert!(html.contains("<!DOCTYPE html>"));
     }
 }
 

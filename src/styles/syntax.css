@@ -151,20 +151,14 @@
   color: var(--syntax-function);
 }
 
+/* 叠加层未画全时，透明字体会变成“只有框选才看得见”
+   Keep textarea ink visible so a missing overlay/CM cannot hide the source */
 .editor-textarea.syntax-on {
-  color: transparent;
+  color: var(--text-primary);
   caret-color: var(--text-primary);
 }
 
-.editor-textarea.syntax-on::placeholder {
-  color: transparent;
-}
-
-/* 预览公式：使用系统字体，避免 KaTeX webfont 404 / Preview math uses system fonts */
-.preview-content .katex,
-.preview-content .katex-display {
-  font-family: "Times New Roman", "Cambria Math", "STSong", "Songti SC", serif;
-}
+/* 公式字体由打包的 KaTeX woff2 提供 / Math fonts come from bundled KaTeX woff2 */
 
 .preview-content .math-inline {
   display: inline;

@@ -1,7 +1,9 @@
 //! Markdown 渲染服务：pulldown-cmark + 自写 URL/原始 HTML 过滤
 //! Markdown rendering: pulldown-cmark plus a small URL / raw-HTML filter
 
-use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{
+    html, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -80,9 +82,10 @@ impl MarkdownService {
         options.insert(Options::ENABLE_FOOTNOTES);
         options.insert(Options::ENABLE_MATH);
 
-        let parser = Parser::new_ext(content, options);
-        let sanitized = parser.filter_map(sanitize_event);
-        let events = rewrite_code_blocks(sanitized);
+        let sanitized = Parser::new_ext(content, options)
+            .into_offset_iter()
+            .filter_map(|(event, range)| sanitize_event(event).map(|event| (event, range)));
+        let events = rewrite_code_blocks_and_source_lines(content, sanitized);
         let mut html_output = String::new();
         for event in events {
             match event {
@@ -94,25 +97,62 @@ impl MarkdownService {
     }
 }
 
-/// 把围栏/缩进代码块换成已高亮且消毒的 HTML
-/// Replace fenced/indented code blocks with highlighted, sanitized HTML
-fn rewrite_code_blocks<'a, I>(events: I) -> Vec<Event<'a>>
+/// 字节偏移对应的 0 基行号 / 0-based line number for a byte offset
+fn byte_to_line(content: &str, byte: usize) -> usize {
+    let end = byte.min(content.len());
+    content[..end].bytes().filter(|&b| b == b'\n').count()
+}
+
+/// 给首个开标签写入 data-source-line / Write data-source-line onto the first open tag
+fn with_source_line(html: &str, line: usize) -> String {
+    let Some(gt) = html.find('>') else {
+        return html.to_string();
+    };
+    if html[..gt].contains("data-source-line") {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len() + 28);
+    out.push_str(&html[..gt]);
+    out.push_str(&format!(" data-source-line=\"{line}\""));
+    out.push_str(&html[gt..]);
+    out
+}
+
+/// 标题级别数字 / Numeric heading level
+fn heading_level_num(level: HeadingLevel) -> u8 {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
+    }
+}
+
+/// 把代码块换成高亮 HTML，并为块级标签补上源行
+/// Replace code fences with highlighted HTML and tag block elements with source lines
+fn rewrite_code_blocks_and_source_lines<'a, I>(content: &str, events: I) -> Vec<Event<'a>>
 where
-    I: Iterator<Item = Event<'a>>,
+    I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
 {
     let mut out = Vec::new();
     let mut in_code = false;
     let mut language = String::new();
     let mut buffer = String::new();
+    let mut code_line = 0usize;
 
-    for event in events {
+    for (event, range) in events {
         if in_code {
             match event {
                 Event::Text(text) | Event::Code(text) => buffer.push_str(&text),
                 Event::SoftBreak | Event::HardBreak => buffer.push('\n'),
                 Event::End(TagEnd::CodeBlock) => {
                     in_code = false;
-                    let html = highlight::render_highlighted_block(&language, &buffer);
+                    let html = with_source_line(
+                        &highlight::render_highlighted_block(&language, &buffer),
+                        code_line,
+                    );
                     out.push(Event::Html(html.into()));
                     language.clear();
                     buffer.clear();
@@ -122,9 +162,11 @@ where
             continue;
         }
 
+        let line = byte_to_line(content, range.start);
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
+                code_line = line;
                 buffer.clear();
                 language = match kind {
                     CodeBlockKind::Fenced(info) => {
@@ -132,6 +174,64 @@ where
                     }
                     CodeBlockKind::Indented => String::new(),
                 };
+            }
+            Event::Start(Tag::Heading { level, id, .. }) => {
+                let n = heading_level_num(level);
+                let mut open = format!("<h{n} data-source-line=\"{line}\"");
+                if let Some(id) = id {
+                    open.push_str(" id=\"");
+                    open.push_str(&highlight::escape_attr(&id));
+                    open.push('"');
+                }
+                open.push('>');
+                out.push(Event::Html(open.into()));
+            }
+            Event::End(TagEnd::Heading(level)) => {
+                out.push(Event::Html(
+                    format!("</h{}>", heading_level_num(level)).into(),
+                ));
+            }
+            Event::Start(Tag::Paragraph) => {
+                out.push(Event::Html(
+                    format!("<p data-source-line=\"{line}\">").into(),
+                ));
+            }
+            Event::End(TagEnd::Paragraph) => {
+                out.push(Event::Html("</p>".into()));
+            }
+            Event::Start(Tag::BlockQuote(_)) => {
+                out.push(Event::Html(
+                    format!("<blockquote data-source-line=\"{line}\">").into(),
+                ));
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                out.push(Event::Html("</blockquote>".into()));
+            }
+            Event::Start(Tag::Item) => {
+                out.push(Event::Html(
+                    format!("<li data-source-line=\"{line}\">").into(),
+                ));
+            }
+            Event::End(TagEnd::Item) => {
+                out.push(Event::Html("</li>".into()));
+            }
+            Event::Start(Tag::List(start)) => {
+                let open = match start {
+                    None => format!("<ul data-source-line=\"{line}\">"),
+                    Some(n) => format!("<ol start=\"{n}\" data-source-line=\"{line}\">"),
+                };
+                out.push(Event::Html(open.into()));
+            }
+            Event::End(TagEnd::List(ordered)) => {
+                out.push(Event::Html(if ordered { "</ol>" } else { "</ul>" }.into()));
+            }
+            Event::Start(Tag::Table(_)) => {
+                out.push(Event::Html(
+                    format!("<table data-source-line=\"{line}\">").into(),
+                ));
+            }
+            Event::End(TagEnd::Table) => {
+                out.push(Event::Html("</table>".into()));
             }
             other => out.push(other),
         }
@@ -364,6 +464,14 @@ mod tests {
         assert!(html.contains("class=\"mermaid\""));
         assert!(html.contains("graph TD"));
         assert!(html.contains("A--&gt;B") || html.contains("A-->B"));
+    }
+
+    #[test]
+    fn block_elements_carry_source_lines() {
+        let html = render_markdown("# Title\n\nHello\n\n- item\n");
+        assert!(html.contains("<h1 data-source-line=\"0\""));
+        assert!(html.contains("<p data-source-line=\"2\""));
+        assert!(html.contains("<li data-source-line=\"4\""));
     }
 
     #[test]

@@ -6,7 +6,10 @@
 //! Note: Some functions are reserved for future use, not yet used
 
 use crate::config::{FONT_SIZE_MAX, FONT_SIZE_MIN};
-use crate::state::AppState;
+use crate::services::export::{ExportService, HtmlExportOptions};
+use crate::services::theme_detector::ThemeDetector;
+use crate::state::{AppState, Language, Theme};
+use crate::utils::i18n::t;
 use dioxus::document;
 use dioxus::prelude::{ReadableExt, WritableExt};
 
@@ -165,8 +168,12 @@ impl EditorActions {
     pub fn push_to_dom(content: &str) {
         let safe = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_string());
         let _ = document::eval(&format!(
-            "if(window._mm_setEditorValue) window._mm_setEditorValue({});",
-            safe
+            concat!(
+                "window._mm_pendingEditorValue={safe};",
+                "if(window._mm_setEditorValue){{window._mm_setEditorValue({safe});}}",
+                "else{{var ta=document.querySelector('.editor-textarea');if(ta)ta.value={safe};}}"
+            ),
+            safe = safe
         ));
     }
 
@@ -190,6 +197,38 @@ impl EditorActions {
     /// 重做 / Redo
     pub fn redo(state: &mut AppState) -> bool {
         state.redo()
+    }
+
+    /// 走 CodeMirror 历史；没有内核时返回 false
+    /// Use the CodeMirror history; return false when the kernel is not mounted
+    async fn history_via_codemirror(op: &str) -> bool {
+        let safe = serde_json::to_string(op).unwrap_or_else(|_| "\"undo\"".to_string());
+        let mut eval = document::eval(&format!(
+            "dioxus.send(!!(window._mm_cmHistory && window._mm_cmHistory({safe})));"
+        ));
+        eval.recv::<bool>().await.unwrap_or(false)
+    }
+
+    /// 优先用编辑器内核撤销，再同步回 Rust；无内核时走状态栈
+    /// Prefer kernel undo, then sync Rust; fall back to the state stack
+    pub async fn undo_via_editor(state: &mut AppState) {
+        if Self::history_via_codemirror("undo").await {
+            Self::flush_from_dom(state).await;
+            return;
+        }
+        Self::flush_from_dom(state).await;
+        Self::undo(state);
+    }
+
+    /// 优先用编辑器内核重做，再同步回 Rust；无内核时走状态栈
+    /// Prefer kernel redo, then sync Rust; fall back to the state stack
+    pub async fn redo_via_editor(state: &mut AppState) {
+        if Self::history_via_codemirror("redo").await {
+            Self::flush_from_dom(state).await;
+            return;
+        }
+        Self::flush_from_dom(state).await;
+        Self::redo(state);
     }
 
     /// 在选中文本前后插入格式 / Insert format around selected text
@@ -324,5 +363,47 @@ impl EditorActions {
     /// 插入分割线 / Insert Horizontal Rule
     pub fn insert_horizontal_rule(state: &mut AppState) {
         Self::insert_text(state, "\n---\n");
+    }
+
+    /// 打开系统打印对话框（可另存为 PDF）
+    /// Open the system print dialog (the user can save as PDF)
+    pub async fn print_document(state: &mut AppState) {
+        Self::flush_from_dom(state).await;
+        let content = state.document().content.read().clone();
+        let source_dir = state
+            .document()
+            .current_file
+            .read()
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .or_else(|| state.ui().workspace_root.read().clone());
+        let language = match *state.ui().language.read() {
+            Language::EnUS => "en-US",
+            Language::ZhCN => "zh-CN",
+        }
+        .to_string();
+        let dark = match *state.ui().theme.read() {
+            Theme::Dark => true,
+            Theme::Light => false,
+            Theme::System => ThemeDetector::detect() == "dark",
+        };
+        let options = HtmlExportOptions { language, dark };
+        match ExportService::render_html_for_print(&content, source_dir.as_deref(), &options) {
+            Ok(html) => {
+                let safe = serde_json::to_string(&html).unwrap_or_else(|_| "\"\"".to_string());
+                let _ = document::eval(&format!(
+                    "if(window._mm_printHtml)window._mm_printHtml({safe})"
+                ));
+            }
+            Err(e) => {
+                tracing::error!("Print failed: {e}");
+                let lang = *state.ui().language.read();
+                let _ = rfd::MessageDialog::new()
+                    .set_title(t("print_failed", lang))
+                    .set_description(e.to_string())
+                    .set_level(rfd::MessageLevel::Error)
+                    .show();
+            }
+        }
     }
 }

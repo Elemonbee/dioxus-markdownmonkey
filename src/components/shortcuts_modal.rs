@@ -36,6 +36,7 @@ pub fn ShortcutsModal() -> Element {
     let close_modal_t = t("close_modal", lang);
     let search_t = t("shortcut_search", lang);
     let global_search_t = t("shortcut_global_search", lang);
+    let print_t = t("shortcut_print", lang);
 
     // 始终渲染，但用 CSS 控制显示/隐藏
     let display_class = if show { "" } else { "hidden" };
@@ -79,6 +80,7 @@ pub fn ShortcutsModal() -> Element {
                             tr { td { "{modifier}+K" } td { "{insert_link_t}" } }
                             tr { td { "{modifier}+F" } td { "{search_t}" } }
                             tr { td { "{modifier}+Shift+F" } td { "{global_search_t}" } }
+                            tr { td { "{modifier}+Shift+P" } td { "{print_t}" } }
                             tr { td { "{modifier}+\\" } td { "{toggle_sidebar_t}" } }
                             tr { td { "{modifier}+P" } td { "{toggle_preview_t}" } }
                             tr { td { "{modifier}+T" } td { "{theme_t}" } }

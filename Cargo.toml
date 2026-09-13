@@ -37,6 +37,9 @@ serde_json = "1"
 # 文件对话框
 rfd = "0.17"
 
+# 外部改文件：目录事件 + mtime 兜底 / External edits: directory events + mtime fallback
+notify = "6.1.1"
+
 # 日志
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

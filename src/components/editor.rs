@@ -1,9 +1,9 @@
 //! 编辑器组件 / Editor Component
 //!
-//! 遵循 PAL 架构：使用 Actions 处理编辑器操作
-//! 小文件：受控 textarea；大文件：非受控 + 防抖同步，降低按键路径开销
-//! Following PAL architecture with Actions
-//! Small files: controlled textarea; large files: uncontrolled + debounced sync
+//! 正文以 CodeMirror 为准；textarea 只做桥，不绑定受控 value。
+//! 小文件按键即同步；大文件防抖 flush，降低按键路径开销。
+//! CodeMirror is the source of truth; the textarea is an uncontrolled bridge.
+//! Small files sync on input; large files debounce flush.
 
 use crate::actions::shortcut_actions::ShortcutActions;
 use crate::actions::{AppActions, EditorActions, FileActions};
@@ -19,6 +19,18 @@ use dioxus::document;
 use dioxus::html::HasFileData;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
 use std::path::PathBuf;
+
+/// 若 `<script src>` 未就绪，在同一 eval 内联注入 CodeMirror，避免叠加层透明回退
+/// Inline CodeMirror in the same eval if the script tags are not ready, avoiding the transparent overlay fallback
+const CODEMIRROR_BOOT: &str = concat!(
+    "if(!window.CodeMirror){\n",
+    include_str!("../../assets/vendor/codemirror.min.js"),
+    "\n",
+    include_str!("../../assets/vendor/codemirror-xml.min.js"),
+    "\n",
+    include_str!("../../assets/vendor/codemirror-markdown.min.js"),
+    "\n}\n"
+);
 
 /// 编辑器滚动比例（全局信号）/ Editor scroll ratio (global signal)
 pub static EDITOR_SCROLL_RATIO: GlobalSignal<f32> = Signal::global(|| 0.0);
@@ -229,10 +241,13 @@ pub fn Editor() -> Element {
         let sync = *ui.sync_scroll.read();
         let js = include_str!("../../assets/editor_enhance.js");
         let cm_js = include_str!("../../assets/editor_codemirror.js");
+        let print_js = include_str!("../../assets/print.js");
         let _ = document::eval(&format!(
-            "{}\n{}\nif (window._mm_initEditor) window._mm_initEditor();\nif (window._mm_upgradeToCodeMirror) window._mm_upgradeToCodeMirror();\nif (window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            "{}\n{}\n{}\n{}\nif (window._mm_initEditor) window._mm_initEditor();\nif (window._mm_upgradeToCodeMirror) window._mm_upgradeToCodeMirror();\nif (window._mm_setSyncScroll) window._mm_setSyncScroll({});",
+            CODEMIRROR_BOOT,
             js,
             cm_js,
+            print_js,
             if sync { "true" } else { "false" }
         ));
     });
@@ -294,90 +309,50 @@ pub fn Editor() -> Element {
                         }
                     }
                 }
-                if use_uncontrolled {
-                    // 大文件非受控：不绑定 value，按键不回写全文到 DOM
-                    // Large-file uncontrolled: no value binding; keystrokes avoid full DOM rewrite
-                    textarea {
-                        class: "editor-textarea",
-                        key: "uc-{tab_index}",
-                        placeholder: "{placeholder_text}",
-                        spellcheck: false,
-                        "aria-label": "{aria_editor_t}",
-                        "aria-multiline": "true",
-                        role: "textbox",
-                        onmounted: move |_| {
-                            EditorActions::push_to_dom(&cached_content.read());
-                        },
-                        ondragover: move |e| {
-                            e.prevent_default();
-                        },
-                        ondrop: move |e| {
-                            handle_editor_drop(state, e);
-                        },
-                        onscroll: move |e| {
-                            let scroll_data = e.data();
-                            let sh = scroll_data.scroll_height() as f32;
-                            let ch = scroll_data.client_height() as f32;
-                            let st = scroll_data.scroll_top() as f32;
-                            scroll_top.set(st);
-                            container_height.set(ch);
-                            let ratio = if sh > ch {
-                                st / (sh - ch)
-                            } else {
-                                0.0
-                            };
-                            *EDITOR_SCROLL_RATIO.write() = ratio;
-                        },
-                        oninput: move |_| {
+                textarea {
+                    class: "editor-textarea",
+                    key: "ed-{tab_index}",
+                    placeholder: "{placeholder_text}",
+                    spellcheck: false,
+                    "aria-label": "{aria_editor_t}",
+                    "aria-multiline": "true",
+                    role: "textbox",
+                    onmounted: move |_| {
+                        EditorActions::push_to_dom(&cached_content.read());
+                    },
+                    ondragover: move |e| {
+                        e.prevent_default();
+                    },
+                    ondrop: move |e| {
+                        handle_editor_drop(state, e);
+                    },
+                    onscroll: move |e| {
+                        let scroll_data = e.data();
+                        let sh = scroll_data.scroll_height() as f32;
+                        let ch = scroll_data.client_height() as f32;
+                        let st = scroll_data.scroll_top() as f32;
+                        scroll_top.set(st);
+                        container_height.set(ch);
+                        let ratio = if sh > ch {
+                            st / (sh - ch)
+                        } else {
+                            0.0
+                        };
+                        *EDITOR_SCROLL_RATIO.write() = ratio;
+                    },
+                    oninput: move |e| {
+                        if use_uncontrolled {
                             schedule_uncontrolled_sync(state, sync_gen);
-                        },
-                        onselect: move |_| {
-                            sync_selection_from_dom(&mut state);
-                        },
-                        onmouseup: move |_| {
-                            sync_selection_from_dom(&mut state);
-                        },
-                    }
-                } else {
-                    textarea {
-                        class: "editor-textarea",
-                        key: "c-{tab_index}",
-                        value: "{content}",
-                        placeholder: "{placeholder_text}",
-                        spellcheck: false,
-                        "aria-label": "{aria_editor_t}",
-                        "aria-multiline": "true",
-                        role: "textbox",
-                        ondragover: move |e| {
-                            e.prevent_default();
-                        },
-                        ondrop: move |e| {
-                            handle_editor_drop(state, e);
-                        },
-                        onscroll: move |e| {
-                            let scroll_data = e.data();
-                            let sh = scroll_data.scroll_height() as f32;
-                            let ch = scroll_data.client_height() as f32;
-                            let st = scroll_data.scroll_top() as f32;
-                            scroll_top.set(st);
-                            container_height.set(ch);
-                            let ratio = if sh > ch {
-                                st / (sh - ch)
-                            } else {
-                                0.0
-                            };
-                            *EDITOR_SCROLL_RATIO.write() = ratio;
-                        },
-                        oninput: move |e| {
+                        } else {
                             EditorActions::update_content(&mut state, e.value());
-                        },
-                        onselect: move |_| {
-                            sync_selection_from_dom(&mut state);
-                        },
-                        onmouseup: move |_| {
-                            sync_selection_from_dom(&mut state);
-                        },
-                    }
+                        }
+                    },
+                    onselect: move |_| {
+                        sync_selection_from_dom(&mut state);
+                    },
+                    onmouseup: move |_| {
+                        sync_selection_from_dom(&mut state);
+                    },
                 }
             }
         }

@@ -53,8 +53,12 @@ pub const OUTLINE_LIMIT_THRESHOLD_BYTES: usize = 500 * 1024;
 /// Maximum headings extracted for large files.
 pub const OUTLINE_LARGE_FILE_MAX_HEADINGS: usize = 100;
 
-/// File watcher poll interval when a file is open.
+/// File watcher poll interval when a file is open and events are unavailable.
 pub const FILE_WATCH_ACTIVE_INTERVAL_MS: u64 = 500;
+
+/// 有事件监视时的 mtime 兜底间隔（秒）
+/// mtime fallback interval when filesystem events are available (seconds)
+pub const FILE_WATCH_FALLBACK_INTERVAL_SECS: u64 = 5;
 
 /// File watcher poll interval when no file is open.
 pub const FILE_WATCH_IDLE_INTERVAL_SECS: u64 = 5;

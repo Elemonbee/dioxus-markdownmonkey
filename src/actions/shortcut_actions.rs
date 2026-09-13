@@ -36,6 +36,7 @@ pub enum ShortcutAction {
     OpenAI,
     Search, // 搜索替换 / Search & Replace (Ctrl/⌘+F)
     GlobalSearch,
+    Print,
     Close,
 }
 
@@ -173,6 +174,13 @@ impl ShortcutActions {
                 action: ShortcutAction::GlobalSearch,
             },
             Shortcut {
+                key: "p",
+                ctrl: true,
+                shift: true,
+                alt: false,
+                action: ShortcutAction::Print,
+            },
+            Shortcut {
                 key: "Escape",
                 ctrl: false,
                 shift: false,
@@ -194,6 +202,11 @@ impl ShortcutActions {
     /// 纯逻辑匹配快捷键动作，便于无 UI 分发测试
     /// Match a shortcut action as pure logic for UI-free dispatch tests
     pub fn find_action(key: &str, ctrl: bool, shift: bool, alt: bool) -> Option<ShortcutAction> {
+        let key = if key.chars().count() == 1 {
+            key.to_ascii_lowercase()
+        } else {
+            key.to_string()
+        };
         Self::get_all()
             .into_iter()
             .find(|shortcut| {
@@ -260,15 +273,13 @@ impl ShortcutActions {
             ShortcutAction::Undo => {
                 let mut state = *state;
                 spawn(async move {
-                    EditorActions::flush_from_dom(&mut state).await;
-                    EditorActions::undo(&mut state);
+                    EditorActions::undo_via_editor(&mut state).await;
                 });
             }
             ShortcutAction::Redo => {
                 let mut state = *state;
                 spawn(async move {
-                    EditorActions::flush_from_dom(&mut state).await;
-                    EditorActions::redo(&mut state);
+                    EditorActions::redo_via_editor(&mut state).await;
                 });
             }
             ShortcutAction::Bold => {
@@ -319,6 +330,12 @@ impl ShortcutActions {
             }
             ShortcutAction::GlobalSearch => {
                 SearchActions::show_global(state);
+            }
+            ShortcutAction::Print => {
+                let mut state = *state;
+                spawn(async move {
+                    EditorActions::print_document(&mut state).await;
+                });
             }
             ShortcutAction::Close => {
                 AppActions::close_overlays(state);

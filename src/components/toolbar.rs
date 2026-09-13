@@ -125,6 +125,7 @@ pub fn Toolbar() -> Element {
     let save_file_t = t("save_file", lang);
     let export_html_t = t("export_html", lang);
     let export_text_t = t("export_text", lang);
+    let export_print_t = t("export_print", lang);
     let export_menu_t = t("export", lang);
     let export_failed_t = t("export_failed", lang);
     let aria_toolbar_t = t("aria_toolbar", lang);
@@ -336,6 +337,17 @@ pub fn Toolbar() -> Element {
                                 },
                                 "{export_text_t}"
                             }
+                            button {
+                                class: "toolbar-dropdown-item",
+                                role: "menuitem",
+                                onclick: move |_| {
+                                    export_menu_open.set(false);
+                                    spawn(async move {
+                                        EditorActions::print_document(&mut state).await;
+                                    });
+                                },
+                                "{export_print_t}"
+                            }
                         }
                     }
                 }
@@ -351,8 +363,7 @@ pub fn Toolbar() -> Element {
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
-                            EditorActions::flush_from_dom(&mut state).await;
-                            EditorActions::undo(&mut state);
+                            EditorActions::undo_via_editor(&mut state).await;
                         });
                     },
                     UndoIcon { size: 18 }
@@ -363,8 +374,7 @@ pub fn Toolbar() -> Element {
                     onclick: move |_| {
                         let mut state = state;
                         spawn(async move {
-                            EditorActions::flush_from_dom(&mut state).await;
-                            EditorActions::redo(&mut state);
+                            EditorActions::redo_via_editor(&mut state).await;
                         });
                     },
                     RedoIcon { size: 18 }

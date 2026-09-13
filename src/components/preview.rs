@@ -13,6 +13,10 @@ use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
 use std::hash::{Hash, Hasher};
 
+/// 预览图表引擎（仅当文档含 Mermaid 时再加载）
+/// Preview diagram engine (loaded only when the document contains Mermaid)
+const MERMAID_JS: Asset = asset!("/assets/vendor/mermaid.min.js");
+
 /// 预览组件 / Preview Component
 #[component]
 pub fn Preview() -> Element {
@@ -131,8 +135,10 @@ pub fn Preview() -> Element {
     let _ = use_effect(move || {
         let _html = cached_html.read().clone();
         let js = include_str!("../../assets/preview_enhance.js");
+        let mermaid_src =
+            serde_json::to_string(&MERMAID_JS.to_string()).unwrap_or_else(|_| "\"\"".to_string());
         let _ = document::eval(&format!(
-            "{js}\nif (window._mm_enhancePreview) window._mm_enhancePreview();"
+            "window._mm_mermaidSrc={mermaid_src};\n{js}\nif (window._mm_enhancePreview) window._mm_enhancePreview();"
         ));
     });
 
