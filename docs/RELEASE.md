@@ -6,6 +6,9 @@ MarkdownMonkey publishes desktop release packages through GitHub Actions for
 Current app version: **0.5.0** (see `Cargo.toml`). CI uses the `stable` Rust
 toolchain; building from source needs **Rust 1.88+**.
 
+Before creating the `v0.5.0` tag, complete
+**[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** (docs, desktop smoke, packages).
+
 ## Local Verification
 
 Run the same checks used by CI before cutting a release:
@@ -64,4 +67,5 @@ Installers:
 Project documentation also includes:
 
 - [RELEASE.md](RELEASE.md) — this guide
+- [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) — pre-tag acceptance checklist
 - [screenshots/](screenshots/) — UI screenshots referenced by the READMEs (`main_zh.png`, `main_en.png`). Recapture after README or chrome changes so the in-app editor still matches the docs.

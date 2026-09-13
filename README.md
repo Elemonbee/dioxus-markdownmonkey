@@ -108,7 +108,7 @@ src/
 │   └── tests.rs
 │
 ├── services/
-│   ├── markdown.rs / ai.rs / auto_save.rs / image.rs
+│   ├── markdown.rs / highlight.rs / ai.rs / auto_save.rs / image.rs
 │   ├── settings.rs / session.rs / recent_files.rs
 │   ├── file_watcher.rs     # mtime 轮询（无文件系统事件 crate）
 │   ├── keyring_service.rs / theme_detector.rs
@@ -122,10 +122,16 @@ src/
 │   ├── workspace_search.rs # 工作区搜索（含打开标签缓冲）
 │   └── replace.rs          # 替换工具
 │
-└── styles/                 # CSS（variables / base / editor / toolbar / sidebar / modals）
+└── styles/                 # CSS（variables / base / editor / syntax / toolbar / sidebar / modals）
 
 assets/
-└── editor_enhance.js       # 行号、虚拟滚动、同步滚动
+├── editor_enhance.js       # textarea 增强（无 CodeMirror 时的回退）
+├── editor_codemirror.js    # CodeMirror 5 升级与 Rust 桥
+├── preview_enhance.js      # 预览 KaTeX / Mermaid
+└── vendor/                 # CodeMirror / KaTeX / Mermaid 本地脚本
+
+packaging/                  # Windows Inno Setup / Linux .deb / macOS Info.plist
+docs/                       # 发布说明、验收清单、README 截图
 ```
 
 配置与会话数据默认位于用户配置目录下的 `MarkdownMonkey/`（`settings.json`、`session.json`、`session_drafts/`、`ai_history/`）：
@@ -173,7 +179,7 @@ cargo test --all-targets
 
 ## 📦 发布
 
-跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.5.0` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
 
 ## ⌨️ 快捷键
 
