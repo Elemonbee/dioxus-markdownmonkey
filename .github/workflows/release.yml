@@ -56,6 +56,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "main" -or $version -eq "master") {
             $version = "dev-${{ github.run_number }}"
           }
+          if ($version -like 'v*') { $version = $version.Substring(1) }
           $safeVersion = $version -replace '[^A-Za-z0-9._-]', '-'
 
           $packageName = "${env:APP_NAME}-$safeVersion-windows-x64"
@@ -159,7 +160,7 @@ jobs:
           if [ -z "$VERSION" ] || [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
             VERSION="dev-${{ github.run_number }}"
           fi
-          SAFE_VERSION=$(echo "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')
+          SAFE_VERSION=$(echo "$VERSION" | sed 's/^v//; s/[^A-Za-z0-9._-]/-/g')
           PACKAGE_NAME="${APP_NAME}-${SAFE_VERSION}-linux-x64"
           PACKAGE_DIR="dist/${PACKAGE_NAME}"
           mkdir -p "$PACKAGE_DIR"
@@ -229,7 +230,7 @@ jobs:
           if [ -z "$VERSION" ] || [ "$VERSION" = "main" ] || [ "$VERSION" = "master" ]; then
             VERSION="dev-${{ github.run_number }}"
           fi
-          SAFE_VERSION=$(echo "$VERSION" | sed 's/[^A-Za-z0-9._-]/-/g')
+          SAFE_VERSION=$(echo "$VERSION" | sed 's/^v//; s/[^A-Za-z0-9._-]/-/g')
           ARCH="$(uname -m)"
           case "$ARCH" in
             arm64|aarch64) ARCH_LABEL="arm64" ;;
