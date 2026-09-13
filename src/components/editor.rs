@@ -20,15 +20,11 @@ use dioxus::html::HasFileData;
 use dioxus::prelude::{ReadableExt, WritableExt, *};
 use std::path::PathBuf;
 
-/// 若 `<script src>` 未就绪，在同一 eval 内联注入 CodeMirror，避免叠加层透明回退
-/// Inline CodeMirror in the same eval if the script tags are not ready, avoiding the transparent overlay fallback
+/// 若 `<script src>` 未就绪，在同一 eval 内联注入 CodeMirror 6，避免空白编辑区
+/// Inline CodeMirror 6 in the same eval if the script tag is not ready, avoiding a blank editor
 const CODEMIRROR_BOOT: &str = concat!(
-    "if(!window.CodeMirror){\n",
-    include_str!("../../assets/vendor/codemirror.min.js"),
-    "\n",
-    include_str!("../../assets/vendor/codemirror-xml.min.js"),
-    "\n",
-    include_str!("../../assets/vendor/codemirror-markdown.min.js"),
+    "if(!window.MarkdownMonkeyCM){\n",
+    include_str!("../../assets/vendor/codemirror6.bundle.js"),
     "\n}\n"
 );
 
@@ -356,5 +352,28 @@ pub fn Editor() -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// 打包的 IIFE 必须暴露 MarkdownMonkeyCM，供桌面 WebView 挂载
+    /// The vendored IIFE must expose MarkdownMonkeyCM for the desktop WebView
+    #[test]
+    fn vendor_bundle_exports_markdownmonkey_cm() {
+        let bundle = include_str!("../../assets/vendor/codemirror6.bundle.js");
+        assert!(bundle.contains("MarkdownMonkeyCM"));
+        assert!(!bundle.contains("window.CodeMirror.fromTextArea"));
+    }
+
+    /// 升级层走 CodeMirror 6 API，不再调用 5 的 fromTextArea
+    /// The upgrade layer uses CodeMirror 6 APIs and no longer calls fromTextArea
+    #[test]
+    fn editor_bridge_targets_codemirror_6() {
+        let bridge = include_str!("../../assets/editor_codemirror.js");
+        assert!(bridge.contains("MarkdownMonkeyCM"));
+        assert!(bridge.contains("EditorView"));
+        assert!(!bridge.contains("fromTextArea"));
+        assert!(!bridge.contains("material-darker"));
     }
 }

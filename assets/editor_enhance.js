@@ -31,7 +31,7 @@ window._mm_initEditor = function() {
         el.remove();
     });
     ta.classList.remove('syntax-on');
-    if (window._mm_cmInstance || document.querySelector('.editor-content .CodeMirror')) {
+    if (window._mm_cmInstance || document.querySelector('.editor-content .cm-host')) {
         ta._mm_enhanced = true;
         return;
     }

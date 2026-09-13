@@ -13,6 +13,9 @@
 .DS_Store
 Thumbs.db
 
+# CodeMirror 6 bundle toolchain (the IIFE in assets/vendor is committed)
+scripts/codemirror/node_modules/
+
 # Build
 *.exe
 *.dll

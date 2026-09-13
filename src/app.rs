@@ -25,9 +25,7 @@ use dioxus::prelude::*;
 /// 预览公式引擎 / Preview math engine
 const KATEX_JS: Asset = asset!("/assets/vendor/katex.min.js");
 /// 编辑器内核 / Editor kernel
-const CODEMIRROR_JS: Asset = asset!("/assets/vendor/codemirror.min.js");
-const CODEMIRROR_XML_JS: Asset = asset!("/assets/vendor/codemirror-xml.min.js");
-const CODEMIRROR_MARKDOWN_JS: Asset = asset!("/assets/vendor/codemirror-markdown.min.js");
+const CODEMIRROR_JS: Asset = asset!("/assets/vendor/codemirror6.bundle.js");
 
 // 引入 CSS 样式（模块化）/ Import CSS Styles (Modular)
 const ALL_CSS: &str = concat!(
@@ -38,10 +36,8 @@ const ALL_CSS: &str = concat!(
     include_str!("styles/editor.css"),
     include_str!("styles/syntax.css"),
     include_str!("styles/modals.css"),
-    include_str!("../assets/vendor/codemirror.min.css"),
-    include_str!("../assets/vendor/codemirror-material-darker.min.css"),
-    /* 盖过 vendor 默认 color:#000，避免深色背景下正文不可见 / Override vendor #000 so dark theme text stays visible */
-    ".editor-content .CodeMirror,.editor-content .CodeMirror-scroll{color:var(--text-primary);background:var(--bg-primary);}",
+    /* 盖过 one-dark 默认色，避免深色背景下正文不可见 / Override one-dark so dark-theme text stays visible */
+    ".editor-content .cm-editor,.editor-content .cm-scroller{color:var(--text-primary);background:var(--bg-primary);}",
 );
 
 /// 打包后的 KaTeX woff2 资源 / Bundled KaTeX woff2 assets
@@ -600,8 +596,6 @@ pub fn App() -> Element {
 
     rsx! {
         document::Script { src: CODEMIRROR_JS }
-        document::Script { src: CODEMIRROR_XML_JS }
-        document::Script { src: CODEMIRROR_MARKDOWN_JS }
         document::Script { src: KATEX_JS }
         // 注入 CSS 样式 / Inject CSS Styles
         style { dangerous_inner_html: "{ALL_CSS}" }

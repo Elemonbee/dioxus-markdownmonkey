@@ -2,14 +2,14 @@
 
 ![MarkdownMonkey 主界面](docs/screenshots/main_zh.png)
 
-**版本 0.5.1** · **[English](./README_EN.md)** | 中文
+**版本 0.6.0** · **[English](./README_EN.md)** | 中文
 
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
 > 本项目为 Vibe Coding 项目，所有代码由 AI 生成。
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 正文以 **CodeMirror 5** 为准（行号 / Markdown 着色 / 内核撤销）；实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**，图表按需加载）；点击预览块可跳回对应源码行；原始 HTML 与危险 URL 会被过滤；**预览代码块语法高亮**
+- 📝 **Markdown 编辑** - 正文以 **CodeMirror 6** 为准（行号 / Markdown 着色 / 内核撤销）；实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**，图表按需加载）；点击预览块可跳回对应源码行；原始 HTML 与危险 URL 会被过滤；**预览代码块语法高亮**
 - 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
 - 🗂️ **多标签页** - 同时编辑多个文件，每标签独立历史；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
@@ -35,7 +35,7 @@
 | **Markdown** | pulldown-cmark + 自写 HTML/URL 过滤 | 0.13 |
 | **语法高亮** | syntect（预览代码块） | 5 |
 | **公式 / 图表** | KaTeX（本地 woff2）+ Mermaid（预览按需加载；HTML 导出走 CDN） | 0.16 / 11 |
-| **编辑器内核** | CodeMirror 5（Markdown 模式） | 5.65 |
+| **编辑器内核** | CodeMirror 6（`lang-markdown` IIFE） | 6.43 |
 | **文件监视** | notify（目录事件）+ mtime 兜底 | 6.1 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |
 | **密钥存储** | keyring-core + 系统凭据库 | 1 |
@@ -128,11 +128,12 @@ src/
 
 assets/
 ├── editor_enhance.js       # textarea 桥（内核未挂上时的回退）
-├── editor_codemirror.js    # CodeMirror 5 升级与 Rust 桥
+├── editor_codemirror.js    # CodeMirror 6 升级与 Rust 桥
 ├── preview_enhance.js      # 预览 KaTeX；Mermaid 按需加载
 ├── print.js                # 隐藏 iframe 调系统打印框
-└── vendor/                 # CodeMirror / KaTeX(+fonts) / Mermaid
+└── vendor/                 # CodeMirror 6 IIFE / KaTeX(+fonts) / Mermaid
 
+scripts/codemirror/         # 一次性 esbuild，重打 vendor IIFE（CI 不跑 npm）
 packaging/                  # Windows Inno Setup / Linux .deb / macOS Info.plist
 docs/                       # 发布说明、验收清单、README 截图
 ```
@@ -182,7 +183,7 @@ cargo test --all-targets
 
 ## 📦 发布
 
-跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.5.1` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.0` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
 
 ## ⌨️ 快捷键
 
