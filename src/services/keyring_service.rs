@@ -51,7 +51,7 @@ fn init_native_store() -> Result<(), String> {
         let store = linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::new())
             .map_err(|e| format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e))?;
         set_default_store(store);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(all(
