@@ -9,20 +9,20 @@ A modern Markdown editor built with the [Dioxus](https://dioxuslabs.com/) framew
 
 ## ✨ Features
 
-- 📝 **Markdown Editing** - Live preview (tables / strikethrough / task lists / footnotes / **`$` math** / **Mermaid diagrams**); raw HTML and dangerous URLs are filtered; **CodeMirror editor kernel** (line numbers / Markdown coloring); **syntax-highlighted preview code blocks**
+- 📝 **Markdown Editing** - **CodeMirror 5** is the source of truth (line numbers / Markdown coloring / kernel undo); live preview (tables / strikethrough / task lists / footnotes / **`$` math** / **Mermaid**, loaded on demand); click a preview block to jump to its source line; raw HTML and dangerous URLs are filtered; **syntax-highlighted preview code blocks**
 - 📁 **File Management** - Workspace folder, file-tree filter, recent files, multi-encoding (UTF-8/GBK/UTF-16); drag-and-drop `.md` / `.txt` to open
-- 🗂️ **Multi-Tab** - Edit multiple files with independent undo/redo per tab; confirm before closing unsaved tabs
+- 🗂️ **Multi-Tab** - Edit multiple files with independent history per tab; confirm before closing unsaved tabs
 - 📋 **Outline View** - Auto-extract headings for quick navigation
 - 💾 **Session Restore** - On launch, restore tabs, active tab, workspace, and unsaved drafts (can be disabled in Settings)
 - 🤖 **AI Assistant** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter; stoppable streaming; **per-document chat history**; API keys in the system keyring
-- 📤 **Export** - HTML (optional local-image sidecar `{stem}_files/`) / plain text
+- 📤 **Export** - HTML (optional local-image sidecar `{stem}_files/`) / plain text / **print and Save as PDF** (system print dialog)
 - 🔍 **Search & Replace** - In-document search (case / regex); workspace-wide search and replace-all (prefers open-tab buffers)
 - 🖼️ **Images** - Paste/drop images into the workspace and insert Markdown
 - 🎨 **Themes & View** - Dark / Light / Follow System; persisted window size; optional editor–preview sync scroll (Settings and preview pane)
 - 🌐 **i18n** - Simplified Chinese / American English; quick language toggle on the toolbar
 - ⌨️ **Shortcuts** - See table below
 - 📊 **Table Editor** - Visual create and edit
-- 💾 **Auto Save** - Configurable interval; external modification detection (mtime polling); warn before opening large files (default 1 MB)
+- 💾 **Auto Save** - Configurable interval; external edits use **directory events + mtime confirmation**; warn before opening large files (default 1 MB)
 
 ## 🛠️ Tech Stack
 
@@ -34,8 +34,9 @@ Versions reflect the current `Cargo.lock` / `Cargo.toml` resolution and may chan
 | **Language** | Rust | Edition 2021 |
 | **Markdown** | pulldown-cmark + custom HTML/URL filtering | 0.13 |
 | **Syntax Highlighting** | syntect (preview code blocks) | 5 |
-| **Math / Diagrams** | KaTeX + Mermaid (preview and HTML export) | 0.16 / 11 |
+| **Math / Diagrams** | KaTeX (bundled woff2) + Mermaid (lazy in preview; CDN in HTML export) | 0.16 / 11 |
 | **Editor Kernel** | CodeMirror 5 (Markdown mode) | 5.65 |
+| **File Watch** | notify (directory events) + mtime fallback | 6.1 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |
 | **Key Storage** | keyring-core + native OS stores | 1 |
 | **Search** | regex | 1 |
@@ -60,7 +61,7 @@ Components **read** `AppState` through Dioxus Signals to drive the UI; all **wri
 ├─────────────────────────────────────────────────┤
 │  Actions — the only AppState write entry        │
 │  ├── app_actions.rs — theme, language, sidebar, AI stream │
-│  ├── editor_actions.rs — edit, format, sync scroll        │
+│  ├── editor_actions.rs — edit, format, sync scroll, print │
 │  ├── file_actions.rs — open / save / tabs                 │
 │  ├── search_actions.rs — in-document and workspace search │
 │  ├── settings_actions.rs — settings and keyring           │
@@ -69,7 +70,7 @@ Components **read** `AppState` through Dioxus Signals to drive the UI; all **wri
 │  Logic                                          │
 │  state/ — AppState (Dioxus Signal)              │
 │  services/ — testable logic (Markdown, export,  │
-│              session, mtime watcher, keyring)   │
+│              session, directory watcher, keyring)│
 │  utils/ — i18n, encoding, paths, search, replace│
 └─────────────────────────────────────────────────┘
 ```
@@ -110,9 +111,10 @@ src/
 ├── services/
 │   ├── markdown.rs / highlight.rs / ai.rs / auto_save.rs / image.rs
 │   ├── settings.rs / session.rs / recent_files.rs
-│   ├── file_watcher.rs     # mtime polling (no filesystem-event crate)
+│   ├── file_watcher.rs     # directory events + mtime confirm
+│   ├── katex_css.rs        # rewrite KaTeX CSS onto bundled woff2
 │   ├── keyring_service.rs / theme_detector.rs
-│   └── export/             # HTML / plain text
+│   └── export/             # HTML / plain text / print document
 │       ├── mod.rs / shared.rs
 │       ├── html.rs / text.rs
 │
@@ -125,10 +127,11 @@ src/
 └── styles/                 # CSS (variables / base / editor / syntax / toolbar / sidebar / modals)
 
 assets/
-├── editor_enhance.js       # textarea extras (fallback without CodeMirror)
+├── editor_enhance.js       # textarea bridge (fallback if the kernel is not mounted)
 ├── editor_codemirror.js    # CodeMirror 5 upgrade and Rust bridge
-├── preview_enhance.js      # preview KaTeX / Mermaid
-└── vendor/                 # vendored CodeMirror / KaTeX / Mermaid
+├── preview_enhance.js      # preview KaTeX; Mermaid loaded on demand
+├── print.js                # hidden iframe → system print dialog
+└── vendor/                 # vendored CodeMirror / KaTeX(+fonts) / Mermaid
 
 packaging/                  # Windows Inno Setup / Linux .deb / macOS Info.plist
 docs/                       # release guide, checklist, README screenshots
@@ -198,6 +201,7 @@ macOS uses ⌘ (Command); Windows / Linux use Ctrl.
 | Ctrl/⌘+K | Insert Link |
 | Ctrl/⌘+F | In-document Search & Replace |
 | Ctrl/⌘+Shift+F | Workspace Search / Replace |
+| Ctrl/⌘+Shift+P | Print / Save as PDF |
 | Ctrl/⌘+\\ | Toggle Sidebar |
 | Ctrl/⌘+P | Toggle Preview |
 | Ctrl/⌘+T | Toggle Theme |
