@@ -8,6 +8,9 @@
 #ifndef SourceDir
 #define SourceDir "..\..\dist\installer-src"
 #endif
+#ifndef OutputDir
+#define OutputDir "..\..\dist"
+#endif
 
 [Setup]
 AppId={{8F3C1B2A-6D4E-4A91-9C55-2B7E1A0D4F18}
@@ -19,7 +22,7 @@ DefaultDirName={autopf}\MarkdownMonkey
 DefaultGroupName=MarkdownMonkey
 DisableProgramGroupPage=yes
 LicenseFile={#SourceDir}\LICENSE
-OutputDir={#SourceDir}\..\
+OutputDir={#OutputDir}
 OutputBaseFilename=MarkdownMonkey-{#AppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes

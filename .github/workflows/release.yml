@@ -86,10 +86,18 @@ jobs:
         run: |
           choco install innosetup -y --no-progress
           $safeVersion = "${{ env.PACKAGE_VERSION }}"
-          $src = Join-Path "dist" "${env:APP_NAME}-$safeVersion-windows-x64"
+          $repoRoot = (Get-Location).Path
+          $src = Join-Path $repoRoot "dist\${env:APP_NAME}-$safeVersion-windows-x64"
+          $outDir = Join-Path $repoRoot "dist"
+          if (-not (Test-Path (Join-Path $src "LICENSE"))) {
+            throw "Installer source missing LICENSE: $src"
+          }
+          $srcUnix = $src.Replace('\', '/')
+          $outUnix = $outDir.Replace('\', '/')
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             "/DAppVersion=$safeVersion" `
-            "/DSourceDir=$src" `
+            "/DSourceDir=$srcUnix" `
+            "/DOutputDir=$outUnix" `
             "packaging\windows\MarkdownMonkey.iss"
           $setup = Join-Path "dist" "${env:APP_NAME}-$safeVersion-windows-x64-setup.exe"
           if (-not (Test-Path $setup)) { throw "Inno Setup output missing: $setup" }
