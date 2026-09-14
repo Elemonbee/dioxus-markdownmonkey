@@ -181,7 +181,7 @@ impl AppState {
             cursor_end: Signal::new(0),
             font_size: Signal::new(DEFAULT_FONT_SIZE),
             preview_font_size: Signal::new(DEFAULT_PREVIEW_FONT_SIZE),
-            word_wrap: Signal::new(false),
+            word_wrap: Signal::new(true),
             line_numbers: Signal::new(true),
             sync_scroll: Signal::new(true),
 

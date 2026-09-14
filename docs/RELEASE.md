@@ -3,10 +3,10 @@
 MarkdownMonkey publishes desktop release packages through GitHub Actions for
 **Windows**, **Linux**, and **macOS**.
 
-Current app version: **0.6.0** (see `Cargo.toml`). CI uses the `stable` Rust
+Current app version: **0.6.1** (see `Cargo.toml`). CI uses the `stable` Rust
 toolchain; building from source needs **Rust 1.88+**.
 
-Before creating the `v0.6.0` tag, complete
+Before creating the `v0.6.1` tag, complete
 **[RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md)** (docs, desktop smoke, packages).
 
 ## Local Verification
@@ -30,7 +30,7 @@ target/release/markdownmonkey       # Linux / macOS
 ## Manual Artifact Build
 
 Use the `Release` workflow's `workflow_dispatch` trigger from GitHub Actions.
-Optionally provide a version label such as `v0.6.0`. This creates workflow
+Optionally provide a version label such as `v0.6.1`. This creates workflow
 artifacts containing portable archives **and** native installers:
 
 - Windows: `MarkdownMonkey-<version>-windows-x64.zip` + `...-setup.exe`
@@ -44,8 +44,8 @@ Manual workflow runs do not create a GitHub Release.
 Create and push a version tag:
 
 ```powershell
-git tag v0.6.0
-git push origin v0.6.0
+git tag v0.6.1
+git push origin v0.6.1
 ```
 
 Tags matching `v*` build all platform packages, upload workflow artifacts, and

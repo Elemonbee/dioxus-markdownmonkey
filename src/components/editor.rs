@@ -146,6 +146,13 @@ pub fn Editor() -> Element {
     let current_file = doc.current_file.read().clone();
     let show_preview = *ui.show_preview.read();
     let tab_index = *doc.current_tab_index.read();
+    let tab_id = doc
+        .tabs
+        .read()
+        .get(tab_index)
+        .map(|tab| tab.id)
+        .unwrap_or(0);
+    let retain_ids: Vec<u64> = doc.tabs.read().iter().map(|tab| tab.id).collect();
     let file_size = (*doc.file_size_bytes.read()).max(content.len());
     let use_uncontrolled = file_size >= UNCONTROLLED_EDITOR_THRESHOLD_BYTES;
 
@@ -153,7 +160,7 @@ pub fn Editor() -> Element {
     // Shared by CodeMirror and both editor modes: push Rust text on revision; JS no-ops if equal
     if rev != *last_pushed_rev.read() {
         last_pushed_rev.set(rev);
-        EditorActions::push_to_dom(&content);
+        EditorActions::push_editor_to_dom(&content, Some(tab_id), &retain_ids);
     }
 
     let search_query_hl = ui.search_query.read().clone();
@@ -230,21 +237,48 @@ pub fn Editor() -> Element {
         }
     });
 
-    // 注入增强脚本并按当前设置同步滚动开关（同一 eval 避免时序竞态）
-    // Inject enhance script and apply sync-scroll in one eval to avoid races
+    // 脚本只装一次；切标签靠 push_editor_to_dom，避免每次把 500KB+ bundle 再 eval 一遍
+    // Install scripts once; tab switches use push_editor_to_dom so the 500KB+ bundle is not re-eval'd
+    let mut boot_ready = use_signal(|| false);
     let _ = use_effect(move || {
-        let _ = tab_index;
-        let sync = *ui.sync_scroll.read();
+        if *boot_ready.peek() {
+            return;
+        }
+        boot_ready.set(true);
         let js = include_str!("../../assets/editor_enhance.js");
         let cm_js = include_str!("../../assets/editor_codemirror.js");
         let print_js = include_str!("../../assets/print.js");
         let _ = document::eval(&format!(
-            "{}\n{}\n{}\n{}\nif (window._mm_initEditor) window._mm_initEditor();\nif (window._mm_upgradeToCodeMirror) window._mm_upgradeToCodeMirror();\nif (window._mm_setSyncScroll) window._mm_setSyncScroll({});",
-            CODEMIRROR_BOOT,
-            js,
-            cm_js,
-            print_js,
-            if sync { "true" } else { "false" }
+            "{boot}\n\
+             if(!window._mm_enhanceReady){{{enhance}\nwindow._mm_enhanceReady=true;}}\n\
+             if(!window._mm_cmUpgradeInstalled){{{cm}}}\n\
+             if(!window._mm_printHtml){{{print}}}\n\
+             if(window._mm_initEditor)window._mm_initEditor();\n\
+             if(window._mm_upgradeToCodeMirror)window._mm_upgradeToCodeMirror();",
+            boot = CODEMIRROR_BOOT,
+            enhance = js,
+            cm = cm_js,
+            print = print_js
+        ));
+    });
+
+    // 换行 / 行号 / 同步滚动 / 工作区补全跟设置走，不重装内核
+    // Wrap / line numbers / sync scroll / workspace completion follow settings without remounting
+    let _ = use_effect(move || {
+        let wrap = *ui.word_wrap.read();
+        let lines = *ui.line_numbers.read();
+        let sync = *ui.sync_scroll.read();
+        let files = serde_json::to_string(&EditorActions::workspace_completion_paths(&state))
+            .unwrap_or_else(|_| "[]".to_string());
+        let _ = document::eval(&format!(
+            "if(window._mm_setWordWrap)window._mm_setWordWrap({wrap});\
+             if(window._mm_setLineNumbers)window._mm_setLineNumbers({lines});\
+             if(window._mm_setSyncScroll)window._mm_setSyncScroll({sync});\
+             if(window._mm_setWorkspaceFiles)window._mm_setWorkspaceFiles({files});",
+            wrap = if wrap { "true" } else { "false" },
+            lines = if lines { "true" } else { "false" },
+            sync = if sync { "true" } else { "false" },
+            files = files
         ));
     });
 
@@ -307,14 +341,17 @@ pub fn Editor() -> Element {
                 }
                 textarea {
                     class: "editor-textarea",
-                    key: "ed-{tab_index}",
                     placeholder: "{placeholder_text}",
                     spellcheck: false,
                     "aria-label": "{aria_editor_t}",
                     "aria-multiline": "true",
                     role: "textbox",
                     onmounted: move |_| {
-                        EditorActions::push_to_dom(&cached_content.read());
+                        EditorActions::push_editor_to_dom(
+                            &cached_content.read(),
+                            Some(tab_id),
+                            &retain_ids,
+                        );
                     },
                     ondragover: move |e| {
                         e.prevent_default();
@@ -336,11 +373,16 @@ pub fn Editor() -> Element {
                         };
                         *EDITOR_SCROLL_RATIO.write() = ratio;
                     },
-                    oninput: move |e| {
+                    oninput: move |_| {
+                        // 只信内核/DOM 快照，不信 Dioxus 对隐藏 textarea 的 e.value()
+                        // Trust the kernel/DOM snapshot, not Dioxus e.value() on a hidden textarea
                         if use_uncontrolled {
                             schedule_uncontrolled_sync(state, sync_gen);
                         } else {
-                            EditorActions::update_content(&mut state, e.value());
+                            let mut state = state;
+                            spawn(async move {
+                                EditorActions::flush_from_dom(&mut state).await;
+                            });
                         }
                     },
                     onselect: move |_| {
@@ -373,7 +415,22 @@ mod tests {
         let bridge = include_str!("../../assets/editor_codemirror.js");
         assert!(bridge.contains("MarkdownMonkeyCM"));
         assert!(bridge.contains("EditorView"));
+        assert!(bridge.contains("_mm_applyFormat"));
+        assert!(bridge.contains("_mm_setWordWrap"));
+        assert!(bridge.contains("_mm_retainTabStates"));
         assert!(!bridge.contains("fromTextArea"));
         assert!(!bridge.contains("material-darker"));
+    }
+
+    /// 内核入口包含折叠、围栏着色、任务框和补全
+    /// Kernel entry includes folding, fenced highlighting, task boxes, and completion
+    #[test]
+    fn kernel_entry_exports_cm6_editor_features() {
+        let src = include_str!("../../scripts/codemirror/src/index.js");
+        assert!(src.contains("codeLanguages"));
+        assert!(src.contains("foldGutter"));
+        assert!(src.contains("taskCheckbox"));
+        assert!(src.contains("markdownAutocompletion"));
+        assert!(src.contains("applyMarkdownFormat"));
     }
 }

@@ -60,7 +60,7 @@ impl SettingsActions {
     pub fn reset_editor_defaults(state: &mut AppState) {
         EditorActions::set_font_size(state, 16);
         EditorActions::set_preview_font_size(state, 16);
-        EditorActions::set_word_wrap(state, false);
+        EditorActions::set_word_wrap(state, true);
         EditorActions::set_line_numbers(state, true);
         EditorActions::set_sync_scroll(state, true);
         Self::set_session_restore(state, true);

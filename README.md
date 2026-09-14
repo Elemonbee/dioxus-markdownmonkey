@@ -2,23 +2,23 @@
 
 ![MarkdownMonkey 主界面](docs/screenshots/main_zh.png)
 
-**版本 0.6.0** · **[English](./README_EN.md)** | 中文
+**版本 0.6.1** · **[English](./README_EN.md)** | 中文
 
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
 > 本项目为 Vibe Coding 项目，所有代码由 AI 生成。
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 正文以 **CodeMirror 6** 为准（行号 / Markdown 着色 / 内核撤销）；实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**，图表按需加载）；点击预览块可跳回对应源码行；原始 HTML 与危险 URL 会被过滤；**预览代码块语法高亮**
+- 📝 **Markdown 编辑** - 正文以 **CodeMirror 6** 为准（行号 / Markdown 着色 / 围栏代码着色 / 内核撤销 / 标题与代码折叠）；实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**，图表按需加载）；点击预览块可跳回对应源码行；编辑区可点任务复选框；`/` 片段与 `](` 链接补全；原始 HTML 与危险 URL 会被过滤；**预览代码块语法高亮**
 - 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
-- 🗂️ **多标签页** - 同时编辑多个文件，每标签独立历史；关闭未保存文件时确认
+- 🗂️ **多标签页** - 同时编辑多个文件，每标签独立内核历史（切走再切回保留撤销）；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
 - 💾 **会话恢复** - 启动时恢复标签、活动页、工作区与未保存草稿（可在设置中关闭）
 - 🤖 **AI 助手** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter；流式生成可停止；**按文档独立会话历史**；API Key 存于系统密钥环
 - 📤 **导出** - HTML（可打包本地图片到 `{文件名}_files/`）/ 纯文本 / **打印与另存 PDF**（系统打印框）
 - 🔍 **搜索替换** - 文档内搜索（大小写 / 正则）；工作区全局搜索与批量替换（优先使用已打开标签缓冲）
 - 🖼️ **图片支持** - 粘贴/拖放图片保存到工作区并插入 Markdown
-- 🎨 **主题与视图** - 深色 / 浅色 / 跟随系统；窗口尺寸持久化；编辑器与预览可同步滚动（设置与预览区可关）
+- 🎨 **主题与视图** - 深色 / 浅色 / 跟随系统；窗口尺寸持久化；自动换行与行号跟设置走；编辑器与预览可同步滚动（设置与预览区可关）
 - 🌐 **国际化** - 简体中文 / 美式英语；工具栏可快速切换
 - ⌨️ **快捷键** - 见下方一览表
 - 📊 **表格编辑器** - 可视化创建与编辑
@@ -183,7 +183,7 @@ cargo test --all-targets
 
 ## 📦 发布
 
-跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.0` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.1` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
 
 ## ⌨️ 快捷键
 

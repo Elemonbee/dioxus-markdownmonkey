@@ -130,11 +130,12 @@
 .editor-content .cm-editor {
   height: 100%;
   width: 100%;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), "Microsoft YaHei", "PingFang SC", sans-serif;
   font-size: var(--font-size-base);
   line-height: 1.6;
   background: var(--bg-primary);
   color: var(--text-primary);
+  font-variant-ligatures: none;
 }
 
 .editor-content .cm-scroller {
@@ -151,8 +152,29 @@
   background: rgba(250, 204, 21, 0.35);
 }
 
-.editor-content .search-highlight-current {
-  background: rgba(251, 146, 60, 0.55);
+.editor-content .cm-selectionMatch {
+  background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+}
+
+.editor-content .cm-task-checkbox {
+  width: 12px;
+  height: 12px;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.editor-content .cm-foldGutter .cm-gutterElement {
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.editor-content .cm-tooltip {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
 /* 行号 / Line Numbers */

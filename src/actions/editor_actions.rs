@@ -106,9 +106,54 @@ impl EditorActions {
         }
     }
 
-    /// 通过唯一入口执行格式化，并在 DOM 更新后恢复焦点与 Unicode 安全选区
-    /// Apply formatting through one entry point, then restore focus and Unicode-safe selection
+    /// 格式化命令对应的内核 kind 字符串
+    /// Kernel kind string for a formatting command
+    fn format_kind(format: EditorFormat) -> &'static str {
+        match format {
+            EditorFormat::Bold => "bold",
+            EditorFormat::Italic => "italic",
+            EditorFormat::Code => "code",
+            EditorFormat::Link => "link",
+            EditorFormat::CodeBlock => "codeblock",
+            EditorFormat::Heading1 => "h1",
+            EditorFormat::Heading2 => "h2",
+            EditorFormat::Heading3 => "h3",
+            EditorFormat::BulletList => "bullet",
+            EditorFormat::NumberedList => "numbered",
+            EditorFormat::Quote => "quote",
+            EditorFormat::HorizontalRule => "hr",
+        }
+    }
+
+    /// 走 CodeMirror 语法树/选区格式化；没有内核时返回 false
+    /// Apply format in CodeMirror; return false when the kernel is not mounted
+    async fn format_via_codemirror(format: EditorFormat) -> bool {
+        let kind =
+            serde_json::to_string(Self::format_kind(format)).unwrap_or_else(|_| "\"bold\"".into());
+        let mut eval = document::eval(&format!(
+            "dioxus.send(!!(window._mm_applyFormat && window._mm_applyFormat({kind})));"
+        ));
+        eval.recv::<bool>().await.unwrap_or(false)
+    }
+
+    /// 走内核插入；没有实例时返回 false
+    /// Insert via the kernel; return false when no instance is mounted
+    async fn insert_via_codemirror(text: &str) -> bool {
+        let safe = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
+        let mut eval = document::eval(&format!(
+            "dioxus.send(!!(window._mm_insertText && window._mm_insertText({safe})));"
+        ));
+        eval.recv::<bool>().await.unwrap_or(false)
+    }
+
+    /// 通过唯一入口执行格式化；优先内核事务，避免整篇回写
+    /// Apply formatting through one entry; prefer an in-kernel transaction over a full rewrite
     pub async fn apply_format(state: &mut AppState, format: EditorFormat) {
+        if Self::format_via_codemirror(format).await {
+            Self::flush_from_dom(state).await;
+            return;
+        }
+
         let direction = if let Some(snapshot) = Self::read_editor_snapshot().await {
             state.update_content(snapshot.value);
             Self::set_selection(state, snapshot.start, snapshot.end);
@@ -142,9 +187,13 @@ impl EditorActions {
         );
     }
 
-    /// 基于最新 DOM 选区插入文本，并恢复编辑器焦点与选区
-    /// Insert text at the latest DOM selection and restore editor focus and selection
+    /// 基于最新 DOM 选区插入文本；优先内核，再同步 Rust
+    /// Insert text at the latest DOM selection; prefer the kernel, then sync Rust
     pub async fn insert_text_from_dom(state: &mut AppState, text: &str) {
+        if Self::insert_via_codemirror(text).await {
+            Self::flush_from_dom(state).await;
+            return;
+        }
         let direction = if let Some(snapshot) = Self::read_editor_snapshot().await {
             state.update_content(snapshot.value);
             Self::set_selection(state, snapshot.start, snapshot.end);
@@ -166,14 +215,28 @@ impl EditorActions {
     /// 将 Rust 正文推送到 DOM（非受控模式下撤销/切换标签后调用）
     /// Push Rust content into the DOM (after undo/tab switch in uncontrolled mode)
     pub fn push_to_dom(content: &str) {
+        Self::push_editor_to_dom(content, None, &[]);
+    }
+
+    /// 推送正文并绑定稳定标签，以便内核恢复光标与撤销栈
+    /// Push text and bind a stable tab so the kernel can restore cursor and undo
+    pub fn push_editor_to_dom(content: &str, tab_id: Option<u64>, retain_ids: &[u64]) {
         let safe = serde_json::to_string(content).unwrap_or_else(|_| "\"\"".to_string());
+        let retain = serde_json::to_string(retain_ids).unwrap_or_else(|_| "[]".to_string());
+        let tab = tab_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "null".to_string());
         let _ = document::eval(&format!(
             concat!(
                 "window._mm_pendingEditorValue={safe};",
-                "if(window._mm_setEditorValue){{window._mm_setEditorValue({safe});}}",
+                "window._mm_pendingEditorTabId={tab};",
+                "if(window._mm_retainTabStates)window._mm_retainTabStates({retain});",
+                "if(window._mm_setEditorValue){{window._mm_setEditorValue({safe},{tab});}}",
                 "else{{var ta=document.querySelector('.editor-textarea');if(ta)ta.value={safe};}}"
             ),
-            safe = safe
+            safe = safe,
+            tab = tab,
+            retain = retain
         ));
     }
 
@@ -256,28 +319,70 @@ impl EditorActions {
         *state.ui().preview_font_size.write() = size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
     }
 
+    /// 把自动换行推到内核隔间 / Push word wrap into the kernel compartment
+    fn notify_word_wrap(enabled: bool) {
+        let _ = document::eval(&format!(
+            "if(window._mm_setWordWrap) window._mm_setWordWrap({});",
+            if enabled { "true" } else { "false" }
+        ));
+    }
+
+    /// 把行号显示推到内核隔间 / Push line numbers into the kernel compartment
+    fn notify_line_numbers(enabled: bool) {
+        let _ = document::eval(&format!(
+            "if(window._mm_setLineNumbers) window._mm_setLineNumbers({});",
+            if enabled { "true" } else { "false" }
+        ));
+    }
+
+    /// 工作区 Markdown 相对路径，供 `](` 链接补全
+    /// Workspace-relative Markdown paths for `](` link completion
+    pub fn workspace_completion_paths(state: &AppState) -> Vec<String> {
+        let ui = state.ui();
+        let root = ui.workspace_root.read().clone();
+        let files = ui.file_list.read().clone();
+        files
+            .iter()
+            .filter_map(|path| {
+                if let Some(root) = root.as_ref() {
+                    path.strip_prefix(root)
+                        .ok()
+                        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                } else {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                }
+            })
+            .take(400)
+            .collect()
+    }
+
     /// 切换自动换行 / Toggle Word Wrap
     pub fn toggle_word_wrap(state: &mut AppState) {
         let mut ui = state.ui();
-        let current = *ui.word_wrap.read();
-        *ui.word_wrap.write() = !current;
+        let next = !*ui.word_wrap.read();
+        *ui.word_wrap.write() = next;
+        Self::notify_word_wrap(next);
     }
 
     /// 设置自动换行 / Set Word Wrap
     pub fn set_word_wrap(state: &mut AppState, wrap: bool) {
         *state.ui().word_wrap.write() = wrap;
+        Self::notify_word_wrap(wrap);
     }
 
     /// 切换行号显示 / Toggle Line Numbers
     pub fn toggle_line_numbers(state: &mut AppState) {
         let mut ui = state.ui();
-        let current = *ui.line_numbers.read();
-        *ui.line_numbers.write() = !current;
+        let next = !*ui.line_numbers.read();
+        *ui.line_numbers.write() = next;
+        Self::notify_line_numbers(next);
     }
 
     /// 设置行号显示 / Set Line Numbers
     pub fn set_line_numbers(state: &mut AppState, show: bool) {
         *state.ui().line_numbers.write() = show;
+        Self::notify_line_numbers(show);
     }
 
     /// 把同步滚动开关推到 JS（全局标志，跨 textarea 重建仍然有效）

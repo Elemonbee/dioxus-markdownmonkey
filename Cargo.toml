@@ -1,6 +1,6 @@
 [package]
 name = "markdownmonkey"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "A modern Markdown editor built with Dioxus"
 authors = ["MarkdownMonkey Team"]

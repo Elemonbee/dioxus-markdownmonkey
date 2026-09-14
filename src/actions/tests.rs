@@ -1134,7 +1134,7 @@ mod search_settings_actions_tests {
             SettingsActions::reset_editor_defaults(&mut state);
             assert_eq!(*state.font_size.read(), 16);
             assert_eq!(*state.preview_font_size.read(), 16);
-            assert!(!*state.word_wrap.read());
+            assert!(*state.word_wrap.read());
             assert!(*state.line_numbers.read());
             assert!(*state.sync_scroll.read());
             assert!(*state.session_restore_enabled.read());

@@ -98,7 +98,7 @@ impl Default for AppSettings {
             language: "zh-CN".to_string(),
             font_size: 16,
             preview_font_size: 16,
-            word_wrap: false,
+            word_wrap: true,
             line_numbers: true,
             sync_scroll: true,
             sidebar_visible: true,
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(settings.font_size, 16);
         assert!(!settings.auto_save_enabled);
         assert_eq!(settings.auto_save_interval, 30);
-        assert!(!settings.word_wrap);
+        assert!(settings.word_wrap);
         assert!(settings.line_numbers);
         assert!(settings.sync_scroll);
     }

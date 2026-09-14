@@ -451,6 +451,10 @@ window._mm_initEditor = function() {
     }, true); // capture phase so image drops override parent handler
 };
 
+if (window._mm_cmInstance) {
+    // 内核已接管跳行与反向同步，勿用 textarea 回退覆盖
+    // The kernel already owns jump-to-line and reverse sync; do not overwrite it
+} else {
 window._mm_scrollToLine = function(lineNumber) {
     var ta = document.querySelector('.editor-textarea');
     if (!ta) return;
@@ -488,6 +492,7 @@ window._mm_reverseSyncScroll = (function() {
         });
     };
 })();
+}
 
 // 自动初始化 / Auto-initialize
 if (document.querySelector('.editor-textarea')) {

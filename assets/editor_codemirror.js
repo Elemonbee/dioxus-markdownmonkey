@@ -6,6 +6,11 @@
     if (window._mm_cmUpgradeInstalled) return;
     window._mm_cmUpgradeInstalled = true;
     window._mm_cmRetries = 0;
+    if (typeof window._mm_wordWrap !== 'boolean') window._mm_wordWrap = true;
+    if (typeof window._mm_lineNumbers !== 'boolean') window._mm_lineNumbers = true;
+    if (!window._mm_tabStates) window._mm_tabStates = Object.create(null);
+    if (typeof window._mm_activeTabId === 'undefined') window._mm_activeTabId = null;
+    if (!Array.isArray(window._mm_workspaceFiles)) window._mm_workspaceFiles = [];
 
     var searchEffect = null;
     var searchField = null;
@@ -17,6 +22,11 @@
     function isDarkTheme() {
         var root = document.querySelector('.app-container') || document.documentElement;
         return (root.getAttribute('data-theme') || 'dark') !== 'light';
+    }
+
+    function placeholderText() {
+        var lang = (document.documentElement.lang || document.body && document.body.lang || '').toLowerCase();
+        return lang.indexOf('zh') === 0 ? '文本' : 'Text';
     }
 
     function utf16ToUtf8Offset(text, offset) {
@@ -250,58 +260,219 @@
     }
 
     /**
+     * 拿到或新建 Dioxus 不会当孩子管理的 host
+     * Get or create the host Dioxus does not own as a child
+     */
+    function ensureHost() {
+        var content = document.querySelector('.editor-content');
+        if (!content) return null;
+        var host = content.querySelector(':scope > .cm-host');
+        if (!host) {
+            host = document.createElement('div');
+            host.className = 'cm-host';
+            content.appendChild(host);
+        }
+        return host;
+    }
+
+    /**
+     * 把已有 EditorView 挂回当前 textarea / host，不重建文档
+     * Reattach an existing EditorView to the current textarea/host without rebuilding the doc
+     */
+    function attachView(view, ta, host) {
+        if (!view || !host) return;
+        view._mm_ta = ta;
+        view._mm_host = host;
+        host._mm_view = view;
+        if (ta) ta._mm_cm = view;
+        if (view.dom.parentNode !== host) {
+            host.appendChild(view.dom);
+        }
+    }
+
+    /**
+     * 正文优先用 Rust 推过来的 pending，避免吃到被补丁弄脏的 textarea
+     * Prefer the Rust pending payload so a patched textarea cannot poison the kernel
+     */
+    function initialDoc(ta) {
+        if (typeof window._mm_pendingEditorValue === 'string') {
+            return window._mm_pendingEditorValue;
+        }
+        return ta && ta.value ? ta.value : '';
+    }
+
+    function wrapExt(CM, wrap) {
+        return wrap ? CM.EditorView.lineWrapping : [];
+    }
+
+    function lineExt(CM, show) {
+        return show ? [CM.lineNumbers(), CM.highlightActiveLineGutter()] : [];
+    }
+
+    /**
+     * 主题 / 换行 / 行号隔间在 setState 后重新套上当前值
+     * Re-apply theme / wrap / line-number compartments after setState
+     */
+    function reapplyCompartments(view) {
+        var CM = cmApi();
+        if (!view || !CM) return;
+        var effects = [];
+        if (view._mm_theme) {
+            effects.push(view._mm_theme.reconfigure(isDarkTheme() ? CM.darkTheme() : CM.lightTheme()));
+        }
+        if (view._mm_wrap) {
+            effects.push(view._mm_wrap.reconfigure(wrapExt(CM, window._mm_wordWrap !== false)));
+        }
+        if (view._mm_line) {
+            effects.push(view._mm_line.reconfigure(lineExt(CM, window._mm_lineNumbers !== false)));
+        }
+        if (effects.length) view.dispatch({ effects: effects });
+    }
+
+    /**
+     * 离开标签前缓存 EditorState（光标 + 撤销）
+     * Cache EditorState (cursor + undo) before leaving a tab
+     */
+    function stashActiveTab(view) {
+        var id = window._mm_activeTabId;
+        if (view && id != null && id !== '') {
+            window._mm_tabStates[String(id)] = view.state;
+        }
+    }
+
+    /**
+     * 组装扩展；切文件时 setState 复用同一份
+     * Build extensions; tab switches reuse them via setState
+     */
+    function buildExtensions(themeComp, wrapComp, lineComp) {
+        var CM = cmApi();
+        var highKeys = [{ key: 'Enter', run: markdownEnter }]
+            .concat(CM.completionKeymap || [])
+            .concat(CM.closeBracketsKeymap || [])
+            .concat(CM.foldKeymap || [])
+            .concat([CM.indentWithTab]);
+        var markdownExt = CM.markdownSupport ? CM.markdownSupport() : CM.markdown();
+        var extras = [];
+        if (CM.highlightSpecialChars) extras.push(CM.highlightSpecialChars());
+        if (CM.dropCursor) extras.push(CM.dropCursor());
+        if (CM.rectangularSelection) extras.push(CM.rectangularSelection());
+        if (CM.bracketMatching) extras.push(CM.bracketMatching());
+        if (CM.indentOnInput) extras.push(CM.indentOnInput());
+        if (CM.foldGutter) extras.push(CM.foldGutter());
+        if (CM.highlightSelectionMatches) extras.push(CM.highlightSelectionMatches());
+        if (CM.taskCheckbox) extras.push(CM.taskCheckbox());
+        if (CM.markdownAutocompletion) extras.push(CM.markdownAutocompletion());
+        return [
+            lineComp.of(lineExt(CM, window._mm_lineNumbers !== false)),
+            wrapComp.of(wrapExt(CM, window._mm_wordWrap !== false)),
+            CM.highlightActiveLine(),
+            CM.drawSelection(),
+            CM.history(),
+            markdownExt,
+            CM.indentUnit.of('    '),
+            CM.closeBrackets(),
+            searchField
+        ].concat(extras).concat([
+            themeComp.of(isDarkTheme() ? CM.darkTheme() : CM.lightTheme()),
+            CM.Prec.high(CM.keymap.of(highKeys)),
+            CM.keymap.of(CM.defaultKeymap),
+            CM.EditorView.updateListener.of(function (update) {
+                if (window._mm_cmApplyingExternal) return;
+                if (update.docChanged) {
+                    syncTextarea(update.view, update.view._mm_ta, true);
+                    if (window._mm_activeTabId != null) {
+                        window._mm_tabStates[String(window._mm_activeTabId)] = update.view.state;
+                    }
+                }
+                if (update.selectionSet && update.view._mm_ta) {
+                    update.view._mm_ta.dispatchEvent(new Event('select', { bubbles: true }));
+                }
+            })
+        ]);
+    }
+
+    /**
+     * 外部写入正文；切标签时重置历史，避免跨文件撤销
+     * Apply external text; reset history on tab switches so undo cannot leak across files
+     */
+    function replaceDocument(view, text, resetHistory) {
+        var CM = cmApi();
+        if (!view || !CM) return;
+        window._mm_cmApplyingExternal = true;
+        try {
+            if (resetHistory) {
+                view.setState(CM.EditorState.create({
+                    doc: text,
+                    extensions: view._mm_extensions
+                }));
+            } else if (view.state.doc.toString() !== text) {
+                view.dispatch({
+                    changes: { from: 0, to: view.state.doc.length, insert: text },
+                    annotations: [CM.Transaction.addToHistory.of(false)]
+                });
+            }
+        } finally {
+            window._mm_cmApplyingExternal = false;
+        }
+    }
+
+    /**
+     * 按稳定标签标识恢复或替换文档
+     * Restore or replace the document by stable tab id
+     */
+    function applyTabDocument(view, text, tabId) {
+        var id = tabId == null || tabId === '' ? null : String(tabId);
+        if (id && id !== String(window._mm_activeTabId || '')) {
+            stashActiveTab(view);
+            window._mm_activeTabId = id;
+            var cached = window._mm_tabStates[id];
+            if (cached && cached.doc.toString() === text) {
+                window._mm_cmApplyingExternal = true;
+                try {
+                    view.setState(cached);
+                    reapplyCompartments(view);
+                } finally {
+                    window._mm_cmApplyingExternal = false;
+                }
+                return;
+            }
+            replaceDocument(view, text, true);
+            window._mm_tabStates[id] = view.state;
+            return;
+        }
+        if (id) window._mm_activeTabId = id;
+        if (view.state.doc.toString() !== text) {
+            replaceDocument(view, text, false);
+        }
+        if (id) window._mm_tabStates[id] = view.state;
+    }
+
+    /**
      * 创建并挂上 EditorView
      * Create and mount an EditorView
      */
     function mountView(ta) {
         var CM = cmApi();
         ensureSearchField();
-        var content = document.querySelector('.editor-content');
-        if (!content) return null;
-        var host = document.createElement('div');
-        host.className = 'cm-host';
-        content.appendChild(host);
+        var host = ensureHost();
+        if (!host) return null;
 
         var themeComp = new CM.Compartment();
-        var highKeys = [{ key: 'Enter', run: markdownEnter }]
-            .concat(CM.closeBracketsKeymap || [])
-            .concat([CM.indentWithTab]);
-
+        var wrapComp = new CM.Compartment();
+        var lineComp = new CM.Compartment();
+        var extensions = buildExtensions(themeComp, wrapComp, lineComp);
         var view = new CM.EditorView({
             parent: host,
             state: CM.EditorState.create({
-                doc: ta.value || '',
-                extensions: [
-                    CM.lineNumbers(),
-                    CM.highlightActiveLine(),
-                    CM.highlightActiveLineGutter(),
-                    CM.drawSelection(),
-                    CM.EditorView.lineWrapping,
-                    CM.history(),
-                    CM.markdown(),
-                    CM.indentUnit.of('    '),
-                    CM.closeBrackets(),
-                    searchField,
-                    themeComp.of(isDarkTheme() ? CM.darkTheme() : CM.lightTheme()),
-                    CM.Prec.high(CM.keymap.of(highKeys)),
-                    CM.keymap.of(CM.defaultKeymap),
-                    CM.EditorView.updateListener.of(function (update) {
-                        if (window._mm_cmApplyingExternal) return;
-                        if (update.docChanged) {
-                            syncTextarea(update.view, update.view._mm_ta, true);
-                        }
-                        if (update.selectionSet && update.view._mm_ta) {
-                            update.view._mm_ta.dispatchEvent(new Event('select', { bubbles: true }));
-                        }
-                    })
-                ]
+                doc: initialDoc(ta),
+                extensions: extensions
             })
         });
-        view._mm_ta = ta;
-        view._mm_host = host;
         view._mm_theme = themeComp;
-        host._mm_view = view;
-        ta._mm_cm = view;
+        view._mm_wrap = wrapComp;
+        view._mm_line = lineComp;
+        view._mm_extensions = extensions;
+        attachView(view, ta, host);
         bindMediaInsert(view);
         view.scrollDOM.addEventListener('scroll', function () {
             if (!window._mm_syncScrollEnabled) return;
@@ -335,12 +506,10 @@
         window._mm_cmRetries = 0;
         window._mm_cmUpgrading = true;
         try {
-            if (window._mm_cmInstance && window._mm_cmInstance._mm_ta !== ta) {
-                destroyView(window._mm_cmInstance);
-            }
-            destroyOrphanedHosts(ta._mm_cm && ta._mm_cm._mm_host ? ta._mm_cm._mm_host : null);
-            if (ta._mm_cm && ta._mm_cm.dom && document.body.contains(ta._mm_cm.dom)) {
-                window._mm_cmInstance = ta._mm_cm;
+            var host = ensureHost();
+            if (window._mm_cmInstance && window._mm_cmInstance.dom) {
+                attachView(window._mm_cmInstance, ta, host);
+                destroyOrphanedHosts(host);
                 hideOverlay(ta);
                 installCmBridge();
                 watchEditorHost();
@@ -348,9 +517,7 @@
                 window._mm_setCmTheme();
                 return;
             }
-            if (ta._mm_cm) {
-                destroyView(ta._mm_cm);
-            }
+            destroyOrphanedHosts(host);
             var view = mountView(ta);
             if (!view) {
                 showFallback(ta);
@@ -376,8 +543,10 @@
     function applyPendingEditorValue() {
         if (typeof window._mm_pendingEditorValue !== 'string') return;
         var pending = window._mm_pendingEditorValue;
+        var tabId = window._mm_pendingEditorTabId;
         window._mm_pendingEditorValue = null;
-        if (window._mm_setEditorValue) window._mm_setEditorValue(pending);
+        window._mm_pendingEditorTabId = null;
+        if (window._mm_setEditorValue) window._mm_setEditorValue(pending, tabId);
     }
 
     /**
@@ -389,24 +558,23 @@
         if (!host || host._mm_cmObserver) return;
         host._mm_cmObserver = new MutationObserver(function () {
             if (window._mm_cmUpgrading) return;
-            var extras = host.querySelectorAll('.cm-host');
-            if (extras.length > 1) {
-                destroyOrphanedHosts(window._mm_cmInstance && window._mm_cmInstance._mm_host);
-            }
-            var ta = host.querySelector('.editor-textarea');
-            var live = window._mm_cmInstance &&
-                window._mm_cmInstance.dom &&
-                document.body.contains(window._mm_cmInstance.dom);
-            if (live) {
-                hideOverlay(ta);
-            }
-            if (ta && (!ta._mm_cm || !live) && cmApi()) {
-                if (!live && extras.length > 0) {
-                    destroyOrphanedHosts(null);
+            window._mm_cmUpgrading = true;
+            try {
+                var ta = host.querySelector('.editor-textarea');
+                var view = window._mm_cmInstance;
+                var cmHost = ensureHost();
+                if (view && view.dom && cmHost) {
+                    attachView(view, ta, cmHost);
+                    destroyOrphanedHosts(cmHost);
+                    hideOverlay(ta);
+                    return;
                 }
-                if (!host.querySelector('.cm-host')) {
+                if (ta && cmApi()) {
+                    window._mm_cmUpgrading = false;
                     window._mm_upgradeToCodeMirror();
                 }
+            } finally {
+                window._mm_cmUpgrading = false;
             }
         });
         host._mm_cmObserver.observe(host, { childList: true, subtree: true });
@@ -425,25 +593,69 @@
         });
     };
 
+    /**
+     * 设置自动换行（对应设置项 word_wrap）
+     * Set line wrapping (settings word_wrap)
+     */
+    window._mm_setWordWrap = function (enabled) {
+        window._mm_wordWrap = enabled === true || enabled === 1 || enabled === 'true';
+        var view = window._mm_cmInstance;
+        var CM = cmApi();
+        if (!view || !CM || !view._mm_wrap) return;
+        view.dispatch({
+            effects: view._mm_wrap.reconfigure(wrapExt(CM, window._mm_wordWrap))
+        });
+    };
+
+    /**
+     * 设置内核行号 gutter（对应设置项 line_numbers）
+     * Set the kernel line-number gutter (settings line_numbers)
+     */
+    window._mm_setLineNumbers = function (enabled) {
+        window._mm_lineNumbers = enabled === true || enabled === 1 || enabled === 'true';
+        var view = window._mm_cmInstance;
+        var CM = cmApi();
+        if (!view || !CM || !view._mm_line) return;
+        view.dispatch({
+            effects: view._mm_line.reconfigure(lineExt(CM, window._mm_lineNumbers))
+        });
+    };
+
+    /**
+     * 丢掉已关闭标签的内核状态
+     * Drop kernel state for closed tabs
+     */
+    window._mm_retainTabStates = function (ids) {
+        var keep = Object.create(null);
+        var list = Array.isArray(ids) ? ids : [];
+        for (var i = 0; i < list.length; i++) keep[String(list[i])] = true;
+        var states = window._mm_tabStates || Object.create(null);
+        var next = Object.create(null);
+        Object.keys(states).forEach(function (key) {
+            if (keep[key]) next[key] = states[key];
+        });
+        window._mm_tabStates = next;
+        if (window._mm_activeTabId != null && !keep[String(window._mm_activeTabId)]) {
+            window._mm_activeTabId = null;
+        }
+    };
+
+    /**
+     * 工作区相对路径，供 `](` 补全
+     * Workspace-relative paths for `](` completion
+     */
+    window._mm_setWorkspaceFiles = function (files) {
+        window._mm_workspaceFiles = Array.isArray(files) ? files : [];
+    };
+
     function installCmBridge() {
-        window._mm_setEditorValue = function (text) {
+        window._mm_setEditorValue = function (text, tabId) {
             if (typeof text !== 'string') text = String(text || '');
             if (window._mm_cmInstance) {
                 var view = window._mm_cmInstance;
-                var CM = cmApi();
-                window._mm_cmApplyingExternal = true;
-                try {
-                    if (view.state.doc.toString() !== text) {
-                        view.dispatch({
-                            changes: { from: 0, to: view.state.doc.length, insert: text },
-                            annotations: CM ? [CM.Transaction.addToHistory.of(false)] : []
-                        });
-                    }
-                    syncTextarea(view, view._mm_ta || document.querySelector('.editor-textarea'), false);
-                    window._mm_cmLastSent = text;
-                } finally {
-                    window._mm_cmApplyingExternal = false;
-                }
+                applyTabDocument(view, text, tabId);
+                syncTextarea(view, view._mm_ta || document.querySelector('.editor-textarea'), false);
+                window._mm_cmLastSent = text;
                 return;
             }
             var el = document.querySelector('.editor-textarea');
@@ -520,6 +732,36 @@
             if (!view || !CM) return false;
             if (op === 'redo') CM.redo(view);
             else CM.undo(view);
+            window._mm_cmLastSent = null;
+            syncTextarea(view, view._mm_ta || document.querySelector('.editor-textarea'), true);
+            return true;
+        };
+
+        /**
+         * 工具栏格式化：优先内核事务，失败则让 Rust 回退
+         * Toolbar format: prefer an in-kernel transaction, else let Rust fall back
+         */
+        window._mm_applyFormat = function (kind) {
+            var view = window._mm_cmInstance;
+            var CM = cmApi();
+            if (!view || !CM || typeof CM.applyMarkdownFormat !== 'function') return false;
+            var ok = CM.applyMarkdownFormat(view, String(kind || ''), placeholderText());
+            if (ok) {
+                window._mm_cmLastSent = null;
+                syncTextarea(view, view._mm_ta || document.querySelector('.editor-textarea'), true);
+                view.focus();
+            }
+            return ok;
+        };
+
+        /**
+         * 在光标处插入文本（图片、表格等）
+         * Insert text at the cursor (images, tables, and similar)
+         */
+        window._mm_insertText = function (text) {
+            var view = window._mm_cmInstance;
+            if (!view) return false;
+            insertAtCursor(view, typeof text === 'string' ? text : String(text || ''));
             window._mm_cmLastSent = null;
             syncTextarea(view, view._mm_ta || document.querySelector('.editor-textarea'), true);
             return true;
