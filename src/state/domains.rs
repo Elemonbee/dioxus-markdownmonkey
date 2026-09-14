@@ -8,8 +8,8 @@
 #[cfg(test)]
 use super::types::History as DocumentHistory;
 use super::types::{
-    AIConfig, ChatTurn, CloseTabSnapshot, Language, OutlineItem, SaveStatus, SidebarTab, TabId,
-    TabInfo, Theme,
+    AIConfig, AiApplyContext, ChatTurn, CloseTabSnapshot, Language, OutlineItem, SaveStatus,
+    SidebarTab, TabId, TabInfo, Theme,
 };
 use super::AppState;
 use crate::utils::file_encoding::FileEncoding;
@@ -88,6 +88,8 @@ pub struct AiState {
     pub ai_use_selection: Signal<bool>,
     pub ai_history: Signal<Vec<ChatTurn>>,
     pub ai_generation_id: Signal<u64>,
+    pub ai_apply_context: Signal<Option<AiApplyContext>>,
+    pub ai_translate_target: Signal<Language>,
     pub show_ai_chat: Signal<bool>,
     pub show_ai_result: Signal<bool>,
 }
@@ -168,6 +170,8 @@ impl AppState {
             ai_use_selection: self.ai_use_selection,
             ai_history: self.ai_history,
             ai_generation_id: self.ai_generation_id,
+            ai_apply_context: self.ai_apply_context,
+            ai_translate_target: self.ai_translate_target,
             show_ai_chat: self.show_ai_chat,
             show_ai_result: self.show_ai_result,
         }

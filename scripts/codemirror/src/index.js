@@ -36,6 +36,7 @@ import {
     syntaxTree,
 } from "@codemirror/language";
 import { highlightSelectionMatches } from "@codemirror/search";
+import { linter, lintGutter } from "@codemirror/lint";
 import {
     Compartment,
     EditorSelection,
@@ -53,6 +54,7 @@ import {
     highlightActiveLine,
     highlightActiveLineGutter,
     highlightSpecialChars,
+    hoverTooltip,
     keymap,
     lineNumbers,
     rectangularSelection,
@@ -551,11 +553,16 @@ function markdownCompletions(context) {
             .filter(
                 (file) => !typed || String(file).toLowerCase().includes(typed),
             )
-            .map((file) => ({
-                label: String(file),
-                type: "text",
-                apply: `](${file}`,
-            }));
+            .map((file) => {
+                const name = String(file);
+                const image = isImagePath(name);
+                return {
+                    label: name,
+                    type: image ? "image" : "text",
+                    detail: image ? "image" : "markdown",
+                    apply: `](${name}`,
+                };
+            });
         if (!options.length) return null;
         return { from: fileLink.from, options, validFor: /\]\([^)\s]*$/ };
     }
@@ -568,6 +575,204 @@ function markdownAutocompletion() {
         autocompletion({ activateOnTyping: true, icons: false }),
         markdownLanguage.data.of({ autocomplete: markdownCompletions }),
     ];
+}
+
+/**
+ * 是否为图片相对路径 / Whether a relative path looks like an image
+ */
+function isImagePath(path) {
+    return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(String(path || ""));
+}
+
+/**
+ * 规范化工作区相对路径 / Normalize a workspace-relative path
+ */
+function normalizeWorkspacePath(path) {
+    return String(path || "")
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "");
+}
+
+/**
+ * 链接目标是否存在于工作区文件列表 / Whether a link target exists in the workspace file list
+ */
+function workspaceHasPath(url) {
+    const files = Array.isArray(window._mm_workspaceFiles)
+        ? window._mm_workspaceFiles
+        : [];
+    if (!files.length) return null;
+    const norm = normalizeWorkspacePath(url);
+    const found = files.some((file) => {
+        const item = normalizeWorkspacePath(file);
+        return item === norm || item.endsWith("/" + norm);
+    });
+    return found;
+}
+
+/**
+ * 外部或锚点链接不检查本地文件 / Skip local-file checks for external or anchor URLs
+ */
+function isExternalOrAnchor(url) {
+    return /^(https?:|mailto:|#|data:)/i.test(String(url || "").trim());
+}
+
+/**
+ * 悬停显示链接、图片与脚注
+ * Hover tooltips for links, images, and footnotes
+ */
+function markdownHover() {
+    return hoverTooltip((view, pos) => {
+        const line = view.state.doc.lineAt(pos);
+        const rel = pos - line.from;
+        const text = line.text;
+        const linkRe = /(!?)\[([^\]]*)\]\(([^)]*)\)/g;
+        let match;
+        while ((match = linkRe.exec(text))) {
+            const start = match.index;
+            const end = start + match[0].length;
+            if (rel < start || rel > end) continue;
+            const isImage = match[1] === "!";
+            const alt = match[2] || "";
+            const url = (match[3] || "").trim();
+            return {
+                pos: line.from + start,
+                end: line.from + end,
+                above: true,
+                create() {
+                    const dom = document.createElement("div");
+                    const exists = isExternalOrAnchor(url)
+                        ? true
+                        : workspaceHasPath(url);
+                    const kind = isImage ? "Image" : "Link";
+                    let status = url || "(empty)";
+                    if (!url) status = "Empty target";
+                    else if (isExternalOrAnchor(url)) status = url;
+                    else if (exists === false) status = `${url} — missing`;
+                    else status = url;
+                    dom.className =
+                        exists === false || !url
+                            ? "cm-mm-hover cm-mm-hover-missing"
+                            : "cm-mm-hover";
+                    dom.textContent = alt
+                        ? `${kind}: ${status}\n${alt}`
+                        : `${kind}: ${status}`;
+                    return { dom };
+                },
+            };
+        }
+
+        const footnoteRe = /\[\^([^\]]+)\]/g;
+        while ((match = footnoteRe.exec(text))) {
+            const start = match.index;
+            const end = start + match[0].length;
+            if (rel < start || rel > end) continue;
+            const id = match[1];
+            const defRe = new RegExp(
+                `^\\[\\^${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]:\\s*(.*)$`,
+                "m",
+            );
+            const def = defRe.exec(view.state.doc.toString());
+            return {
+                pos: line.from + start,
+                end: line.from + end,
+                above: true,
+                create() {
+                    const dom = document.createElement("div");
+                    dom.className = def ? "cm-mm-hover" : "cm-mm-hover cm-mm-hover-missing";
+                    dom.textContent = def
+                        ? `Footnote: ${def[1] || "(empty)"}`
+                        : `Footnote [^${id}] is undefined`;
+                    return { dom };
+                },
+            };
+        }
+        return null;
+    });
+}
+
+/**
+ * 轻量 Markdown lint：未闭合围栏、空链接、缺失路径、标题跳级
+ * Lightweight Markdown lint: unclosed fences, empty links, missing paths, heading skips
+ */
+function markdownDiagnostics(view) {
+    const diagnostics = [];
+    const doc = view.state.doc;
+    if (doc.length > 200000) return diagnostics;
+    const hasWorkspace = Array.isArray(window._mm_workspaceFiles)
+        && window._mm_workspaceFiles.length > 0;
+
+    let inFence = false;
+    let fenceFrom = 0;
+    let fenceTo = 0;
+    let lastHeading = 0;
+    for (let i = 1; i <= doc.lines; i++) {
+        const line = doc.line(i);
+        const text = line.text;
+        if (/^(`{3,}|~{3,})/.test(text)) {
+            if (!inFence) {
+                inFence = true;
+                fenceFrom = line.from;
+                fenceTo = line.to;
+            } else {
+                inFence = false;
+            }
+            continue;
+        }
+        if (inFence) continue;
+
+        const heading = text.match(/^(#{1,6})(?=\s|$)/);
+        if (heading) {
+            const level = heading[1].length;
+            if (lastHeading && level > lastHeading + 1) {
+                diagnostics.push({
+                    from: line.from,
+                    to: line.from + level,
+                    severity: "info",
+                    message: "Heading level skipped",
+                });
+            }
+            lastHeading = level;
+        }
+
+        const linkRe = /(!?)\[([^\]]*)\]\(([^)]*)\)/g;
+        let match;
+        while ((match = linkRe.exec(text))) {
+            const from = line.from + match.index;
+            const to = from + match[0].length;
+            const url = (match[3] || "").trim();
+            if (!url) {
+                diagnostics.push({
+                    from,
+                    to,
+                    severity: "warning",
+                    message: "Empty link target",
+                });
+                continue;
+            }
+            if (!hasWorkspace || isExternalOrAnchor(url)) continue;
+            if (workspaceHasPath(url) === false) {
+                diagnostics.push({
+                    from,
+                    to,
+                    severity: "info",
+                    message: "Path not found in workspace",
+                });
+            }
+        }
+    }
+    if (inFence) {
+        diagnostics.push({
+            from: fenceFrom,
+            to: fenceTo,
+            severity: "warning",
+            message: "Unclosed code fence",
+        });
+    }
+    return diagnostics;
+}
+
+function markdownLint() {
+    return [lintGutter(), linter(markdownDiagnostics, { delay: 750 })];
 }
 
 window.MarkdownMonkeyCM = {
@@ -615,6 +820,8 @@ window.MarkdownMonkeyCM = {
     highlightSelectionMatches,
     taskCheckbox,
     markdownAutocompletion,
+    markdownHover,
+    markdownLint,
     applyMarkdownFormat,
     lightTheme,
     darkTheme,

@@ -1,6 +1,6 @@
 //! AI 服务 - 处理与 AI API 的交互 / AI Service - Handle AI API Interactions
 
-use crate::state::AIProvider;
+use crate::state::{AIProvider, AiApplyContext, Language};
 use futures_util::{Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -758,6 +758,133 @@ pub fn selected_ai_context(content: &str, start: usize, end: usize) -> Option<St
     }
 }
 
+/// 按字符数截断 AI 上下文并附上截断标记
+/// Truncate AI context by char count and append a truncation marker
+pub fn truncate_ai_context(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+    let mut truncated: String = content.chars().take(max_chars).collect();
+    truncated.push_str("\n\n[... truncated / 已截断 ...]");
+    truncated
+}
+
+/// 第 n 个字符对应的 UTF-8 字节偏移（越界则返回全文长度）
+/// UTF-8 byte offset of the n-th character (or the full length when out of range)
+fn byte_of_nth_char(text: &str, n: usize) -> usize {
+    text.char_indices()
+        .nth(n)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
+}
+
+/// 把字节光标对齐到字符边界
+/// Snap a byte cursor onto a char boundary
+fn snap_cursor_bytes(text: &str, cursor_bytes: usize) -> usize {
+    let mut cursor = cursor_bytes.min(text.len());
+    while cursor > 0 && !text.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+/// 按字数取光标附近窗口，过长时加 `[...]` 标记
+/// Take a character window around the cursor; mark with `[...]` when clipped
+pub fn clip_text_window(text: &str, cursor_bytes: usize, max_chars: usize) -> String {
+    let max_chars = max_chars.max(1);
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+
+    let cursor = snap_cursor_bytes(text, cursor_bytes);
+    let cursor_chars = text[..cursor].chars().count();
+    let half = max_chars / 2;
+    let mut start_chars = cursor_chars.saturating_sub(half);
+    if start_chars + max_chars > total {
+        start_chars = total.saturating_sub(max_chars);
+    }
+    let end_chars = start_chars + max_chars;
+    let start_byte = byte_of_nth_char(text, start_chars);
+    let end_byte = byte_of_nth_char(text, end_chars);
+
+    let mut out = String::new();
+    if start_byte > 0 {
+        out.push_str("[...]\n");
+    }
+    out.push_str(&text[start_byte..end_byte]);
+    if end_byte < text.len() {
+        out.push_str("\n[...]");
+    }
+    out
+}
+
+/// 按字数保留文本尾部，过长时加 `[...]` 标记
+/// Keep the tail of text within a character budget; mark with `[...]` when clipped
+pub fn clip_chars_tail(text: &str, max_chars: usize) -> String {
+    let max_chars = max_chars.max(1);
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+    let start_byte = byte_of_nth_char(text, total - max_chars);
+    let mut out = String::from("[...]\n");
+    out.push_str(&text[start_byte..]);
+    out
+}
+
+/// 聊天附带的文档上下文：有选区则截选区尾部，否则取光标附近窗口
+/// Chat document context: clip the selection tail when present, else a window around the cursor
+pub fn clip_chat_document_context(
+    text: &str,
+    selection: Option<&str>,
+    cursor_bytes: usize,
+    max_chars: usize,
+) -> String {
+    match selection {
+        Some(sel) if !sel.is_empty() => clip_chars_tail(sel, max_chars),
+        _ => clip_text_window(text, cursor_bytes, max_chars),
+    }
+}
+
+/// 在文档中定位应被 AI 结果替换的字节范围
+/// Locate the byte range that an AI result should replace
+pub fn find_ai_replace_range(content: &str, ctx: &AiApplyContext) -> Option<(usize, usize)> {
+    if ctx.source_text.is_empty() {
+        return None;
+    }
+
+    let mut start = ctx.source_start.min(content.len());
+    let mut end = ctx.source_end.min(content.len());
+    while start > 0 && !content.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < content.len() && !content.is_char_boundary(end) {
+        end += 1;
+    }
+
+    if start < end && content[start..end] == ctx.source_text {
+        return Some((start, end));
+    }
+    content
+        .find(&ctx.source_text)
+        .map(|i| (i, i + ctx.source_text.len()))
+}
+
+/// 在选区结束后插入时补上合适的换行
+/// Choose a newline gap when inserting after a selection
+pub fn ai_insert_after_payload(content: &str, offset: usize, text: &str) -> String {
+    let offset = offset.min(content.len());
+    let gap = if offset == 0 || content[..offset].ends_with("\n\n") {
+        ""
+    } else if content[..offset].ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    format!("{gap}{text}")
+}
+
 /// AI 任务类型枚举 / AI Task Type Enum
 ///
 /// 将 6 个独立的 builder 函数统一为一个枚举，
@@ -778,6 +905,34 @@ pub enum AITask {
     FixGrammar,
     /// 自定义请求 / Custom prompt
     Custom,
+}
+
+/// AI 结果写回文档的方式 / How an AI result is written back into the document
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiApplyKind {
+    /// 插在选区后面 / Insert after the selection
+    InsertAfterSelection,
+    /// 替换选区 / Replace the selection
+    ReplaceSelection,
+    /// 插入当前光标 / Insert at the cursor
+    InsertCursor,
+    /// 追加到文末 / Append to the document
+    Append,
+    /// 替换全文 / Replace the whole document
+    ReplaceDocument,
+}
+
+impl AiApplyKind {
+    /// 按钮文案的 i18n key / i18n key for the apply-button label
+    pub fn i18n_key(self) -> &'static str {
+        match self {
+            Self::InsertAfterSelection => "ai_insert_after_selection",
+            Self::ReplaceSelection => "ai_replace_selection",
+            Self::InsertCursor => "ai_insert_cursor",
+            Self::Append => "append",
+            Self::ReplaceDocument => "replace_doc",
+        }
+    }
 }
 
 impl AITask {
@@ -806,6 +961,77 @@ impl AITask {
         }
     }
 
+    /// 该任务在选区/全文下的主写回动作
+    /// Primary apply action for this task given selection vs full document
+    pub fn primary_apply_kind(self, used_selection: bool) -> AiApplyKind {
+        match (self, used_selection) {
+            (Self::Continue, true) | (Self::Outline, true) => AiApplyKind::InsertAfterSelection,
+            (Self::Continue, false) => AiApplyKind::Append,
+            (Self::Improve | Self::Translate | Self::FixGrammar, true) => {
+                AiApplyKind::ReplaceSelection
+            }
+            (Self::Improve | Self::Translate | Self::FixGrammar, false) => {
+                AiApplyKind::ReplaceDocument
+            }
+            (Self::Outline, false) | (Self::Custom, _) => AiApplyKind::InsertCursor,
+        }
+    }
+
+    /// 结果弹窗上展示的写回动作（第一项为主按钮）
+    /// Apply actions shown on the result modal (first item is primary)
+    pub fn apply_kinds(self, used_selection: bool) -> Vec<AiApplyKind> {
+        let primary = self.primary_apply_kind(used_selection);
+        let rest: &[AiApplyKind] = match (self, used_selection) {
+            (Self::Continue, true) => &[
+                AiApplyKind::InsertCursor,
+                AiApplyKind::Append,
+                AiApplyKind::ReplaceSelection,
+            ],
+            (Self::Continue, false) => &[AiApplyKind::InsertCursor, AiApplyKind::ReplaceDocument],
+            (Self::Improve | Self::Translate | Self::FixGrammar, true) => &[
+                AiApplyKind::InsertAfterSelection,
+                AiApplyKind::InsertCursor,
+                AiApplyKind::Append,
+            ],
+            (Self::Improve | Self::Translate | Self::FixGrammar, false) => {
+                &[AiApplyKind::InsertCursor, AiApplyKind::Append]
+            }
+            (Self::Outline, true) => &[AiApplyKind::InsertCursor, AiApplyKind::Append],
+            (Self::Outline, false) => &[AiApplyKind::Append],
+            (Self::Custom, true) => &[
+                AiApplyKind::InsertAfterSelection,
+                AiApplyKind::Append,
+                AiApplyKind::ReplaceSelection,
+            ],
+            (Self::Custom, false) => &[AiApplyKind::Append, AiApplyKind::ReplaceDocument],
+        };
+        let mut kinds = Vec::with_capacity(1 + rest.len());
+        kinds.push(primary);
+        kinds.extend(rest.iter().copied().filter(|kind| *kind != primary));
+        kinds
+    }
+
+    /// 是否适合原文/结果对照（原地改写任务）
+    /// Whether original-vs-result compare is useful (in-place rewrite tasks)
+    pub fn shows_compare(self, used_selection: bool) -> bool {
+        used_selection && matches!(self, Self::Improve | Self::Translate | Self::FixGrammar)
+    }
+
+    /// 预设任务必须基于选区；聊天（Custom）不强制
+    /// Preset tasks require a selection; chat (Custom) does not
+    pub fn requires_selection(self) -> bool {
+        matches!(
+            self,
+            Self::Continue | Self::Improve | Self::Outline | Self::Translate | Self::FixGrammar
+        )
+    }
+
+    /// 只有聊天才带上会话历史和全局 system，避免续写历史把翻译带跑偏
+    /// Only chat attaches transcript and the global system prompt, so a prior Continue cannot hijack Translate
+    pub fn uses_chat_session(self) -> bool {
+        matches!(self, Self::Custom)
+    }
+
     /// 构建消息列表 / Build message list
     ///
     /// - `content`: 编辑器当前文档内容
@@ -827,9 +1053,31 @@ impl AITask {
         history: &[crate::state::ChatTurn],
         global_system: &str,
     ) -> Vec<Message> {
+        self.build_messages_localized(
+            content,
+            input,
+            history,
+            global_system,
+            Language::ZhCN,
+            Language::EnUS,
+        )
+    }
+
+    /// 按 UI 语言与翻译目标构建带历史的消息
+    /// Build history-aware messages using UI language and translate target
+    pub fn build_messages_localized(
+        &self,
+        content: &str,
+        input: &str,
+        history: &[crate::state::ChatTurn],
+        global_system: &str,
+        ui_lang: Language,
+        translate_target: Language,
+    ) -> Vec<Message> {
         const MAX_HISTORY_TURNS: usize = 10;
 
-        let (task_system, user_content) = self.build_prompts(content, input);
+        let (task_system, user_content) =
+            self.build_prompts(content, input, ui_lang, translate_target);
         let system_prompt = if global_system.trim().is_empty() {
             task_system
         } else {
@@ -855,42 +1103,130 @@ impl AITask {
     }
 
     /// 生成本轮写入历史的用户文本摘要 / User-turn text stored into history
+    #[allow(dead_code)]
     pub fn history_user_summary(&self, content: &str, input: &str) -> String {
-        let (_, user_content) = self.build_prompts(content, input);
+        self.history_user_summary_localized(content, input, Language::ZhCN, Language::EnUS)
+    }
+
+    /// 按 UI 语言生成本轮写入历史的用户摘要
+    /// Localized user-turn text stored into history
+    pub fn history_user_summary_localized(
+        &self,
+        content: &str,
+        input: &str,
+        ui_lang: Language,
+        translate_target: Language,
+    ) -> String {
+        if matches!(self, Self::Custom) {
+            return input.trim().to_string();
+        }
+        let (_, user_content) = self.build_prompts(content, input, ui_lang, translate_target);
         user_content
     }
 
     /// 生成 system prompt 和 user content / Generate system prompt and user content
-    fn build_prompts(&self, content: &str, input: &str) -> (String, String) {
+    fn build_prompts(
+        &self,
+        content: &str,
+        input: &str,
+        ui_lang: Language,
+        translate_target: Language,
+    ) -> (String, String) {
+        let zh = matches!(ui_lang, Language::ZhCN);
+        let target_name = match (zh, translate_target) {
+            (true, Language::EnUS) => "英文",
+            (true, Language::ZhCN) => "简体中文",
+            (false, Language::EnUS) => "English",
+            (false, Language::ZhCN) => "Simplified Chinese",
+        };
         match self {
-            Self::Continue => (
-                "你是一个专业的写作助手。请根据用户提供的文本，自然地续写内容。续写应该与原文风格一致，内容连贯。".to_string(),
-                format!("请续写以下文本：\n\n{}", content),
-            ),
-            Self::Improve => (
-                "你是一个专业的文字编辑。请优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。".to_string(),
-                format!("请优化以下文本：\n\n{}", content),
-            ),
-            Self::Outline => (
-                "你是一个专业的内容策划师。请根据用户提供的主题，生成一个详细的 Markdown 格式大纲。使用 #、##、### 等标题层级。".to_string(),
-                format!("请为以下主题生成一个详细的大纲：\n\n{}", if input.is_empty() { content } else { input }),
-            ),
-            Self::Translate => (
-                "你是一个专业的翻译师。请将用户提供的文本翻译成English。保持原文的格式和风格。".to_string(),
-                content.to_string(),
-            ),
-            Self::FixGrammar => (
-                "你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误。只返回修正后的文本，不要解释。".to_string(),
-                content.to_string(),
-            ),
-            Self::Custom => (
-                if input.is_empty() {
-                    "你是一个智能助手。请根据用户的要求提供帮助。".to_string()
+            Self::Continue => {
+                if zh {
+                    (
+                        "你是一个专业的写作助手。请根据用户提供的文本，自然地续写内容。续写应该与原文风格一致，内容连贯。".to_string(),
+                        format!("请续写以下文本：\n\n{}", content),
+                    )
                 } else {
+                    (
+                        "You are a professional writing assistant. Continue the user's text naturally, matching its style and staying coherent.".to_string(),
+                        format!("Continue the following text:\n\n{}", content),
+                    )
+                }
+            }
+            Self::Improve => {
+                if zh {
+                    (
+                        "你是一个专业的文字编辑。请优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。".to_string(),
+                        format!("请优化以下文本：\n\n{}", content),
+                    )
+                } else {
+                    (
+                        "You are a professional editor. Improve the user's text so it is clearer, smoother, and more professional, without changing the core meaning.".to_string(),
+                        format!("Improve the following text:\n\n{}", content),
+                    )
+                }
+            }
+            Self::Outline => {
+                let topic = if input.is_empty() { content } else { input };
+                if zh {
+                    (
+                        "你是一个专业的内容策划师。请根据用户提供的主题，生成一个详细的 Markdown 格式大纲。使用 #、##、### 等标题层级。".to_string(),
+                        format!("请为以下主题生成一个详细的大纲：\n\n{}", topic),
+                    )
+                } else {
+                    (
+                        "You are a professional content planner. Create a detailed Markdown outline from the user's topic using #, ##, and ### headings.".to_string(),
+                        format!("Create a detailed outline for the following topic:\n\n{}", topic),
+                    )
+                }
+            }
+            Self::Translate => {
+                if zh {
+                    (
+                        format!(
+                            "你是一个专业的翻译师。请将用户提供的文本翻译成{}。保持原文的格式和风格。只返回译文，不要续写，不要解释。",
+                            target_name
+                        ),
+                        format!("请将以下文本翻译成{}：\n\n{}", target_name, content),
+                    )
+                } else {
+                    (
+                        format!(
+                            "You are a professional translator. Translate the user's text into {}. Preserve formatting and style. Return only the translation; do not continue the text or add explanations.",
+                            target_name
+                        ),
+                        format!("Translate the following text into {}:\n\n{}", target_name, content),
+                    )
+                }
+            }
+            Self::FixGrammar => {
+                if zh {
+                    (
+                        "你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误。只返回修正后的文本，不要解释。".to_string(),
+                        content.to_string(),
+                    )
+                } else {
+                    (
+                        "You are a professional proofreader. Fix grammar, spelling, and punctuation in the user's text. Return only the corrected text with no explanation.".to_string(),
+                        content.to_string(),
+                    )
+                }
+            }
+            Self::Custom => {
+                let system = if zh {
+                    "你是 Markdown 写作助手。根据用户的问题和当前提供的文档上下文回答。上下文可能只是选区或光标附近的片段；不要把上下文当成续写或翻译任务，除非用户明确要求。".to_string()
+                } else {
+                    "You are a Markdown writing assistant. Answer the user's question using the attached document context. The context may be a selection or a window around the cursor. Do not continue or translate unless the user asks.".to_string()
+                };
+                let user = if content.trim().is_empty() {
                     input.to_string()
-                },
-                content.to_string(),
-            ),
+                } else if zh {
+                    format!("【文档上下文】\n{}\n\n【问题】\n{}", content, input)
+                } else {
+                    format!("Document context:\n{}\n\nQuestion:\n{}", content, input)
+                };
+                (system, user)
+            }
         }
     }
 }
@@ -1189,17 +1525,20 @@ mod tests {
     #[test]
     fn test_ai_task_build_messages_custom_with_input() {
         let msgs = AITask::Custom.build_messages("doc content", "Summarize this");
-        assert_eq!(msgs[0].content, "Summarize this");
-        assert_eq!(msgs[1].content, "doc content");
+        assert!(msgs[0].content.contains("写作助手"));
+        assert!(msgs[1].content.contains("doc content"));
+        assert!(msgs[1].content.contains("Summarize this"));
+        assert_eq!(
+            AITask::Custom.history_user_summary("doc content", "Summarize this"),
+            "Summarize this"
+        );
     }
 
     #[test]
     fn test_ai_task_build_messages_custom_empty_input() {
         let msgs = AITask::Custom.build_messages("doc content", "");
-        assert_eq!(
-            msgs[0].content,
-            "你是一个智能助手。请根据用户的要求提供帮助。"
-        );
+        assert!(msgs[0].content.contains("写作助手"));
+        assert!(msgs[1].content.contains("【文档上下文】"));
     }
 
     #[test]
@@ -1234,7 +1573,9 @@ mod tests {
         assert_eq!(msgs[2].role, "assistant");
         assert_eq!(msgs[2].content, "first answer");
         assert_eq!(msgs[3].role, "user");
-        assert_eq!(msgs[3].content, "doc");
+        assert!(msgs[3].content.contains("doc"));
+        assert!(msgs[3].content.contains("Summarize"));
+        assert_ne!(msgs[3].content, "doc");
     }
 
     /// 空全局提示词不得改变原任务消息
@@ -1246,6 +1587,189 @@ mod tests {
         assert_eq!(original[0].role(), with_empty[0].role());
         assert_eq!(original[0].content(), with_empty[0].content());
         assert_eq!(original[1].content(), with_empty[1].content());
+    }
+
+    /// 英文 UI 应生成英文任务提示词 / English UI should produce English task prompts
+    #[test]
+    fn test_ai_task_build_messages_english_prompts() {
+        use crate::state::Language;
+        let msgs = AITask::Continue.build_messages_localized(
+            "Hello world",
+            "",
+            &[],
+            "",
+            Language::EnUS,
+            Language::ZhCN,
+        );
+        assert!(msgs[0].content.contains("writing assistant"));
+        assert!(msgs[1].content.contains("Continue the following text"));
+        assert!(msgs[1].content.contains("Hello world"));
+    }
+
+    /// 翻译目标语言应写入 system prompt / Translate target language should appear in the system prompt
+    #[test]
+    fn test_ai_task_translate_target_language() {
+        use crate::state::Language;
+        let to_zh = AITask::Translate.build_messages_localized(
+            "Hello",
+            "",
+            &[],
+            "",
+            Language::EnUS,
+            Language::ZhCN,
+        );
+        assert!(to_zh[0].content.contains("Simplified Chinese"));
+        assert!(to_zh[1]
+            .content
+            .contains("Translate the following text into Simplified Chinese"));
+        assert!(to_zh[1].content.contains("Hello"));
+
+        let to_en = AITask::Translate.build_messages_localized(
+            "你好",
+            "",
+            &[],
+            "",
+            Language::ZhCN,
+            Language::EnUS,
+        );
+        assert!(to_en[0].content.contains("英文"));
+        assert!(to_en[0].content.contains("不要续写"));
+        assert!(to_en[1].content.contains("请将以下文本翻译成英文"));
+        assert!(to_en[1].content.contains("你好"));
+        assert!(!to_en[1].content.contains("请续写"));
+        assert!(!AITask::Translate.uses_chat_session());
+        assert!(AITask::Custom.uses_chat_session());
+    }
+
+    /// 超长上下文按字符截断 / Long context is truncated by char count
+    #[test]
+    fn test_truncate_ai_context() {
+        let text = "你好世界abcd";
+        assert_eq!(truncate_ai_context(text, 100), text);
+        let truncated = truncate_ai_context(text, 4);
+        assert!(truncated.starts_with("你好世界"));
+        assert!(truncated.contains("truncated"));
+    }
+
+    /// 替换范围优先使用记录的选区，否则回退搜索
+    /// Replace range prefers the recorded span, then falls back to search
+    #[test]
+    fn test_find_ai_replace_range() {
+        let content = "你好世界";
+        let mut ctx = AiApplyContext {
+            task_id: "improve".into(),
+            used_selection: true,
+            source_start: "你".len(),
+            source_end: "你好世".len(),
+            source_text: "好世".into(),
+            request_content: "好世".into(),
+            request_input: String::new(),
+            is_error: false,
+        };
+        assert_eq!(
+            find_ai_replace_range(content, &ctx),
+            Some(("你".len(), "你好世".len()))
+        );
+
+        ctx.source_start = 0;
+        ctx.source_end = 1;
+        assert_eq!(
+            find_ai_replace_range(content, &ctx),
+            Some(("你".len(), "你好世".len()))
+        );
+
+        ctx.source_text.clear();
+        assert_eq!(find_ai_replace_range(content, &ctx), None);
+    }
+
+    /// 选区后续写主动作是插在选区后；优化/翻译/语法是替换原文
+    /// Continue-after-selection inserts after; improve/translate/grammar replace in place
+    #[test]
+    fn test_ai_task_apply_kinds() {
+        assert_eq!(
+            AITask::Continue.primary_apply_kind(true),
+            AiApplyKind::InsertAfterSelection
+        );
+        assert_eq!(
+            AITask::Continue.primary_apply_kind(false),
+            AiApplyKind::Append
+        );
+        assert_eq!(
+            AITask::Improve.primary_apply_kind(true),
+            AiApplyKind::ReplaceSelection
+        );
+        assert_eq!(
+            AITask::Translate.primary_apply_kind(false),
+            AiApplyKind::ReplaceDocument
+        );
+        assert_eq!(
+            AITask::Outline.primary_apply_kind(true),
+            AiApplyKind::InsertAfterSelection
+        );
+        assert_eq!(
+            AITask::FixGrammar.primary_apply_kind(true),
+            AiApplyKind::ReplaceSelection
+        );
+        assert_eq!(
+            AITask::Custom.primary_apply_kind(false),
+            AiApplyKind::InsertCursor
+        );
+        assert_eq!(
+            AITask::Custom.primary_apply_kind(true),
+            AiApplyKind::InsertCursor
+        );
+        assert_eq!(
+            AITask::Continue.apply_kinds(true)[0],
+            AiApplyKind::InsertAfterSelection
+        );
+        assert!(!AITask::Continue.shows_compare(true));
+        assert!(AITask::Improve.shows_compare(true));
+        assert!(!AITask::Improve.shows_compare(false));
+        assert!(!AITask::Custom.shows_compare(true));
+        assert!(AITask::Continue.requires_selection());
+        assert!(AITask::Improve.requires_selection());
+        assert!(AITask::Outline.requires_selection());
+        assert!(AITask::Translate.requires_selection());
+        assert!(AITask::FixGrammar.requires_selection());
+        assert!(!AITask::Custom.requires_selection());
+    }
+
+    /// 聊天上下文按字数裁剪：选区取尾部，否则取光标窗口
+    /// Chat context is clipped by char budget: selection tail, else a cursor window
+    #[test]
+    fn test_clip_chat_document_context() {
+        let doc = "abcdefghij";
+        assert_eq!(clip_text_window(doc, 0, 20), doc);
+        let window = clip_text_window(doc, 5, 4);
+        assert!(window.contains("defg"));
+        assert!(window.contains("[...]"));
+
+        let tail = clip_chars_tail("一二三四五六七八九十", 3);
+        assert!(tail.ends_with("八九十"));
+        assert!(tail.starts_with("[...]"));
+
+        let from_sel = clip_chat_document_context(doc, Some("xyz123"), 0, 3);
+        assert!(from_sel.ends_with("123"));
+        let from_cursor = clip_chat_document_context(doc, None, 0, 3);
+        assert!(from_cursor.contains("abc"));
+    }
+
+    /// 插在选区后应补空行，已有空行则不再加
+    /// Insert-after adds a blank line unless one is already present
+    #[test]
+    fn test_ai_insert_after_payload() {
+        assert_eq!(
+            ai_insert_after_payload("你好世界", "你好".len(), "续"),
+            "\n\n续"
+        );
+        assert_eq!(
+            ai_insert_after_payload("你好\n", "你好\n".len(), "续"),
+            "\n续"
+        );
+        assert_eq!(
+            ai_insert_after_payload("你好\n\n", "你好\n\n".len(), "续"),
+            "续"
+        );
     }
 
     #[test]

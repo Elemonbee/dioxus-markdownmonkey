@@ -205,6 +205,12 @@ fn test_language_default() {
 }
 
 #[test]
+fn test_language_default_translate_target() {
+    assert_eq!(Language::ZhCN.default_translate_target(), Language::EnUS);
+    assert_eq!(Language::EnUS.default_translate_target(), Language::ZhCN);
+}
+
+#[test]
 fn test_save_status_default() {
     assert_eq!(SaveStatus::default(), SaveStatus::Saved);
 }
@@ -219,6 +225,10 @@ fn test_ai_config_default() {
     assert_eq!(config.model, "gpt-4o-mini");
     assert!(config.api_key.is_empty());
     assert_eq!(config.temperature, 0.7);
+    assert_eq!(
+        config.chat_context_chars,
+        crate::config::AI_CHAT_CONTEXT_DEFAULT_CHARS
+    );
 }
 
 #[test]

@@ -53,6 +53,13 @@ pub const OUTLINE_LIMIT_THRESHOLD_BYTES: usize = 500 * 1024;
 /// Maximum headings extracted for large files.
 pub const OUTLINE_LARGE_FILE_MAX_HEADINGS: usize = 100;
 
+/// AI 上下文超过该字符数时弹出确认 / Warn when AI context exceeds this many chars
+pub const AI_CONTEXT_WARN_CHARS: usize = 32_000;
+/// AI 上下文硬上限：超出则截断 / Hard cap: truncate AI context beyond this many chars
+pub const AI_CONTEXT_HARD_MAX_CHARS: usize = 100_000;
+/// 结果对比面板最大原文长度 / Max original length shown in the AI compare pane
+pub const AI_COMPARE_MAX_CHARS: usize = 4_000;
+
 /// File watcher poll interval when a file is open and events are unavailable.
 pub const FILE_WATCH_ACTIVE_INTERVAL_MS: u64 = 500;
 
@@ -97,3 +104,15 @@ pub const CODE_HIGHLIGHT_MAX_BYTES: usize = 64 * 1024;
 /// Mermaid 源码超过此尺寸则只转义、不交给图表引擎（字节）
 /// Skip Mermaid rendering for diagrams larger than this (bytes)
 pub const MERMAID_MAX_BYTES: usize = 64 * 1024;
+
+/// 聊天附带文档上下文的默认/最小/最大字数
+/// Default / min / max character budget for chat document context
+pub const AI_CHAT_CONTEXT_DEFAULT_CHARS: usize = 4_000;
+pub const AI_CHAT_CONTEXT_MIN_CHARS: usize = 500;
+pub const AI_CHAT_CONTEXT_MAX_CHARS: usize = 32_000;
+
+/// 把聊天上下文上限夹到允许范围
+/// Clamp the chat context character budget to the allowed range
+pub fn clamp_chat_context_chars(n: usize) -> usize {
+    n.clamp(AI_CHAT_CONTEXT_MIN_CHARS, AI_CHAT_CONTEXT_MAX_CHARS)
+}

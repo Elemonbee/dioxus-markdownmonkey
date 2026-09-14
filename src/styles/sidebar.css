@@ -452,6 +452,43 @@
   background-color: var(--bg-hover);
 }
 
+.context-menu-item:disabled,
+.context-menu-item.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.context-menu-item:disabled:hover,
+.context-menu-item.disabled:hover {
+  background-color: transparent;
+}
+
+.context-menu-item.has-submenu {
+  justify-content: space-between;
+}
+
+.context-menu-caret {
+  color: var(--text-secondary);
+  margin-left: 12px;
+}
+
+.context-menu-submenu-host {
+  position: relative;
+}
+
+.context-submenu {
+  position: absolute;
+  left: calc(100% - 2px);
+  top: -6px;
+  min-width: 168px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  z-index: 1001;
+}
+
 .context-menu-item.danger {
   color: var(--accent-error);
 }

@@ -2,8 +2,14 @@
 //!
 //! 处理主题切换、语言切换、侧边栏等全局操作
 
-use crate::config::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
-use crate::state::{AIProvider, AppState, Language, SidebarTab, Theme};
+use crate::actions::EditorActions;
+use crate::config::{clamp_chat_context_chars, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
+use crate::services::ai::{
+    clip_chat_document_context, format_ai_error, selected_ai_context, truncate_ai_context,
+    AIService, AITask,
+};
+use crate::state::{AIProvider, AiApplyContext, AppState, Language, SidebarTab, Theme};
+use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt};
 use std::sync::Mutex;
 
@@ -94,24 +100,34 @@ impl AppActions {
         *state.ui().show_shortcuts.write() = false;
     }
 
-    /// 显示 AI 聊天弹窗 / Show AI Chat Modal
+    /// 显示 AI 聊天弹窗；结果已关却仍 loading 时复位，避免空白窗
+    /// Show the AI chat modal; reset a stuck loading flag if the result modal is already closed
     pub fn show_ai_chat(state: &mut AppState) {
-        let doc = state.document();
-        let ui = state.ui();
-        let mut ai = state.ai();
-        let content = doc.content.read();
-        let has_selection = crate::services::ai::selected_ai_context(
-            &content,
-            *ui.cursor_start.read(),
-            *ui.cursor_end.read(),
-        )
-        .is_some();
-        *ai.ai_use_selection.write() = has_selection;
-        *ai.show_ai_chat.write() = true;
+        let has_selection = {
+            let doc = state.document();
+            let ui = state.ui();
+            let content = doc.content.read();
+            let start = *ui.cursor_start.read();
+            let end = *ui.cursor_end.read();
+            crate::services::ai::selected_ai_context(&content, start, end).is_some()
+        };
+        Self::set_ai_use_selection(state, has_selection);
+        let stuck_loading = *state.ai().ai_loading.read()
+            && !*state.ai().show_ai_result.read()
+            && !*state.ai().show_ai_chat.read();
+        if stuck_loading {
+            Self::cancel_ai_generation(state);
+        }
+        *state.ai().show_ai_chat.write() = true;
     }
 
-    /// 隐藏 AI 聊天弹窗 / Hide AI Chat Modal
+    /// 隐藏 AI 聊天弹窗；若正在聊则取消生成
+    /// Hide the AI chat modal; cancel an in-flight chat generation
     pub fn hide_ai_chat(state: &mut AppState) {
+        let chat_streaming = *state.ai().ai_loading.read() && !*state.ai().show_ai_result.read();
+        if chat_streaming {
+            Self::cancel_ai_generation(state);
+        }
         *state.ai().show_ai_chat.write() = false;
     }
 
@@ -120,8 +136,12 @@ impl AppActions {
         *state.ai().show_ai_result.write() = true;
     }
 
-    /// 隐藏 AI 结果弹窗 / Hide AI Result Modal
+    /// 隐藏 AI 结果弹窗；生成中则先取消
+    /// Hide the AI result modal; cancel an in-flight generation first
     pub fn hide_ai_result(state: &mut AppState) {
+        if *state.ai().ai_loading.read() {
+            Self::cancel_ai_generation(state);
+        }
         *state.ai().show_ai_result.write() = false;
     }
 
@@ -180,12 +200,18 @@ impl AppActions {
     pub fn start_ai_generation(state: &mut AppState) -> (u64, tokio::sync::watch::Receiver<bool>) {
         let (tx, rx) = tokio::sync::watch::channel(false);
         if let Ok(mut guard) = AI_CANCEL_TX.lock() {
+            if let Some(old) = guard.take() {
+                let _ = old.send(true);
+            }
             *guard = Some(tx);
         }
         let mut ai = state.ai();
         let next = *ai.ai_generation_id.read() + 1;
         *ai.ai_generation_id.write() = next;
         *ai.ai_loading.write() = true;
+        if let Some(ctx) = ai.ai_apply_context.write().as_mut() {
+            ctx.is_error = false;
+        }
         (next, rx)
     }
 
@@ -203,20 +229,11 @@ impl AppActions {
         *ai.ai_loading.write() = false;
     }
 
-    /// 从结果弹窗继续提问：关闭结果、打开聊天并预填上次用户问题
-    /// Follow up from result modal: hide result, show chat, prefill last user turn
+    /// 从结果弹窗打开聊天，不预填任务提示词
+    /// Open chat from the result modal without prefilling task prompts
     pub fn follow_up_ai_chat(state: &mut AppState) {
-        let mut ai = state.ai();
-        let prefill = ai
-            .ai_history
-            .read()
-            .iter()
-            .rev()
-            .find(|t| t.role == "user")
-            .map(|t| t.content.clone())
-            .unwrap_or_default();
-        *ai.ai_input.write() = prefill;
-        *ai.show_ai_result.write() = false;
+        *state.ai().ai_input.write() = String::new();
+        *state.ai().show_ai_result.write() = false;
         Self::show_ai_chat(state);
     }
 
@@ -269,16 +286,17 @@ impl AppActions {
 
     /// 关闭所有弹窗 / Close All Modals
     pub fn close_all_modals(state: &mut AppState) {
-        let mut ui = state.ui();
-        let mut ai = state.ai();
-        *ui.show_settings.write() = false;
-        *ui.show_shortcuts.write() = false;
-        *ai.show_ai_chat.write() = false;
-        *ai.show_ai_result.write() = false;
+        *state.ui().show_settings.write() = false;
+        *state.ui().show_shortcuts.write() = false;
+        Self::hide_ai_chat(state);
+        Self::hide_ai_result(state);
     }
 
     /// Close all modal-like overlays including search panels.
     pub fn close_overlays(state: &mut AppState) {
+        if *state.ai().ai_loading.read() {
+            Self::cancel_ai_generation(state);
+        }
         Self::close_all_modals(state);
         let mut ui = state.ui();
         *ui.show_search.write() = false;
@@ -340,6 +358,258 @@ impl AppActions {
     /// 设置 AI 是否使用选区 / Set whether AI uses selection context
     pub fn set_ai_use_selection(state: &mut AppState, use_selection: bool) {
         *state.ai().ai_use_selection.write() = use_selection;
+    }
+
+    /// 设置翻译任务的目标语言 / Set the translate-task target language
+    pub fn set_ai_translate_target(state: &mut AppState, target: Language) {
+        *state.ai().ai_translate_target.write() = target;
+    }
+
+    /// 超长上下文：警告确认，超硬上限则截断；取消返回 None
+    /// Warn on long context; hard-truncate above the cap; None if the user cancels
+    pub fn apply_ai_context_limit(content: String, lang: Language) -> Option<String> {
+        use crate::config::{AI_CONTEXT_HARD_MAX_CHARS, AI_CONTEXT_WARN_CHARS};
+        let chars = content.chars().count();
+        if chars > AI_CONTEXT_HARD_MAX_CHARS {
+            rfd::MessageDialog::new()
+                .set_title(t("ai_context_truncated_title", lang))
+                .set_description(t("ai_context_truncated_msg", lang))
+                .set_buttons(rfd::MessageButtons::Ok)
+                .set_level(rfd::MessageLevel::Warning)
+                .show();
+            return Some(truncate_ai_context(&content, AI_CONTEXT_HARD_MAX_CHARS));
+        }
+        if chars > AI_CONTEXT_WARN_CHARS {
+            let confirmed = rfd::MessageDialog::new()
+                .set_title(t("ai_context_warn_title", lang))
+                .set_description(t("ai_context_warn_msg", lang))
+                .set_buttons(rfd::MessageButtons::OkCancel)
+                .set_level(rfd::MessageLevel::Warning)
+                .show();
+            if confirmed != rfd::MessageDialogResult::Ok {
+                return None;
+            }
+        }
+        Some(content)
+    }
+
+    /// 标记最近一次 AI 请求是否以错误结束
+    /// Mark whether the latest AI request ended in error
+    pub fn mark_ai_apply_error(state: &mut AppState, is_error: bool) {
+        if let Some(ctx) = state.ai().ai_apply_context.write().as_mut() {
+            ctx.is_error = is_error;
+        }
+    }
+
+    /// 从聊天弹窗发起一轮 AI 任务（flush、选区快照、限流、流式请求）
+    /// Start an AI task from the chat modal (flush, selection snapshot, limits, stream)
+    pub async fn run_ai_task(
+        state: &mut AppState,
+        task_id: String,
+        title_error: String,
+        error_prefix: String,
+    ) {
+        EditorActions::flush_from_dom(state).await;
+
+        let lang = *state.ui().language.read();
+        let body = state.document().content.read().clone();
+        let start = *state.ui().cursor_start.read();
+        let end = *state.ui().cursor_end.read();
+        let selected = selected_ai_context(&body, start, end);
+        let task = AITask::from_str_id(&task_id);
+        if task.requires_selection() && selected.is_none() {
+            rfd::MessageDialog::new()
+                .set_title(t("ai_assistant", lang))
+                .set_description(t("ai_need_selection", lang))
+                .set_buttons(rfd::MessageButtons::Ok)
+                .set_level(rfd::MessageLevel::Warning)
+                .show();
+            return;
+        }
+        let input = state.ai().ai_input.read().clone();
+        if task == AITask::Custom && input.trim().is_empty() {
+            return;
+        }
+        // 聊天不按选区写回；预设任务才替换/插在选区
+        // Chat never writes back by selection; only presets replace/insert against it
+        let used_selection = task != AITask::Custom && selected.is_some();
+        let (source_start, source_end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let source_text = if used_selection {
+            selected.clone().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let raw_content = if task == AITask::Custom {
+            let max_chars =
+                clamp_chat_context_chars(state.ai().ai_config.read().chat_context_chars);
+            clip_chat_document_context(&body, selected.as_deref(), start, max_chars)
+        } else if used_selection {
+            selected.unwrap_or_else(|| body.clone())
+        } else if body.is_empty() {
+            String::new()
+        } else {
+            body
+        };
+        let content = if task == AITask::Custom {
+            raw_content
+        } else {
+            let Some(limited) = Self::apply_ai_context_limit(raw_content, lang) else {
+                return;
+            };
+            limited
+        };
+
+        *state.ai().ai_apply_context.write() = Some(AiApplyContext {
+            task_id,
+            used_selection,
+            source_start,
+            source_end,
+            source_text,
+            request_content: content.clone(),
+            request_input: input.clone(),
+            is_error: false,
+        });
+
+        Self::dispatch_ai_request(state, lang, title_error, error_prefix).await;
+    }
+
+    /// 从编辑器右键菜单启动预设任务（清空聊天输入，避免大纲误用）
+    /// Launch a preset AI task from the editor context menu (clear chat input so Outline is not hijacked)
+    pub async fn run_editor_ai_preset(
+        state: &mut AppState,
+        task_id: String,
+        translate_target: Option<Language>,
+        title_error: String,
+        error_prefix: String,
+    ) {
+        if let Some(target) = translate_target {
+            Self::set_ai_translate_target(state, target);
+        }
+        Self::clear_ai_input(state);
+        Self::run_ai_task(state, task_id, title_error, error_prefix).await;
+    }
+
+    /// 重试最近一次失败的 AI 请求 / Retry the last failed AI request
+    pub async fn retry_ai_task(state: &mut AppState, title_error: String, error_prefix: String) {
+        let Some(ctx) = state.ai().ai_apply_context.read().clone() else {
+            return;
+        };
+        if !ctx.is_error {
+            return;
+        }
+        let lang = *state.ui().language.read();
+        Self::dispatch_ai_request(state, lang, title_error, error_prefix).await;
+    }
+
+    /// 发送已快照的 AI 请求并写入结果弹窗
+    /// Dispatch a snapshotted AI request and write into the result modal
+    async fn dispatch_ai_request(
+        state: &mut AppState,
+        lang: Language,
+        title_error: String,
+        error_prefix: String,
+    ) {
+        let Some(ctx) = state.ai().ai_apply_context.read().clone() else {
+            return;
+        };
+        let translate_target = *state.ai().ai_translate_target.read();
+        let config = state.ai().ai_config.read().clone();
+        let task = AITask::from_str_id(&ctx.task_id);
+        let (history, global_system) = if task.uses_chat_session() {
+            (
+                state.ai().ai_history.read().clone(),
+                config.system_prompt.clone(),
+            )
+        } else {
+            (Vec::new(), String::new())
+        };
+        let (generation_id, cancel_rx) = Self::start_ai_generation(state);
+        if task.uses_chat_session() {
+            *state.ai().ai_result.write() = String::new();
+            Self::clear_ai_input(state);
+        } else {
+            Self::hide_ai_chat(state);
+            let result_title = t(task.title_i18n_key(), lang);
+            Self::prepare_ai_result(state, result_title);
+        }
+
+        let service = AIService::with_temperature(
+            config.api_key,
+            Some(config.base_url),
+            Some(config.model),
+            config.temperature,
+        );
+        let messages = task.build_messages_localized(
+            &ctx.request_content,
+            &ctx.request_input,
+            &history,
+            &global_system,
+            lang,
+            translate_target,
+        );
+        let user_summary = task.history_user_summary_localized(
+            &ctx.request_content,
+            &ctx.request_input,
+            lang,
+            translate_target,
+        );
+        let mut stream_state = *state;
+        let check_state = *state;
+
+        let result = service
+            .chat_stream_cancellable(
+                messages,
+                |chunk| {
+                    AppActions::append_ai_chunk(&mut stream_state, generation_id, chunk);
+                },
+                || AppActions::is_ai_generation_current(&check_state, generation_id),
+                cancel_rx,
+            )
+            .await;
+
+        if !Self::finish_ai_generation(state, generation_id) {
+            return;
+        }
+
+        match result {
+            Ok(full) => {
+                Self::mark_ai_apply_error(state, false);
+                let assistant = if full.is_empty() {
+                    Self::ai_result_text(state)
+                } else {
+                    full
+                };
+                if task.uses_chat_session() {
+                    if !assistant.is_empty() {
+                        Self::push_ai_turn(state, user_summary, assistant);
+                    }
+                    *state.ai().ai_result.write() = String::new();
+                }
+            }
+            Err(crate::services::ai::AIError::Cancelled) => {
+                Self::mark_ai_apply_error(state, false);
+                let partial = Self::ai_result_text(state);
+                if task.uses_chat_session() && !partial.is_empty() {
+                    Self::push_ai_turn(state, user_summary, partial);
+                    *state.ai().ai_result.write() = String::new();
+                }
+            }
+            Err(e) => {
+                Self::mark_ai_apply_error(state, true);
+                if Self::ai_result_text(state).is_empty() {
+                    let message = format_ai_error(&e, &error_prefix);
+                    if task.uses_chat_session() {
+                        *state.ai().ai_result.write() = message;
+                    } else {
+                        Self::set_ai_error_result(state, message, title_error);
+                    }
+                }
+            }
+        }
     }
 
     /// 设置 AI 输入框内容 / Set AI input text

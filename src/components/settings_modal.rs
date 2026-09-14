@@ -2,7 +2,10 @@
 
 use crate::actions::{AppActions, EditorActions, SettingsActions};
 use crate::components::icons::{CloseIcon, RefreshIcon};
-use crate::config::{LARGE_FILE_THRESHOLD_BYTES, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
+use crate::config::{
+    AI_CHAT_CONTEXT_MAX_CHARS, AI_CHAT_CONTEXT_MIN_CHARS, LARGE_FILE_THRESHOLD_BYTES,
+    SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+};
 use crate::services::ai::fetch_available_models;
 use crate::state::{AIProvider, AppState};
 use crate::utils::i18n::t;
@@ -42,6 +45,8 @@ pub fn SettingsModal() -> Element {
     let enter_api_key_t = t("enter_api_key", lang);
     let model_name_t = t("model_name", lang);
     let temperature_t = t("temperature", lang);
+    let chat_context_chars_t = t("ai_chat_context_chars", lang);
+    let chat_context_chars_hint_t = t("ai_chat_context_chars_hint", lang);
     let system_prompt_t = t("system_prompt", lang);
     let system_prompt_hint_t = t("system_prompt_hint", lang);
     let api_key_label_t = t("api_key_label", lang);
@@ -547,6 +552,23 @@ pub fn SettingsModal() -> Element {
                                 oninput: move |e| {
                                     if let Ok(temp) = e.value().parse::<f32>() {
                                         SettingsActions::set_ai_temperature(&mut state, temp);
+                                    }
+                                },
+                            }
+                        }
+
+                        div { class: "settings-row",
+                            label { title: "{chat_context_chars_hint_t}", "{chat_context_chars_t}" }
+                            input {
+                                r#type: "number",
+                                min: "{AI_CHAT_CONTEXT_MIN_CHARS}",
+                                max: "{AI_CHAT_CONTEXT_MAX_CHARS}",
+                                step: "100",
+                                title: "{chat_context_chars_hint_t}",
+                                value: "{ai.ai_config.read().chat_context_chars}",
+                                oninput: move |e| {
+                                    if let Ok(chars) = e.value().parse::<usize>() {
+                                        SettingsActions::set_ai_chat_context_chars(&mut state, chars);
                                     }
                                 },
                             }

@@ -49,10 +49,29 @@ impl I18n {
         // AI / AI Assistant
         texts.insert("ai_assistant", lang_map("AI 助手", "AI Assistant"));
         texts.insert("ai_continue", lang_map("续写", "Continue"));
+        texts.insert(
+            "ai_continue_need_selection",
+            lang_map(
+                "请先选中要续写的段落，避免长文截断后内容对不齐。",
+                "Select the passage to continue first, so a truncated long document cannot leave a gap.",
+            ),
+        );
         texts.insert("ai_improve", lang_map("优化", "Improve"));
         texts.insert("ai_outline", lang_map("大纲", "Outline"));
         texts.insert("ai_translate", lang_map("翻译", "Translate"));
         texts.insert("ai_fix_grammar", lang_map("修正语法", "Fix Grammar"));
+        texts.insert(
+            "ai_need_selection",
+            lang_map("请先选中文本。", "Select text first."),
+        );
+        texts.insert(
+            "ai_translate_to_en",
+            lang_map("译成英文", "Translate to English"),
+        );
+        texts.insert(
+            "ai_translate_to_zh",
+            lang_map("译成中文", "Translate to Chinese"),
+        );
         texts.insert(
             "ai_thinking",
             lang_map("AI 正在思考...", "AI is thinking..."),
@@ -77,6 +96,43 @@ impl I18n {
         texts.insert("ai_transcript_copied", lang_map("已复制", "Copied"));
         texts.insert("ai_stop", lang_map("停止生成", "Stop"));
         texts.insert("ai_generating", lang_map("正在生成…", "Generating…"));
+        texts.insert("ai_retry", lang_map("重试", "Retry"));
+        texts.insert(
+            "ai_replace_selection",
+            lang_map("替换选区", "Replace Selection"),
+        );
+        texts.insert("ai_insert_cursor", lang_map("插入光标", "Insert at Cursor"));
+        texts.insert(
+            "ai_insert_after_selection",
+            lang_map("插入选区后", "Insert After Selection"),
+        );
+        texts.insert("ai_compare_original", lang_map("原文", "Original"));
+        texts.insert("ai_compare_result", lang_map("结果", "Result"));
+        texts.insert("ai_translate_into", lang_map("译成", "Translate into"));
+        texts.insert("ai_translate_en", lang_map("英文", "English"));
+        texts.insert("ai_translate_zh", lang_map("中文", "Chinese"));
+        texts.insert(
+            "ai_context_warn_title",
+            lang_map("上下文较长", "Long Context"),
+        );
+        texts.insert(
+            "ai_context_warn_msg",
+            lang_map(
+                "发送给 AI 的文本较长，可能较慢或超出模型限制。是否继续？",
+                "The text sent to the AI is long and may be slow or exceed the model limit. Continue?",
+            ),
+        );
+        texts.insert(
+            "ai_context_truncated_title",
+            lang_map("上下文已截断", "Context Truncated"),
+        );
+        texts.insert(
+            "ai_context_truncated_msg",
+            lang_map(
+                "文本超过上限，已截断后再发送。",
+                "The text exceeded the limit and was truncated before sending.",
+            ),
+        );
 
         // 状态 / Status
         texts.insert("saved", lang_map("已保存", "Saved"));
@@ -270,7 +326,7 @@ impl I18n {
         // AI 结果 / AI Results
         texts.insert("copy", lang_map("复制", "Copy"));
         texts.insert("append", lang_map("追加到文档", "Append"));
-        texts.insert("replace_doc", lang_map("替换文档", "Replace"));
+        texts.insert("replace_doc", lang_map("替换全文", "Replace Document"));
         texts.insert(
             "ai_continue_result",
             lang_map("AI 续写结果", "AI Continue Result"),
@@ -294,9 +350,28 @@ impl I18n {
         texts.insert("open_settings_btn", lang_map("打开设置", "Open Settings"));
         texts.insert(
             "custom_input_placeholder",
+            lang_map("输入问题…", "Ask a question…"),
+        );
+        texts.insert(
+            "ai_chat_empty",
             lang_map(
-                "输入自定义问题或选择上方功能...",
-                "Enter custom question or select function above...",
+                "直接提问即可。会带上当前选区，没有选区则带光标附近的文字。",
+                "Ask a question. The current selection is attached, or a window around the cursor if nothing is selected.",
+            ),
+        );
+        texts.insert(
+            "ai_chat_context_attached",
+            lang_map("附带 {n} / {max} 字上下文", "Attaching {n} / {max} chars"),
+        );
+        texts.insert(
+            "ai_chat_context_chars",
+            lang_map("聊天上下文上限", "Chat context limit"),
+        );
+        texts.insert(
+            "ai_chat_context_chars_hint",
+            lang_map(
+                "发送聊天时附带的文档字数。优先当前选区，否则取光标附近。",
+                "Characters of the document attached to chat. Prefers the selection, otherwise a window around the cursor.",
             ),
         );
         texts.insert("ai_context", lang_map("上下文", "Context"));
@@ -542,6 +617,30 @@ mod tests {
         assert_eq!(untitled_tab_title(Language::ZhCN), "未命名");
         assert_eq!(untitled_tab_title(Language::EnUS), "Untitled");
         assert_eq!(untitled_tab_title_n(Language::EnUS, 2), "Untitled 2");
+    }
+
+    #[test]
+    fn test_ai_apply_i18n_keys() {
+        for key in [
+            "ai_retry",
+            "ai_replace_selection",
+            "ai_insert_cursor",
+            "ai_insert_after_selection",
+            "ai_continue_need_selection",
+            "ai_need_selection",
+            "ai_translate_into",
+            "ai_translate_to_en",
+            "ai_chat_context_chars",
+            "ai_chat_context_attached",
+            "ai_chat_empty",
+            "ai_context_warn_title",
+            "ai_context_truncated_msg",
+        ] {
+            assert_ne!(t(key, Language::ZhCN), key);
+            assert_ne!(t(key, Language::EnUS), key);
+        }
+        assert_eq!(t("ai_replace_selection", Language::ZhCN), "替换选区");
+        assert_eq!(t("ai_insert_cursor", Language::EnUS), "Insert at Cursor");
     }
 
     /// 关闭确认按钮应同时提供中英文文案 / Close-confirm buttons provide both locales

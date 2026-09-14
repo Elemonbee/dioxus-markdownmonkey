@@ -156,6 +156,10 @@ pub struct AppState {
     pub ai_history: Signal<Vec<ChatTurn>>,
     /// AI 生成世代号（递增以取消过期流）/ AI generation epoch (bump to cancel stale streams)
     pub ai_generation_id: Signal<u64>,
+    /// 最近一次 AI 请求的应用/重试快照 / Latest AI apply/retry snapshot
+    pub ai_apply_context: Signal<Option<crate::state::AiApplyContext>>,
+    /// 翻译任务目标语言 / Translate-task target language
+    pub ai_translate_target: Signal<Language>,
 }
 
 impl AppState {
@@ -256,6 +260,8 @@ impl AppState {
             ai_use_selection: Signal::new(false),
             ai_history: Signal::new(Vec::new()),
             ai_generation_id: Signal::new(0),
+            ai_apply_context: Signal::new(None),
+            ai_translate_target: Signal::new(Language::EnUS),
         };
 
         // 确保至少有一个初始标签页（否则 TabBar 调用 init_first_tab 时才能显示）

@@ -73,6 +73,9 @@ pub struct AISettings {
     pub system_prompt: String,
     /// 温度 / Temperature
     pub temperature: f32,
+    /// 聊天附带的文档上下文上限（字符）/ Max document characters attached to chat
+    #[serde(default = "default_chat_context_chars")]
+    pub chat_context_chars: usize,
 }
 
 fn default_auto_save_interval() -> u32 {
@@ -89,6 +92,10 @@ fn default_window_width() -> f64 {
 
 fn default_window_height() -> f64 {
     800.0
+}
+
+fn default_chat_context_chars() -> usize {
+    crate::config::AI_CHAT_CONTEXT_DEFAULT_CHARS
 }
 
 impl Default for AppSettings {
@@ -155,6 +162,9 @@ impl AppSettings {
                 base_url: config.base_url.clone(),
                 system_prompt: config.system_prompt.clone(),
                 temperature: config.temperature,
+                chat_context_chars: crate::config::clamp_chat_context_chars(
+                    config.chat_context_chars,
+                ),
             },
         };
         settings
@@ -171,6 +181,7 @@ impl Default for AISettings {
             base_url: "https://api.openai.com/v1".to_string(),
             system_prompt: "You are a helpful assistant for markdown writing.".to_string(),
             temperature: 0.7,
+            chat_context_chars: crate::config::AI_CHAT_CONTEXT_DEFAULT_CHARS,
         }
     }
 }
@@ -619,6 +630,10 @@ mod tests {
         // 新字段应该使用默认值 / New fields should use defaults
         assert!(!settings.auto_save_enabled);
         assert_eq!(settings.auto_save_interval, 30);
+        assert_eq!(
+            settings.ai.chat_context_chars,
+            crate::config::AI_CHAT_CONTEXT_DEFAULT_CHARS
+        );
     }
 
     #[test]
@@ -628,6 +643,10 @@ mod tests {
         assert_eq!(ai.provider, "openai");
         assert!(ai.api_key.is_none());
         assert_eq!(ai.temperature, 0.7);
+        assert_eq!(
+            ai.chat_context_chars,
+            crate::config::AI_CHAT_CONTEXT_DEFAULT_CHARS
+        );
     }
 
     #[test]
@@ -650,6 +669,7 @@ mod tests {
             *state.sidebar_visible.write() = false;
             *state.auto_save_enabled.write() = true;
             state.ai_config.write().api_key = "secret".to_string();
+            state.ai_config.write().chat_context_chars = 50;
 
             let settings = AppSettings::from_state(&state, 900.0, 700.0);
             assert_eq!(settings.theme, "light");
@@ -658,6 +678,10 @@ mod tests {
             assert!(!settings.sidebar_visible);
             assert!(settings.auto_save_enabled);
             assert!(settings.ai.api_key.is_none());
+            assert_eq!(
+                settings.ai.chat_context_chars,
+                crate::config::AI_CHAT_CONTEXT_MIN_CHARS
+            );
         });
     }
 

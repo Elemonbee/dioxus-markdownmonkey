@@ -362,6 +362,8 @@
         if (CM.highlightSelectionMatches) extras.push(CM.highlightSelectionMatches());
         if (CM.taskCheckbox) extras.push(CM.taskCheckbox());
         if (CM.markdownAutocompletion) extras.push(CM.markdownAutocompletion());
+        if (CM.markdownHover) extras.push(CM.markdownHover());
+        if (CM.markdownLint) extras.push(CM.markdownLint());
         return [
             lineComp.of(lineExt(CM, window._mm_lineNumbers !== false)),
             wrapComp.of(wrapExt(CM, window._mm_wordWrap !== false)),
@@ -646,6 +648,26 @@
      */
     window._mm_setWorkspaceFiles = function (files) {
         window._mm_workspaceFiles = Array.isArray(files) ? files : [];
+    };
+
+    /**
+     * 在已聚焦的 CodeMirror / textarea 上执行剪切、复制、粘贴
+     * Run cut / copy / paste on the focused CodeMirror or textarea
+     */
+    window._mm_clipboardAction = function (action) {
+        var op = String(action || '');
+        if (op !== 'cut' && op !== 'copy' && op !== 'paste') return false;
+        var view = window._mm_cmInstance;
+        if (view && view.focus) view.focus();
+        else {
+            var ta = document.querySelector('.editor-textarea');
+            if (ta) ta.focus();
+        }
+        try {
+            return document.execCommand(op);
+        } catch (e) {
+            return false;
+        }
     };
 
     function installCmBridge() {

@@ -34,6 +34,17 @@ pub enum Language {
     EnUS, // 美式英语 / American English
 }
 
+impl Language {
+    /// 翻译任务的默认目标语言（与 UI 语言相反）
+    /// Default translate-task target (opposite of the UI language)
+    pub fn default_translate_target(self) -> Self {
+        match self {
+            Self::ZhCN => Self::EnUS,
+            Self::EnUS => Self::ZhCN,
+        }
+    }
+}
+
 /// 保存状态 / Save Status
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum SaveStatus {
@@ -214,6 +225,8 @@ pub struct AIConfig {
     pub base_url: String,      // 基础 URL / Base URL
     pub system_prompt: String, // 系统提示词 / System Prompt
     pub temperature: f32,      // 温度参数 / Temperature
+    /// 聊天附带的文档上下文上限（字符）/ Max document characters attached to chat
+    pub chat_context_chars: usize,
 }
 
 impl Default for AIConfig {
@@ -226,6 +239,7 @@ impl Default for AIConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             system_prompt: "You are a helpful assistant for markdown writing.".to_string(),
             temperature: 0.7,
+            chat_context_chars: crate::config::AI_CHAT_CONTEXT_DEFAULT_CHARS,
         }
     }
 }
@@ -237,6 +251,27 @@ pub struct ChatTurn {
     pub role: String,
     /// 文本内容 / Text content
     pub content: String,
+}
+
+/// AI 应用与重试快照 / Snapshot used to apply or retry an AI request
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiApplyContext {
+    /// 任务 id（continue / improve / ...）/ Task id
+    pub task_id: String,
+    /// 是否以选区作为上下文 / Whether selection was used as context
+    pub used_selection: bool,
+    /// 选区 UTF-8 起始字节 / Selection start in UTF-8 bytes
+    pub source_start: usize,
+    /// 选区 UTF-8 结束字节 / Selection end in UTF-8 bytes
+    pub source_end: usize,
+    /// 发送时捕获的原文 / Source text captured at send time
+    pub source_text: String,
+    /// 实际发给模型的上下文 / Context actually sent to the model
+    pub request_content: String,
+    /// 自定义输入 / Custom input
+    pub request_input: String,
+    /// 本轮是否以错误结束 / Whether this round ended in error
+    pub is_error: bool,
 }
 
 impl ChatTurn {

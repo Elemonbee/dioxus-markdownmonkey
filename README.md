@@ -2,19 +2,19 @@
 
 ![MarkdownMonkey 主界面](docs/screenshots/main_zh.png)
 
-**版本 0.6.1** · **[English](./README_EN.md)** | 中文
+**版本 0.6.2** · **[English](./README_EN.md)** | 中文
 
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
 > 本项目为 Vibe Coding 项目，所有代码由 AI 生成。
 
 ## ✨ 特性
 
-- 📝 **Markdown 编辑** - 正文以 **CodeMirror 6** 为准（行号 / Markdown 着色 / 围栏代码着色 / 内核撤销 / 标题与代码折叠）；实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**，图表按需加载）；点击预览块可跳回对应源码行；编辑区可点任务复选框；`/` 片段与 `](` 链接补全；原始 HTML 与危险 URL 会被过滤；**预览代码块语法高亮**
+- 📝 **Markdown 编辑** - 正文以 **CodeMirror 6** 为准（行号 / Markdown 着色 / 围栏代码着色 / 内核撤销 / 标题与代码折叠）；`/` 片段与 `](` 链接、图片路径补全；本地图片悬停预览与缺失路径轻量提示；实时预览（表格 / 删除线 / 任务列表 / 脚注 / **`$` 公式** / **Mermaid 图**，图表按需加载）；点击预览块可跳回对应源码行；编辑区可点任务复选框；原始 HTML 与危险 URL 会被过滤；**预览代码块语法高亮**
 - 📁 **文件管理** - 工作区文件夹、文件树筛选、最近打开、多编码 (UTF-8/GBK/UTF-16)；拖放 `.md` / `.txt` 打开
 - 🗂️ **多标签页** - 同时编辑多个文件，每标签独立内核历史（切走再切回保留撤销）；关闭未保存文件时确认
 - 📋 **大纲视图** - 自动提取标题生成目录，快速导航
 - 💾 **会话恢复** - 启动时恢复标签、活动页、工作区与未保存草稿（可在设置中关闭）
-- 🤖 **AI 助手** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter；流式生成可停止；**按文档独立会话历史**；API Key 存于系统密钥环
+- 🤖 **AI 助手** - OpenAI / Claude / DeepSeek / Kimi / Ollama / OpenRouter；API Key 存于系统密钥环。**工具栏 / Ctrl+J** 为带实时上下文的聊天（优先当前选区，否则光标附近片段；设置里可调字数上限，默认 4000）；**编辑器右键** 提供复制 / 剪切 / 粘贴，以及需选区的预设（续写、优化、大纲、译成英/中、修正语法），结果在独立弹窗中按任务写回；流式生成可停止；**按文档独立聊天记录**
 - 📤 **导出** - HTML（可打包本地图片到 `{文件名}_files/`）/ 纯文本 / **打印与另存 PDF**（系统打印框）
 - 🔍 **搜索替换** - 文档内搜索（大小写 / 正则）；工作区全局搜索与批量替换（优先使用已打开标签缓冲）
 - 🖼️ **图片支持** - 粘贴/拖放图片保存到工作区并插入 Markdown
@@ -22,7 +22,7 @@
 - 🌐 **国际化** - 简体中文 / 美式英语；工具栏可快速切换
 - ⌨️ **快捷键** - 见下方一览表
 - 📊 **表格编辑器** - 可视化创建与编辑
-- 💾 **自动保存** - 可配置间隔；外部改文件用**目录事件 + mtime 确认**；大文件（默认 1 MB）打开前提示
+- 💾 **自动保存** - 可配置间隔；外部改文件用**目录事件 + mtime 确认**；大文件（默认 1 MB）打开前提示 
 
 ## 🛠️ 技术栈
 
@@ -183,7 +183,7 @@ cargo test --all-targets
 
 ## 📦 发布
 
-跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.1` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.2` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
 
 ## ⌨️ 快捷键
 
@@ -208,7 +208,7 @@ macOS 使用 ⌘（Command），Windows / Linux 使用 Ctrl。
 | Ctrl/⌘+T | 切换主题 |
 | Ctrl/⌘+, | 打开设置 |
 | Ctrl/⌘+/ | 显示快捷键 |
-| Ctrl/⌘+J | AI 助手 |
+| Ctrl/⌘+J | 打开 AI 聊天 |
 | Escape | 关闭弹窗 |
 
 ## 📄 许可证

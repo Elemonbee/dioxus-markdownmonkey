@@ -177,6 +177,36 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
 }
 
+.editor-content .cm-tooltip.cm-tooltip-hover {
+  padding: 6px 8px;
+  max-width: 360px;
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.editor-content .cm-mm-hover-missing {
+  color: var(--accent-error, #f38ba8);
+}
+
+.editor-content .cm-gutter-lint {
+  width: 1.1em;
+}
+
+.editor-content .cm-lintRange-error {
+  background-image: none;
+  border-bottom: 2px wavy var(--accent-error, #f38ba8);
+}
+
+.editor-content .cm-lintRange-warning {
+  background-image: none;
+  border-bottom: 2px wavy var(--accent-warning, #f9e2af);
+}
+
+.editor-content .cm-lintRange-info {
+  background-image: none;
+  border-bottom: 2px dotted var(--accent-primary);
+}
+
 /* 行号 / Line Numbers */
 .line-numbers {
   display: flex;

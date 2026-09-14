@@ -294,6 +294,19 @@ impl EditorActions {
         Self::redo(state);
     }
 
+    /// 在已聚焦的编辑器上执行剪切/复制/粘贴
+    /// Run cut / copy / paste on the focused editor
+    pub async fn exec_clipboard(state: &mut AppState, action: &str) {
+        let safe = serde_json::to_string(action).unwrap_or_else(|_| "\"copy\"".to_string());
+        let mut eval = document::eval(&format!(
+            "dioxus.send(!!(window._mm_clipboardAction && window._mm_clipboardAction({safe})));"
+        ));
+        let _ = eval.recv::<bool>().await;
+        if action != "copy" {
+            Self::flush_from_dom(state).await;
+        }
+    }
+
     /// 在选中文本前后插入格式 / Insert format around selected text
     pub fn insert_format(state: &mut AppState, prefix: &str, suffix: &str) {
         state.insert_format_around_selection(prefix, suffix);
@@ -335,12 +348,140 @@ impl EditorActions {
         ));
     }
 
-    /// 工作区 Markdown 相对路径，供 `](` 链接补全
-    /// Workspace-relative Markdown paths for `](` link completion
+    /// 将 UTF-8 偏移夹到字符边界 / Clamp a UTF-8 offset onto a char boundary
+    fn clamp_utf8(content: &str, offset: usize) -> usize {
+        let mut o = offset.min(content.len());
+        while o > 0 && !content.is_char_boundary(o) {
+            o -= 1;
+        }
+        o
+    }
+
+    /// 按字节范围替换正文并更新选区 / Replace a byte range and update the selection
+    pub fn replace_bytes_range(state: &mut AppState, start: usize, end: usize, replacement: &str) {
+        let content = state.document().content.read().clone();
+        let start = Self::clamp_utf8(&content, start);
+        let end = Self::clamp_utf8(&content, end).max(start);
+        if end > content.len() {
+            return;
+        }
+        let mut next = String::with_capacity(content.len() - (end - start) + replacement.len());
+        next.push_str(&content[..start]);
+        next.push_str(replacement);
+        next.push_str(&content[end..]);
+        let new_end = start + replacement.len();
+        Self::update_content(state, next);
+        Self::set_selection(state, start, new_end);
+    }
+
+    /// 把当前正文与选区推回编辑器内核 / Push current body and selection back to the editor kernel
+    fn restore_current_editor(state: &AppState) {
+        let content = state.document().content.read().clone();
+        let ui = state.ui();
+        Self::restore_editor(
+            &content,
+            *ui.cursor_start.read(),
+            *ui.cursor_end.read(),
+            "none",
+        );
+    }
+
+    /// 用 AI 结果替换发送时的选区；找不到则插入光标
+    /// Replace the snapshotted selection with the AI result; insert at cursor if missing
+    pub async fn apply_ai_replace_selection(state: &mut AppState, replacement: &str) {
+        Self::flush_from_dom(state).await;
+        let ctx = state.ai().ai_apply_context.read().clone();
+        let content = state.document().content.read().clone();
+        if let Some(ctx) = ctx {
+            if let Some((start, end)) = crate::services::ai::find_ai_replace_range(&content, &ctx) {
+                Self::replace_bytes_range(state, start, end, replacement);
+                Self::restore_current_editor(state);
+                return;
+            }
+        }
+        Self::insert_text_from_dom(state, replacement).await;
+    }
+
+    /// 在光标处插入 AI 结果 / Insert the AI result at the cursor
+    pub async fn apply_ai_insert_at_cursor(state: &mut AppState, text: &str) {
+        Self::insert_text_from_dom(state, text).await;
+    }
+
+    /// 把 AI 结果插在发送时的选区后面；找不到则插入光标
+    /// Insert the AI result after the snapshotted selection; insert at cursor if missing
+    pub async fn apply_ai_insert_after_selection(state: &mut AppState, text: &str) {
+        Self::flush_from_dom(state).await;
+        let ctx = state.ai().ai_apply_context.read().clone();
+        let content = state.document().content.read().clone();
+        if let Some(ctx) = ctx {
+            if let Some((_, end)) = crate::services::ai::find_ai_replace_range(&content, &ctx) {
+                let payload = crate::services::ai::ai_insert_after_payload(&content, end, text);
+                Self::replace_bytes_range(state, end, end, &payload);
+                Self::restore_current_editor(state);
+                return;
+            }
+        }
+        Self::insert_text_from_dom(state, text).await;
+    }
+
+    /// 按策略把 AI 结果写回编辑器 / Write the AI result back using an apply kind
+    pub async fn apply_ai_kind(
+        state: &mut AppState,
+        kind: crate::services::ai::AiApplyKind,
+        text: &str,
+    ) {
+        match kind {
+            crate::services::ai::AiApplyKind::InsertAfterSelection => {
+                Self::apply_ai_insert_after_selection(state, text).await;
+            }
+            crate::services::ai::AiApplyKind::ReplaceSelection => {
+                Self::apply_ai_replace_selection(state, text).await;
+            }
+            crate::services::ai::AiApplyKind::InsertCursor => {
+                Self::apply_ai_insert_at_cursor(state, text).await;
+            }
+            crate::services::ai::AiApplyKind::Append => {
+                Self::apply_ai_append(state, text).await;
+            }
+            crate::services::ai::AiApplyKind::ReplaceDocument => {
+                Self::apply_ai_replace_document(state, text).await;
+            }
+        }
+    }
+
+    /// 把 AI 结果追加到文档末尾 / Append the AI result to the end of the document
+    pub async fn apply_ai_append(state: &mut AppState, result: &str) {
+        Self::flush_from_dom(state).await;
+        let content = state.document().content.read().clone();
+        let new_content = if content.is_empty() {
+            result.to_string()
+        } else {
+            format!("{}\n\n{}", content, result)
+        };
+        Self::update_content(state, new_content);
+        Self::push_to_dom(&state.document().content.read());
+    }
+
+    /// 用 AI 结果替换整篇文档 / Replace the whole document with the AI result
+    pub async fn apply_ai_replace_document(state: &mut AppState, result: &str) {
+        Self::flush_from_dom(state).await;
+        Self::update_content(state, result.to_string());
+        Self::push_to_dom(&state.document().content.read());
+    }
+
+    /// 工作区 Markdown 与图片相对路径，供 `](` / `![](` 补全
+    /// Workspace-relative Markdown and image paths for `](` / `![](` completion
     pub fn workspace_completion_paths(state: &AppState) -> Vec<String> {
         let ui = state.ui();
         let root = ui.workspace_root.read().clone();
-        let files = ui.file_list.read().clone();
+        let mut files = ui.file_list.read().clone();
+        if let Some(root_path) = root.as_ref() {
+            for image in crate::utils::file_utils::scan_image_files(root_path) {
+                if !files.iter().any(|existing| existing == &image) {
+                    files.push(image);
+                }
+            }
+        }
         files
             .iter()
             .filter_map(|path| {

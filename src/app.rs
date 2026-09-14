@@ -165,6 +165,8 @@ pub fn App() -> Element {
                 "en-US" => Language::EnUS,
                 _ => Language::ZhCN,
             };
+            let ui_lang = *ui.language.read();
+            *ai.ai_translate_target.write() = ui_lang.default_translate_target();
 
             // 应用编辑器设置 / Apply editor settings
             *ui.font_size.write() = settings.font_size;
@@ -254,6 +256,8 @@ pub fn App() -> Element {
                 config.base_url = settings.ai.base_url;
                 config.system_prompt = settings.ai.system_prompt;
                 config.temperature = settings.ai.temperature;
+                config.chat_context_chars =
+                    crate::config::clamp_chat_context_chars(settings.ai.chat_context_chars);
             }
 
             // 恢复 AI 会话历史 / Restore AI conversation history for active tab

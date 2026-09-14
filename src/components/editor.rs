@@ -13,7 +13,8 @@ use crate::config::{
     EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES, UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS,
     UNCONTROLLED_EDITOR_THRESHOLD_BYTES,
 };
-use crate::state::AppState;
+use crate::services::ai::selected_ai_context;
+use crate::state::{AppState, Language};
 use crate::utils::i18n::t;
 use dioxus::document;
 use dioxus::html::HasFileData;
@@ -111,6 +112,34 @@ fn schedule_uncontrolled_sync(state: AppState, mut sync_gen: Signal<u64>) {
     });
 }
 
+/// 从右键菜单启动预设 AI 任务 / Launch a preset AI task from the context menu
+fn launch_editor_ai_preset(
+    mut state: AppState,
+    task_id: &'static str,
+    translate_target: Option<Language>,
+) {
+    spawn(async move {
+        let lang = *state.ui().language.read();
+        let title_error = t("ai_error", lang);
+        let error_prefix = t("error", lang);
+        AppActions::run_editor_ai_preset(
+            &mut state,
+            task_id.to_string(),
+            translate_target,
+            title_error,
+            error_prefix,
+        )
+        .await;
+    });
+}
+
+/// 从右键菜单执行剪贴板动作 / Run a clipboard action from the context menu
+fn launch_clipboard(mut state: AppState, action: &'static str) {
+    spawn(async move {
+        EditorActions::exec_clipboard(&mut state, action).await;
+    });
+}
+
 /// 编辑器组件 / Editor Component
 #[component]
 pub fn Editor() -> Element {
@@ -124,6 +153,10 @@ pub fn Editor() -> Element {
     let mut container_height = use_signal(|| 600.0_f32);
     let sync_gen = use_signal(|| 0u64);
     let mut last_pushed_rev = use_signal(|| u64::MAX);
+    let mut show_editor_menu = use_signal(|| false);
+    let mut editor_menu_pos = use_signal(|| (0_i32, 0_i32));
+    let mut show_ai_submenu = use_signal(|| false);
+    let mut menu_has_selection = use_signal(|| false);
 
     // 仅在 content_revision 变化时克隆全文，滚动等局部更新不再 O(n) 拷贝
     // Clone full content only when content_revision changes; scroll updates skip O(n) copy
@@ -173,6 +206,17 @@ pub fn Editor() -> Element {
     let placeholder_text = t("placeholder_input", lang);
     let aria_editor_t = t("aria_editor", lang);
     let untitled_text = t("untitled", lang);
+    let copy_t = t("copy", lang);
+    let cut_t = t("cut", lang);
+    let paste_t = t("paste", lang);
+    let ai_title_t = t("ai_assistant", lang);
+    let continue_t = t("ai_continue", lang);
+    let improve_t = t("ai_improve", lang);
+    let outline_t = t("ai_outline", lang);
+    let grammar_t = t("ai_fix_grammar", lang);
+    let translate_en_t = t("ai_translate_to_en", lang);
+    let translate_zh_t = t("ai_translate_to_zh", lang);
+    let need_selection_t = t("ai_need_selection", lang);
 
     let filename = current_file
         .as_ref()
@@ -282,6 +326,14 @@ pub fn Editor() -> Element {
         ));
     });
 
+    let editor_menu_style = {
+        let (mx, my) = *editor_menu_pos.read();
+        format!("left: {mx}px; top: {my}px;")
+    };
+    let editor_menu_open = *show_editor_menu.read();
+    let ai_submenu_open = *show_ai_submenu.read();
+    let editor_has_sel = *menu_has_selection.read();
+
     rsx! {
         div {
             class: "{pane_class}",
@@ -297,7 +349,33 @@ pub fn Editor() -> Element {
                 *is_dragging.write() = false;
                 handle_editor_drop(state, e);
             },
+            oncontextmenu: move |e| {
+                e.prevent_default();
+                e.stop_propagation();
+                let coords = e.client_coordinates();
+                editor_menu_pos.set((coords.x as i32, coords.y as i32));
+                show_ai_submenu.set(false);
+                let start = *ui.cursor_start.read();
+                let end = *ui.cursor_end.read();
+                menu_has_selection
+                    .set(selected_ai_context(&cached_content.read(), start, end).is_some());
+                show_editor_menu.set(true);
+                let mut state = state;
+                spawn(async move {
+                    EditorActions::flush_from_dom(&mut state).await;
+                    let content = state.document().content.read().clone();
+                    let start = *state.ui().cursor_start.read();
+                    let end = *state.ui().cursor_end.read();
+                    menu_has_selection.set(selected_ai_context(&content, start, end).is_some());
+                });
+            },
             onkeydown: move |e| {
+                if *show_editor_menu.read() && e.key() == Key::Escape {
+                    show_editor_menu.set(false);
+                    show_ai_submenu.set(false);
+                    e.prevent_default();
+                    return;
+                }
                 if ShortcutActions::handle_event(&mut state, &e) {
                     e.prevent_default();
                 }
@@ -393,6 +471,146 @@ pub fn Editor() -> Element {
                     },
                 }
             }
+
+            if editor_menu_open {
+                div {
+                    class: "context-menu-overlay",
+                    onclick: move |_| {
+                        show_editor_menu.set(false);
+                        show_ai_submenu.set(false);
+                    },
+                    oncontextmenu: move |e| {
+                        e.prevent_default();
+                        show_editor_menu.set(false);
+                        show_ai_submenu.set(false);
+                    },
+                }
+                div {
+                    class: "context-menu",
+                    style: "{editor_menu_style}",
+
+                    button {
+                        class: "context-menu-item",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            show_editor_menu.set(false);
+                            show_ai_submenu.set(false);
+                            launch_clipboard(state, "copy");
+                        },
+                        "{copy_t}"
+                    }
+                    button {
+                        class: "context-menu-item",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            show_editor_menu.set(false);
+                            show_ai_submenu.set(false);
+                            launch_clipboard(state, "cut");
+                        },
+                        "{cut_t}"
+                    }
+                    button {
+                        class: "context-menu-item",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            show_editor_menu.set(false);
+                            show_ai_submenu.set(false);
+                            launch_clipboard(state, "paste");
+                        },
+                        "{paste_t}"
+                    }
+
+                    div { class: "context-menu-divider" }
+
+                    div { class: "context-menu-submenu-host",
+                        button {
+                            class: if editor_has_sel { "context-menu-item has-submenu" } else { "context-menu-item has-submenu disabled" },
+                            title: if editor_has_sel { String::new() } else { need_selection_t.clone() },
+                            onclick: move |e| {
+                                e.stop_propagation();
+                                if editor_has_sel {
+                                    let open = *show_ai_submenu.read();
+                                    show_ai_submenu.set(!open);
+                                }
+                            },
+                            span { "{ai_title_t}" }
+                            span { class: "context-menu-caret", "›" }
+                        }
+                        if ai_submenu_open && editor_has_sel {
+                            div { class: "context-submenu",
+                                button {
+                                    class: "context-menu-item",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        show_editor_menu.set(false);
+                                        show_ai_submenu.set(false);
+                                        launch_editor_ai_preset(state, "continue", None);
+                                    },
+                                    "{continue_t}"
+                                }
+                                button {
+                                    class: "context-menu-item",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        show_editor_menu.set(false);
+                                        show_ai_submenu.set(false);
+                                        launch_editor_ai_preset(state, "improve", None);
+                                    },
+                                    "{improve_t}"
+                                }
+                                button {
+                                    class: "context-menu-item",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        show_editor_menu.set(false);
+                                        show_ai_submenu.set(false);
+                                        launch_editor_ai_preset(state, "outline", None);
+                                    },
+                                    "{outline_t}"
+                                }
+                                button {
+                                    class: "context-menu-item",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        show_editor_menu.set(false);
+                                        show_ai_submenu.set(false);
+                                        launch_editor_ai_preset(
+                                            state,
+                                            "translate",
+                                            Some(Language::EnUS),
+                                        );
+                                    },
+                                    "{translate_en_t}"
+                                }
+                                button {
+                                    class: "context-menu-item",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        show_editor_menu.set(false);
+                                        show_ai_submenu.set(false);
+                                        launch_editor_ai_preset(
+                                            state,
+                                            "translate",
+                                            Some(Language::ZhCN),
+                                        );
+                                    },
+                                    "{translate_zh_t}"
+                                }
+                                button {
+                                    class: "context-menu-item",
+                                    onclick: move |e| {
+                                        e.stop_propagation();
+                                        show_editor_menu.set(false);
+                                        show_ai_submenu.set(false);
+                                        launch_editor_ai_preset(state, "fix_grammar", None);
+                                    },
+                                    "{grammar_t}"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -418,6 +636,7 @@ mod tests {
         assert!(bridge.contains("_mm_applyFormat"));
         assert!(bridge.contains("_mm_setWordWrap"));
         assert!(bridge.contains("_mm_retainTabStates"));
+        assert!(bridge.contains("_mm_clipboardAction"));
         assert!(!bridge.contains("fromTextArea"));
         assert!(!bridge.contains("material-darker"));
     }

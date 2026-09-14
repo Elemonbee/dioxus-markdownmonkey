@@ -81,15 +81,45 @@ pub fn is_markdown_or_text_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 是否为常用图片路径 / Whether the path is a common image file
+pub fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "ico"
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// 扫描目录中的 Markdown 文件 / Scan Markdown files in directory
 pub fn scan_markdown_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    scan_dir_recursive(dir, &mut files, 0);
+    scan_dir_recursive(dir, &mut files, 0, is_markdown_scan_path);
     files
 }
 
+/// 扫描目录中的图片文件（供链接/图片补全）
+/// Scan image files in a directory (for link/image completion)
+pub fn scan_image_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    scan_dir_recursive(dir, &mut files, 0, is_image_path);
+    files
+}
+
+/// 历史 Markdown 扫描扩展名（保持大小写敏感，避免改变原有行为）
+/// Legacy markdown scan extensions (case-sensitive, preserving previous behavior)
+fn is_markdown_scan_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == "md" || e == "markdown" || e == "txt")
+        .unwrap_or(false)
+}
+
 /// 递归扫描目录（带深度和数量限制）/ Recursively scan directory (with depth and count limits)
-fn scan_dir_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: usize) {
+fn scan_dir_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: usize, keep: fn(&Path) -> bool) {
     // 超过最大深度或最大文件数时停止 / Stop when exceeding limits
     if depth >= MAX_SCAN_DEPTH || files.len() >= MAX_SCAN_FILES {
         return;
@@ -121,11 +151,9 @@ fn scan_dir_recursive(dir: &Path, files: &mut Vec<PathBuf>, depth: usize) {
             // 跳过符号链接以防止循环引用导致无限递归
             // Skip symlinks to prevent infinite recursion from circular references
             if path.is_dir() && !path.is_symlink() {
-                scan_dir_recursive(&path, files, depth + 1);
-            } else if let Some(ext) = path.extension() {
-                if ext == "md" || ext == "markdown" || ext == "txt" {
-                    files.push(path);
-                }
+                scan_dir_recursive(&path, files, depth + 1, keep);
+            } else if keep(&path) {
+                files.push(path);
             }
         }
     }

@@ -116,6 +116,27 @@ mod file_utils_tests {
             "main.rs"
         )));
     }
+
+    /// 图片扫描应包含常见扩展名且不把 Markdown 算进去
+    /// Image scan should include common extensions and skip Markdown
+    #[test]
+    fn test_scan_image_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        fs::write(temp_path.join("note.md"), "# Note").unwrap();
+        fs::write(temp_path.join("photo.PNG"), "img").unwrap();
+        let images = temp_path.join("images");
+        fs::create_dir(&images).unwrap();
+        fs::write(images.join("cat.webp"), "img").unwrap();
+
+        assert!(file_utils::is_image_path(&temp_path.join("photo.PNG")));
+        assert!(!file_utils::is_image_path(&temp_path.join("note.md")));
+        let files = file_utils::scan_image_files(temp_path);
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|p| p.ends_with("photo.PNG")));
+        assert!(files.iter().any(|p| p.ends_with("cat.webp")));
+        assert!(!files.iter().any(|p| p.ends_with("note.md")));
+    }
 }
 
 mod editor_actions_tests {
@@ -470,6 +491,34 @@ mod editor_actions_integration_tests {
 
             let content = state.content.read();
             assert_eq!(*content, "Hello **World**");
+        });
+    }
+
+    /// 按字节范围替换应保留前后文本并更新选区
+    /// Byte-range replace should keep surrounding text and update the selection
+    #[test]
+    fn test_replace_bytes_range() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            EditorActions::update_content(&mut state, "你好世界".to_string());
+            EditorActions::replace_bytes_range(&mut state, "你".len(), "你好世".len(), "AI");
+            assert_eq!(state.content.read().as_str(), "你AI界");
+            assert_eq!(*state.cursor_start.read(), "你".len());
+            assert_eq!(*state.cursor_end.read(), "你AI".len());
+        });
+    }
+
+    /// 选区后续写应把正文插在选区结束处并补空行
+    /// Continue-after-selection inserts at the selection end with a blank line
+    #[test]
+    fn test_insert_after_selection_payload_range() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            EditorActions::update_content(&mut state, "你好世界".to_string());
+            let end = "你好".len();
+            let payload = crate::services::ai::ai_insert_after_payload("你好世界", end, "续写");
+            EditorActions::replace_bytes_range(&mut state, end, end, &payload);
+            assert_eq!(state.content.read().as_str(), "你好\n\n续写世界");
         });
     }
 
@@ -990,6 +1039,39 @@ mod app_actions_integration_tests {
         });
     }
 
+    /// 结果窗已关时再打开聊天，应清掉卡住的 loading，避免空白窗
+    /// Reopening chat after the result modal is gone should clear a stuck loading flag
+    #[test]
+    fn test_show_ai_chat_clears_stuck_loading() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            AppActions::start_ai_generation(&mut state);
+            assert!(*state.ai().ai_loading.read());
+            assert!(!*state.show_ai_result.read());
+
+            AppActions::show_ai_chat(&mut state);
+
+            assert!(*state.show_ai_chat.read());
+            assert!(!*state.ai().ai_loading.read());
+        });
+    }
+
+    /// 结果窗仍在生成时打开聊天，不应取消当前流
+    /// Opening chat while the result modal is generating must not cancel the stream
+    #[test]
+    fn test_show_ai_chat_keeps_loading_when_result_open() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            AppActions::start_ai_generation(&mut state);
+            AppActions::show_ai_result(&mut state);
+
+            AppActions::show_ai_chat(&mut state);
+
+            assert!(*state.show_ai_chat.read());
+            assert!(*state.ai().ai_loading.read());
+        });
+    }
+
     #[test]
     fn test_show_hide_ai_result() {
         with_runtime(|| {
@@ -1127,6 +1209,14 @@ mod search_settings_actions_tests {
 
             SettingsActions::set_ai_temperature(&mut state, 2.5);
             assert_eq!(state.ai_config.read().temperature, 1.0);
+
+            SettingsActions::set_ai_chat_context_chars(&mut state, 50);
+            assert_eq!(state.ai_config.read().chat_context_chars, 50);
+            SettingsActions::set_ai_chat_context_chars(&mut state, 99_000);
+            assert_eq!(
+                state.ai_config.read().chat_context_chars,
+                crate::config::AI_CHAT_CONTEXT_MAX_CHARS
+            );
 
             SettingsActions::set_ai_model(&mut state, "custom-model".to_string());
             assert_eq!(state.ai_config.read().model, "custom-model");
@@ -2364,6 +2454,33 @@ mod file_actions_integration_tests {
             AppActions::cancel_ai_generation(&mut state);
             assert!(!*state.ai().ai_loading.read());
             assert!(*state.ai().ai_generation_id.read() > id1);
+        });
+    }
+
+    /// 新生成应取消上一轮 HTTP 流 / A new generation should cancel the previous HTTP stream
+    #[test]
+    fn test_start_ai_generation_aborts_previous() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            let (id1, rx1) = AppActions::start_ai_generation(&mut state);
+            let (id2, _rx2) = AppActions::start_ai_generation(&mut state);
+            assert!(id2 > id1);
+            assert!(*rx1.borrow());
+            assert!(*state.ai().ai_loading.read());
+        });
+    }
+
+    /// Esc 关闭覆盖层时应取消进行中的生成 / Closing overlays should cancel an in-flight generation
+    #[test]
+    fn test_close_overlays_cancels_ai_generation() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            *state.show_ai_result.write() = true;
+            let (id, _rx) = AppActions::start_ai_generation(&mut state);
+            AppActions::close_overlays(&mut state);
+            assert!(!*state.ai().ai_loading.read());
+            assert!(!*state.show_ai_result.read());
+            assert!(*state.ai().ai_generation_id.read() > id);
         });
     }
 

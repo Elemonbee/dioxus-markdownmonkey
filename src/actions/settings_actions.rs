@@ -56,6 +56,13 @@ impl SettingsActions {
         state.ai().ai_config.write().system_prompt = prompt;
     }
 
+    /// 设置聊天附带的文档上下文上限（字符）；输入过程中只卡最大值，保存时再夹到下限
+    /// Set chat context budget; clamp max while typing, clamp min when saving
+    pub fn set_ai_chat_context_chars(state: &mut AppState, chars: usize) {
+        state.ai().ai_config.write().chat_context_chars =
+            chars.min(crate::config::AI_CHAT_CONTEXT_MAX_CHARS);
+    }
+
     /// 重置编辑器相关设置为默认值 / Reset editor-related settings to defaults
     pub fn reset_editor_defaults(state: &mut AppState) {
         EditorActions::set_font_size(state, 16);
