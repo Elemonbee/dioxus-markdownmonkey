@@ -6,6 +6,9 @@
 // 允许非 snake_case 命名（Dioxus 组件使用 PascalCase）
 // Allow non-snake_case (Dioxus components use PascalCase)
 #![allow(non_snake_case)]
+// Release 包作为 GUI 子系统启动，避免再弹出终端窗口
+// Ship release builds as a GUI app so Windows does not open a console
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 // 应用模块 / Application Modules
 mod actions; // 业务逻辑 Actions / Business Logic Actions
@@ -38,17 +41,27 @@ fn main() {
 
     // 启动 Dioxus Desktop 应用 / Launch Dioxus Desktop Application
     dioxus::LaunchBuilder::new()
-        .with_cfg(
-            dioxus::desktop::Config::new()
-                .with_window(
-                    dioxus::desktop::WindowBuilder::new()
-                        .with_title("Markdown Monkey")
-                        .with_inner_size(dioxus::desktop::LogicalSize::new(win_w, win_h))
-                        .with_min_inner_size(dioxus::desktop::LogicalSize::new(600.0, 400.0))
-                        // 不置顶窗口 / Don't keep window always on top
-                        .with_always_on_top(false),
-                )
-                .with_disable_context_menu(!enable_devtools),
-        )
+        .with_cfg(desktop_config(enable_devtools, win_w, win_h))
         .launch(app::App);
+}
+
+/// 组装桌面窗口配置（尺寸、图标、右键菜单）
+/// Build the desktop window config (size, icon, context menu)
+fn desktop_config(enable_devtools: bool, win_w: f64, win_h: f64) -> dioxus::desktop::Config {
+    let mut cfg = dioxus::desktop::Config::new()
+        .with_window(
+            dioxus::desktop::WindowBuilder::new()
+                .with_title("Markdown Monkey")
+                .with_inner_size(dioxus::desktop::LogicalSize::new(win_w, win_h))
+                .with_min_inner_size(dioxus::desktop::LogicalSize::new(600.0, 400.0))
+                // 不置顶窗口 / Don't keep window always on top
+                .with_always_on_top(false),
+        )
+        .with_disable_context_menu(!enable_devtools);
+
+    const ICON_PNG: &[u8] = include_bytes!("../assets/branding/icon-256.png");
+    if let Ok(icon) = dioxus::desktop::icon_from_memory(ICON_PNG) {
+        cfg = cfg.with_icon(icon);
+    }
+    cfg
 }

@@ -14,11 +14,20 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/DEBIAN" \
   "$STAGE/usr/bin" \
   "$STAGE/usr/share/applications" \
-  "$STAGE/usr/share/doc/markdownmonkey"
+  "$STAGE/usr/share/doc/markdownmonkey" \
+  "$STAGE/usr/share/icons/hicolor/32x32/apps" \
+  "$STAGE/usr/share/icons/hicolor/48x48/apps" \
+  "$STAGE/usr/share/icons/hicolor/128x128/apps" \
+  "$STAGE/usr/share/icons/hicolor/256x256/apps"
 
 install -m 0755 "$BINARY" "$STAGE/usr/bin/markdownmonkey"
 install -m 0644 "$ROOT/packaging/linux/markdownmonkey.desktop" \
   "$STAGE/usr/share/applications/markdownmonkey.desktop"
+for size in 32 48 128 256; do
+  install -m 0644 \
+    "$ROOT/packaging/linux/icons/hicolor/${size}x${size}/apps/markdownmonkey.png" \
+    "$STAGE/usr/share/icons/hicolor/${size}x${size}/apps/markdownmonkey.png"
+done
 install -m 0644 "$ROOT/README.md" "$ROOT/README_EN.md" "$ROOT/LICENSE" \
   "$STAGE/usr/share/doc/markdownmonkey/"
 

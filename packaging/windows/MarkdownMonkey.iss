@@ -3,13 +3,16 @@
 ; English: Builds a Setup.exe that installs into Program Files
 
 #ifndef AppVersion
-#define AppVersion "0.6.2"
+#define AppVersion "0.6.3"
 #endif
 #ifndef SourceDir
 #define SourceDir "..\..\dist\installer-src"
 #endif
 #ifndef OutputDir
 #define OutputDir "..\..\dist"
+#endif
+#ifndef IconFile
+#define IconFile "icon.ico"
 #endif
 
 [Setup]
@@ -22,6 +25,8 @@ DefaultDirName={autopf}\MarkdownMonkey
 DefaultGroupName=MarkdownMonkey
 DisableProgramGroupPage=yes
 LicenseFile={#SourceDir}\LICENSE
+SetupIconFile={#IconFile}
+UninstallDisplayIcon={app}\MarkdownMonkey.exe
 OutputDir={#OutputDir}
 OutputBaseFilename=MarkdownMonkey-{#AppVersion}-windows-x64-setup
 Compression=lzma2

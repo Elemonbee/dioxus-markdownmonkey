@@ -1,8 +1,12 @@
 # MarkdownMonkey
 
+<p align="center">
+  <img src="assets/branding/icon.png" width="128" height="128" alt="MarkdownMonkey">
+</p>
+
 ![MarkdownMonkey 主界面](docs/screenshots/main_zh.png)
 
-**版本 0.6.2** · **[English](./README_EN.md)** | 中文
+**版本 0.6.3** · **[English](./README_EN.md)** | 中文
 
 一个使用 [Dioxus](https://dioxuslabs.com/) 框架构建的现代 Markdown 编辑器。
 > 本项目为 Vibe Coding 项目，所有代码由 AI 生成。
@@ -127,6 +131,7 @@ src/
 └── styles/                 # CSS（variables / base / editor / syntax / toolbar / sidebar / modals）
 
 assets/
+├── branding/               # 应用图标 PNG（窗口 / README）
 ├── editor_enhance.js       # textarea 桥（内核未挂上时的回退）
 ├── editor_codemirror.js    # CodeMirror 6 升级与 Rust 桥
 ├── preview_enhance.js      # 预览 KaTeX；Mermaid 按需加载
@@ -183,7 +188,7 @@ cargo test --all-targets
 
 ## 📦 发布
 
-跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.2` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
+跨平台打包与打标签流程见 **[docs/RELEASE.md](docs/RELEASE.md)**（GitHub Actions：Windows zip + Setup.exe / Linux tar.gz + .deb / macOS `.app`）。打 `v0.6.3` 前请按 **[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)** 验收。
 
 ## ⌨️ 快捷键
 
