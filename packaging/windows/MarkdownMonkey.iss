@@ -3,7 +3,7 @@
 ; English: Builds a Setup.exe that installs into Program Files
 
 #ifndef AppVersion
-#define AppVersion "0.6.3"
+#define AppVersion "0.6.4"
 #endif
 #ifndef SourceDir
 #define SourceDir "..\..\dist\installer-src"
