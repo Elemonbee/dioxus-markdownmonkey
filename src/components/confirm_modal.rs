@@ -150,10 +150,12 @@ fn FileModifiedModal() -> Element {
     let show = *doc.file_external_modified.read();
     let lang = *ui.language.read();
 
+    let queued = doc.external_modified_paths.read().first().cloned();
     let current_file = doc.current_file.read().clone();
     let untitled_text = t("untitled", lang);
-    let filename = current_file
+    let filename = queued
         .as_ref()
+        .or(current_file.as_ref())
         .map(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
@@ -216,7 +218,7 @@ fn FileModifiedModal() -> Element {
                             let mut state = state;
                             spawn(async move {
                                 if let Err(e) =
-                                    FileActions::reload_current_file_flushed(&mut state).await
+                                    FileActions::reload_pending_external_file(&mut state).await
                                 {
                                     tracing::error!(
                                         "Failed to reload externally modified file: {}",

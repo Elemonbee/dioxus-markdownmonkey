@@ -6,7 +6,7 @@ use crate::actions::EditorActions;
 use crate::config::{clamp_chat_context_chars, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH};
 use crate::services::ai::{
     clip_chat_document_context, format_ai_error, selected_ai_context, truncate_ai_context,
-    AIService, AITask,
+    AIService, AITask, ContinueStyle,
 };
 use crate::state::{AIProvider, AiApplyContext, AppState, Language, SidebarTab, Theme};
 use crate::utils::i18n::t;
@@ -121,10 +121,10 @@ impl AppActions {
         *state.ai().show_ai_chat.write() = true;
     }
 
-    /// 隐藏 AI 聊天弹窗；若正在聊则取消生成
-    /// Hide the AI chat modal; cancel an in-flight chat generation
+    /// 隐藏 AI 聊天弹窗；只有聊天窗正开着且在生成时才取消
+    /// Hide the AI chat modal; cancel only when that chat modal itself is streaming
     pub fn hide_ai_chat(state: &mut AppState) {
-        let chat_streaming = *state.ai().ai_loading.read() && !*state.ai().show_ai_result.read();
+        let chat_streaming = *state.ai().show_ai_chat.read() && *state.ai().ai_loading.read();
         if chat_streaming {
             Self::cancel_ai_generation(state);
         }
@@ -474,22 +474,35 @@ impl AppActions {
             is_error: false,
         });
 
+        // 预设任务的输入只留在快照里。续写风格 id 不能留在聊天框。
+        // Preset input stays on the snapshot. A continue-style id must not remain in the chat box.
+        if task != AITask::Custom {
+            Self::clear_ai_input(state);
+        }
+
         Self::dispatch_ai_request(state, lang, title_error, error_prefix).await;
     }
 
-    /// 从编辑器右键菜单启动预设任务（清空聊天输入，避免大纲误用）
-    /// Launch a preset AI task from the editor context menu (clear chat input so Outline is not hijacked)
+    /// 从编辑器右键菜单启动预设任务
+    /// Launch a preset AI task from the editor context menu
+    ///
+    /// 续写把风格 id 放进输入快照；其他任务清空输入，避免大纲误用聊天框里的文字。
+    /// Continue stores the style id on the input snapshot; other tasks clear input so Outline cannot reuse chat text.
     pub async fn run_editor_ai_preset(
         state: &mut AppState,
         task_id: String,
         translate_target: Option<Language>,
+        continue_style: Option<ContinueStyle>,
         title_error: String,
         error_prefix: String,
     ) {
         if let Some(target) = translate_target {
             Self::set_ai_translate_target(state, target);
         }
-        Self::clear_ai_input(state);
+        match continue_style {
+            Some(style) => Self::set_ai_input(state, style.as_str().to_string()),
+            None => Self::clear_ai_input(state),
+        }
         Self::run_ai_task(state, task_id, title_error, error_prefix).await;
     }
 
@@ -527,13 +540,26 @@ impl AppActions {
         } else {
             (Vec::new(), String::new())
         };
+        // 先关掉聊天窗。若放在 start 之后，loading 已经为真、结果窗还没打开，
+        // hide 会把这次续写/翻译当成聊天流取消，弹窗里就没有任何输出。
+        // Close chat first. Doing it after start looks like an in-flight chat
+        // (loading, result modal not open yet) and cancels continue/translate before any text arrives.
+        if !task.uses_chat_session() {
+            Self::hide_ai_chat(state);
+        }
         let (generation_id, cancel_rx) = Self::start_ai_generation(state);
         if task.uses_chat_session() {
             *state.ai().ai_result.write() = String::new();
             Self::clear_ai_input(state);
         } else {
-            Self::hide_ai_chat(state);
-            let result_title = t(task.title_i18n_key(), lang);
+            let mut result_title = t(task.title_i18n_key(), lang);
+            if matches!(task, AITask::Continue) {
+                let style = ContinueStyle::from_str_id(&ctx.request_input);
+                if style != ContinueStyle::Match {
+                    result_title =
+                        format!("{} · {}", result_title, t(style.label_i18n_key(), lang));
+                }
+            }
             Self::prepare_ai_result(state, result_title);
         }
 
@@ -588,6 +614,8 @@ impl AppActions {
                         Self::push_ai_turn(state, user_summary, assistant);
                     }
                     *state.ai().ai_result.write() = String::new();
+                } else if !assistant.is_empty() {
+                    *state.ai().ai_result.write() = assistant;
                 }
             }
             Err(crate::services::ai::AIError::Cancelled) => {
@@ -629,9 +657,9 @@ impl AppActions {
             secs.clamp(AUTO_SAVE_INTERVAL_MIN_SECS, AUTO_SAVE_INTERVAL_MAX_SECS);
     }
 
-    /// 忽略外部文件修改提示 / Dismiss external file-modified prompt
+    /// 忽略当前这一条外部文件修改提示 / Dismiss the current external file-modified prompt
     pub fn dismiss_file_external_modified(state: &mut AppState) {
         state.refresh_file_watch();
-        *state.document().file_external_modified.write() = false;
+        state.dismiss_one_external_modification();
     }
 }

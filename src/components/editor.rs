@@ -8,12 +8,8 @@
 use crate::actions::shortcut_actions::ShortcutActions;
 use crate::actions::{AppActions, EditorActions, FileActions};
 use crate::components::icons::PreviewIcon;
-use crate::config::{
-    EDITOR_LINE_HEIGHT_PX, EDITOR_VIRTUAL_SCROLL_BUFFER_LINES,
-    EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES, UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS,
-    UNCONTROLLED_EDITOR_THRESHOLD_BYTES,
-};
-use crate::services::ai::selected_ai_context;
+use crate::config::{UNCONTROLLED_EDITOR_SYNC_DEBOUNCE_MS, UNCONTROLLED_EDITOR_THRESHOLD_BYTES};
+use crate::services::ai::{selected_ai_context, ContinueStyle};
 use crate::state::{AppState, Language};
 use crate::utils::i18n::t;
 use dioxus::document;
@@ -31,14 +27,6 @@ const CODEMIRROR_BOOT: &str = concat!(
 
 /// 编辑器滚动比例（全局信号）/ Editor scroll ratio (global signal)
 pub static EDITOR_SCROLL_RATIO: GlobalSignal<f32> = Signal::global(|| 0.0);
-
-/// 统计行数（按换行符，至少为 1）/ Count lines by newlines (at least 1)
-fn count_lines(content: &str) -> usize {
-    if content.is_empty() {
-        return 1;
-    }
-    content.bytes().filter(|&b| b == b'\n').count() + 1
-}
 
 /// 从 DOM 同步 textarea 选区到 UI 域光标信号
 /// Sync textarea selection from DOM into UI-domain cursor signals
@@ -117,6 +105,7 @@ fn launch_editor_ai_preset(
     mut state: AppState,
     task_id: &'static str,
     translate_target: Option<Language>,
+    continue_style: Option<ContinueStyle>,
 ) {
     spawn(async move {
         let lang = *state.ui().language.read();
@@ -126,6 +115,7 @@ fn launch_editor_ai_preset(
             &mut state,
             task_id.to_string(),
             translate_target,
+            continue_style,
             title_error,
             error_prefix,
         )
@@ -149,32 +139,24 @@ pub fn Editor() -> Element {
     let ui = state.ui();
     let mut is_dragging = use_signal(|| false);
 
-    let mut scroll_top = use_signal(|| 0.0_f32);
-    let mut container_height = use_signal(|| 600.0_f32);
     let sync_gen = use_signal(|| 0u64);
     let mut last_pushed_rev = use_signal(|| u64::MAX);
     let mut show_editor_menu = use_signal(|| false);
     let mut editor_menu_pos = use_signal(|| (0_i32, 0_i32));
     let mut show_ai_submenu = use_signal(|| false);
+    let mut show_continue_submenu = use_signal(|| false);
     let mut menu_has_selection = use_signal(|| false);
 
     // 仅在 content_revision 变化时克隆全文，滚动等局部更新不再 O(n) 拷贝
     // Clone full content only when content_revision changes; scroll updates skip O(n) copy
     let mut cached_content = use_signal(String::new);
-    let mut cached_line_count = use_signal(|| 1usize);
     let mut cached_rev = use_signal(|| u64::MAX);
 
     let rev = *doc.content_revision.read();
     if rev != *cached_rev.read() {
-        let borrowed = doc.content.read();
-        let lines = count_lines(&borrowed);
-        cached_content.set(borrowed.clone());
-        cached_line_count.set(lines);
+        cached_content.set(doc.content.read().clone());
         cached_rev.set(rev);
     }
-
-    let content = cached_content.read().clone();
-    let line_count = *cached_line_count.read();
     let modified = *doc.modified.read();
     let current_file = doc.current_file.read().clone();
     let show_preview = *ui.show_preview.read();
@@ -186,14 +168,15 @@ pub fn Editor() -> Element {
         .map(|tab| tab.id)
         .unwrap_or(0);
     let retain_ids: Vec<u64> = doc.tabs.read().iter().map(|tab| tab.id).collect();
-    let file_size = (*doc.file_size_bytes.read()).max(content.len());
+    let file_size = (*doc.file_size_bytes.read()).max(cached_content.read().len());
     let use_uncontrolled = file_size >= UNCONTROLLED_EDITOR_THRESHOLD_BYTES;
 
     // CodeMirror 与受控/非受控共用：修订变化时把 Rust 正文推回 DOM（JS 侧相同则跳过）
     // Shared by CodeMirror and both editor modes: push Rust text on revision; JS no-ops if equal
     if rev != *last_pushed_rev.read() {
         last_pushed_rev.set(rev);
-        EditorActions::push_editor_to_dom(&content, Some(tab_id), &retain_ids);
+        let snapshot = cached_content.read();
+        EditorActions::push_editor_to_dom(&snapshot, Some(tab_id), &retain_ids);
     }
 
     let search_query_hl = ui.search_query.read().clone();
@@ -227,20 +210,6 @@ pub fn Editor() -> Element {
         })
         .unwrap_or_else(|| format!("{untitled_text}.md"));
 
-    let use_virtual = line_count > EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES;
-    let (render_start, render_end) = if use_virtual {
-        let st = *scroll_top.read();
-        let ch = *container_height.read();
-        let first_visible = (st / EDITOR_LINE_HEIGHT_PX) as usize;
-        let visible_count = (ch / EDITOR_LINE_HEIGHT_PX) as usize + 1;
-        let start = first_visible.saturating_sub(EDITOR_VIRTUAL_SCROLL_BUFFER_LINES);
-        let end =
-            (first_visible + visible_count + EDITOR_VIRTUAL_SCROLL_BUFFER_LINES).min(line_count);
-        (start, end)
-    } else {
-        (0, line_count)
-    };
-
     let pane_class = if *is_dragging.read() {
         "editor-pane drag-over"
     } else {
@@ -252,14 +221,6 @@ pub fn Editor() -> Element {
         "btn-icon"
     };
     let modified_display = if modified { "" } else { "display: none;" };
-
-    let line_numbers_style = if use_virtual {
-        let padding_top = render_start as f32 * EDITOR_LINE_HEIGHT_PX;
-        let total_height = line_count as f32 * EDITOR_LINE_HEIGHT_PX;
-        format!("padding-top: {padding_top}px; min-height: {total_height}px;")
-    } else {
-        String::new()
-    };
 
     let _ = use_effect(move || {
         if show_search_hl && !search_query_hl.is_empty() && search_total_hl > 0 {
@@ -332,6 +293,7 @@ pub fn Editor() -> Element {
     };
     let editor_menu_open = *show_editor_menu.read();
     let ai_submenu_open = *show_ai_submenu.read();
+    let continue_submenu_open = *show_continue_submenu.read();
     let editor_has_sel = *menu_has_selection.read();
 
     rsx! {
@@ -355,6 +317,7 @@ pub fn Editor() -> Element {
                 let coords = e.client_coordinates();
                 editor_menu_pos.set((coords.x as i32, coords.y as i32));
                 show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                 let start = *ui.cursor_start.read();
                 let end = *ui.cursor_end.read();
                 menu_has_selection
@@ -373,6 +336,7 @@ pub fn Editor() -> Element {
                 if *show_editor_menu.read() && e.key() == Key::Escape {
                     show_editor_menu.set(false);
                     show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                     e.prevent_default();
                     return;
                 }
@@ -403,20 +367,10 @@ pub fn Editor() -> Element {
 
             div {
                 class: "editor-content",
-                div {
-                    class: "line-numbers",
-                    style: "{line_numbers_style}",
-
-                    if use_virtual {
-                        for i in (render_start + 1)..=(render_end) {
-                            div { class: "line-number", key: "{i}", "{i}" }
-                        }
-                    } else {
-                        for i in 1..=line_count {
-                            div { class: "line-number", key: "{i}", "{i}" }
-                        }
-                    }
-                }
+                // 行号由 CodeMirror gutter 绘制。这里不再做第二套固定行高的行号列，
+                // 避免和内核的折行、字号排版错位，也避免每个修订都生成一整列隐藏节点。
+                // CodeMirror draws the gutter. A second fixed-pitch line column would
+                // drift from wrapped lines and font size, and would rebuild hidden nodes.
                 textarea {
                     class: "editor-textarea",
                     placeholder: "{placeholder_text}",
@@ -442,8 +396,6 @@ pub fn Editor() -> Element {
                         let sh = scroll_data.scroll_height() as f32;
                         let ch = scroll_data.client_height() as f32;
                         let st = scroll_data.scroll_top() as f32;
-                        scroll_top.set(st);
-                        container_height.set(ch);
                         let ratio = if sh > ch {
                             st / (sh - ch)
                         } else {
@@ -478,11 +430,13 @@ pub fn Editor() -> Element {
                     onclick: move |_| {
                         show_editor_menu.set(false);
                         show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                     },
                     oncontextmenu: move |e| {
                         e.prevent_default();
                         show_editor_menu.set(false);
                         show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                     },
                 }
                 div {
@@ -495,6 +449,7 @@ pub fn Editor() -> Element {
                             e.stop_propagation();
                             show_editor_menu.set(false);
                             show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                             launch_clipboard(state, "copy");
                         },
                         "{copy_t}"
@@ -505,6 +460,7 @@ pub fn Editor() -> Element {
                             e.stop_propagation();
                             show_editor_menu.set(false);
                             show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                             launch_clipboard(state, "cut");
                         },
                         "{cut_t}"
@@ -515,6 +471,7 @@ pub fn Editor() -> Element {
                             e.stop_propagation();
                             show_editor_menu.set(false);
                             show_ai_submenu.set(false);
+                show_continue_submenu.set(false);
                             launch_clipboard(state, "paste");
                         },
                         "{paste_t}"
@@ -531,6 +488,9 @@ pub fn Editor() -> Element {
                                 if editor_has_sel {
                                     let open = *show_ai_submenu.read();
                                     show_ai_submenu.set(!open);
+                                    if open {
+                                        show_continue_submenu.set(false);
+                                    }
                                 }
                             },
                             span { "{ai_title_t}" }
@@ -538,15 +498,40 @@ pub fn Editor() -> Element {
                         }
                         if ai_submenu_open && editor_has_sel {
                             div { class: "context-submenu",
-                                button {
-                                    class: "context-menu-item",
-                                    onclick: move |e| {
-                                        e.stop_propagation();
-                                        show_editor_menu.set(false);
-                                        show_ai_submenu.set(false);
-                                        launch_editor_ai_preset(state, "continue", None);
-                                    },
-                                    "{continue_t}"
+                                div { class: "context-menu-submenu-host",
+                                    button {
+                                        class: "context-menu-item has-submenu",
+                                        onclick: move |e| {
+                                            e.stop_propagation();
+                                            let open = *show_continue_submenu.read();
+                                            show_continue_submenu.set(!open);
+                                        },
+                                        span { "{continue_t}" }
+                                        span { class: "context-menu-caret", "›" }
+                                    }
+                                    if continue_submenu_open {
+                                        div { class: "context-submenu",
+                                            for style in ContinueStyle::MENU {
+                                                button {
+                                                    key: "{style.as_str()}",
+                                                    class: "context-menu-item",
+                                                    onclick: move |e| {
+                                                        e.stop_propagation();
+                                                        show_editor_menu.set(false);
+                                                        show_ai_submenu.set(false);
+                                                        show_continue_submenu.set(false);
+                                                        launch_editor_ai_preset(
+                                                            state,
+                                                            "continue",
+                                                            None,
+                                                            Some(style),
+                                                        );
+                                                    },
+                                                    "{t(style.label_i18n_key(), lang)}"
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                                 button {
                                     class: "context-menu-item",
@@ -554,7 +539,8 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
-                                        launch_editor_ai_preset(state, "improve", None);
+                                        show_continue_submenu.set(false);
+                                        launch_editor_ai_preset(state, "improve", None, None);
                                     },
                                     "{improve_t}"
                                 }
@@ -564,7 +550,8 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
-                                        launch_editor_ai_preset(state, "outline", None);
+                                        show_continue_submenu.set(false);
+                                        launch_editor_ai_preset(state, "outline", None, None);
                                     },
                                     "{outline_t}"
                                 }
@@ -574,10 +561,12 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
+                                        show_continue_submenu.set(false);
                                         launch_editor_ai_preset(
                                             state,
                                             "translate",
                                             Some(Language::EnUS),
+                                            None,
                                         );
                                     },
                                     "{translate_en_t}"
@@ -588,10 +577,12 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
+                                        show_continue_submenu.set(false);
                                         launch_editor_ai_preset(
                                             state,
                                             "translate",
                                             Some(Language::ZhCN),
+                                            None,
                                         );
                                     },
                                     "{translate_zh_t}"
@@ -602,7 +593,8 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
-                                        launch_editor_ai_preset(state, "fix_grammar", None);
+                                        show_continue_submenu.set(false);
+                                        launch_editor_ai_preset(state, "fix_grammar", None, None);
                                     },
                                     "{grammar_t}"
                                 }

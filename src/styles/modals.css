@@ -539,6 +539,7 @@
   word-wrap: break-word;
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
+  color: var(--text-primary);
 }
 
 .ai-result-footer {
@@ -573,6 +574,7 @@
   word-wrap: break-word;
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
+  color: var(--text-primary);
 }
 
 /* ============================================

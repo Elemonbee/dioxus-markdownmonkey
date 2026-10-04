@@ -50,6 +50,16 @@ impl I18n {
         texts.insert("ai_assistant", lang_map("AI 助手", "AI Assistant"));
         texts.insert("ai_continue", lang_map("续写", "Continue"));
         texts.insert(
+            "ai_continue_style_match",
+            lang_map("保持原文", "Match original"),
+        );
+        texts.insert("ai_continue_style_lively", lang_map("活泼", "Lively"));
+        texts.insert("ai_continue_style_joyful", lang_map("欢乐", "Joyful"));
+        texts.insert("ai_continue_style_sad", lang_map("悲伤", "Sad"));
+        texts.insert("ai_continue_style_serious", lang_map("严肃", "Serious"));
+        texts.insert("ai_continue_style_humorous", lang_map("幽默", "Humorous"));
+        texts.insert("ai_continue_style_lyrical", lang_map("抒情", "Lyrical"));
+        texts.insert(
             "ai_continue_need_selection",
             lang_map(
                 "请先选中要续写的段落，避免长文截断后内容对不齐。",
@@ -627,6 +637,13 @@ mod tests {
             "ai_insert_cursor",
             "ai_insert_after_selection",
             "ai_continue_need_selection",
+            "ai_continue_style_match",
+            "ai_continue_style_lively",
+            "ai_continue_style_joyful",
+            "ai_continue_style_sad",
+            "ai_continue_style_serious",
+            "ai_continue_style_humorous",
+            "ai_continue_style_lyrical",
             "ai_need_selection",
             "ai_translate_into",
             "ai_translate_to_en",

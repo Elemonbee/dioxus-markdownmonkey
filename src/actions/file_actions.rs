@@ -319,6 +319,35 @@ impl FileActions {
         state.apply_disk_snapshot(tab_id, path, content, encoding)
     }
 
+    /// 重新加载外部修改提示队列里的第一个文件，必要时先切到对应标签
+    /// Reload the first file in the external-edit queue, switching to its tab when needed
+    pub async fn reload_pending_external_file(state: &mut AppState) -> Result<(), String> {
+        let path = state.external_modified_paths.read().first().cloned();
+        let Some(path) = path else {
+            crate::actions::AppActions::dismiss_file_external_modified(state);
+            return Ok(());
+        };
+        let tab_id = state
+            .tabs
+            .read()
+            .iter()
+            .find(|tab| tab.path.as_ref() == Some(&path))
+            .map(|tab| tab.id);
+        let Some(tab_id) = tab_id else {
+            state.forget_external_path(&path);
+            return Ok(());
+        };
+        if let Some(index) = Self::tab_index_by_id(state, tab_id) {
+            let current = *state.current_tab_index.read();
+            if index != current {
+                Self::switch_tab_flushed(state, index).await;
+            }
+        }
+        Self::reload_current_file_flushed(state).await?;
+        state.forget_external_path(&path);
+        Ok(())
+    }
+
     /// 先 flush，再从磁盘重载并推回 DOM
     /// Flush then reload from disk and push content into the DOM
     pub async fn reload_current_file_flushed(state: &mut AppState) -> Result<(), String> {
@@ -631,7 +660,7 @@ impl FileActions {
         }
 
         let old_key = state.current_ai_session_key();
-        let new_key = crate::state::ai_session_key_for_path(&path);
+        let new_key = crate::state::bind_ai_session_key(&path);
         let _ = doc;
         state.apply_disk_snapshot(tab_id, path, content, encoding)?;
         {
@@ -891,9 +920,9 @@ impl FileActions {
             *doc.current_file.write() = None;
             *doc.modified.write() = true;
             *doc.save_status.write() = SaveStatus::Unsaved;
-            *doc.file_external_modified.write() = false;
             state.refresh_file_watch();
         }
+        state.prune_external_modifications();
 
         let workspace_deleted = workspace
             .as_ref()
@@ -950,7 +979,7 @@ impl FileActions {
                 }
                 let replaced = Self::replace_path_prefix(&tab_path, old_path, &new_path);
                 tab.title = Self::tab_title_for_path(&replaced);
-                tab.ai_session_key = crate::state::ai_session_key_for_path(&replaced);
+                tab.ai_session_key = crate::state::bind_ai_session_key(&replaced);
                 tab.path = Some(replaced);
             }
         }
@@ -964,7 +993,7 @@ impl FileActions {
             .map(|current| Self::replace_path_prefix(&current, old_path, &new_path));
         if let Some(current) = current_replaced {
             *state.document().current_file.write() = Some(current);
-            *state.document().file_external_modified.write() = false;
+            state.prune_external_modifications();
             state.refresh_file_watch();
             let new_current_key = state.current_ai_session_key();
             if old_current_key != new_current_key {

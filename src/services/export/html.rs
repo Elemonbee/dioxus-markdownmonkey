@@ -57,7 +57,11 @@ pub fn export_to_html_with_options(
 
     let html_content = MarkdownService::new().render(markdown_content);
     let html_content = rewrite_and_bundle_images(&html_content, source_dir, output_path)?;
-    fs::write(output_path, wrap_html_document(&html_content, options))?;
+    let (head_assets, body_assets) = install_local_math_runtime(output_path, &html_content)?;
+    fs::write(
+        output_path,
+        wrap_html_document(&html_content, options, &head_assets, &body_assets),
+    )?;
     Ok(())
 }
 
@@ -76,7 +80,13 @@ pub fn render_html_for_print(
 
     let html_content = MarkdownService::new().render(markdown_content);
     let html_content = rewrite_images_as_data_uris(&html_content, source_dir)?;
-    Ok(wrap_html_document(&html_content, options))
+    let (head_assets, body_assets) = inline_math_runtime(&html_content);
+    Ok(wrap_html_document(
+        &html_content,
+        options,
+        &head_assets,
+        &body_assets,
+    ))
 }
 
 /// 按扩展名推断图片 MIME / Guess an image MIME type from the file extension
@@ -181,9 +191,223 @@ pub fn rewrite_images_as_data_uris(
     Ok(out)
 }
 
+/// 正文是否含公式 / Whether the body contains math
+fn body_needs_katex(html: &str) -> bool {
+    html.contains("math-inline") || html.contains("math-display")
+}
+
+/// 正文是否含 Mermaid 图 / Whether the body contains a Mermaid diagram
+fn body_needs_mermaid(html: &str) -> bool {
+    html.contains("class=\"mermaid\"")
+}
+
+/// 把 `</` 写成 `<\/`，避免内联脚本提前结束
+/// Rewrite `</` as `<\/` so an inline script cannot close early
+fn js_for_inline(js: &str) -> String {
+    js.replace("</", "<\\/")
+}
+
+/// 打包进导出目录的 KaTeX 字体 / KaTeX fonts copied beside an HTML export
+fn katex_font_bytes() -> [(&'static str, &'static [u8]); 20] {
+    [
+        (
+            "KaTeX_AMS-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_AMS-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Caligraphic-Bold.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Caligraphic-Bold.woff2"),
+        ),
+        (
+            "KaTeX_Caligraphic-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Caligraphic-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Fraktur-Bold.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Fraktur-Bold.woff2"),
+        ),
+        (
+            "KaTeX_Fraktur-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Fraktur-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Main-Bold.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Main-Bold.woff2"),
+        ),
+        (
+            "KaTeX_Main-BoldItalic.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Main-BoldItalic.woff2"),
+        ),
+        (
+            "KaTeX_Main-Italic.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Main-Italic.woff2"),
+        ),
+        (
+            "KaTeX_Main-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Main-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Math-BoldItalic.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Math-BoldItalic.woff2"),
+        ),
+        (
+            "KaTeX_Math-Italic.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Math-Italic.woff2"),
+        ),
+        (
+            "KaTeX_SansSerif-Bold.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_SansSerif-Bold.woff2"),
+        ),
+        (
+            "KaTeX_SansSerif-Italic.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_SansSerif-Italic.woff2"),
+        ),
+        (
+            "KaTeX_SansSerif-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_SansSerif-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Script-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Script-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size1-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Size1-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size2-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Size2-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size3-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Size3-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Size4-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Size4-Regular.woff2"),
+        ),
+        (
+            "KaTeX_Typewriter-Regular.woff2",
+            include_bytes!("../../../assets/vendor/fonts/KaTeX_Typewriter-Regular.woff2"),
+        ),
+    ]
+}
+
+/// 把公式和图表运行时写到 `{文件名}_files/`，返回要插进 HTML 的标签
+/// Write math and diagram runtimes into `{filename}_files/` and return the tags to inject
+fn install_local_math_runtime(
+    output_path: &Path,
+    body: &str,
+) -> Result<(String, String), ExportError> {
+    let needs_katex = body_needs_katex(body);
+    let needs_mermaid = body_needs_mermaid(body);
+    if !needs_katex && !needs_mermaid {
+        return Ok((String::new(), String::new()));
+    }
+    let dir = assets_dir_for_output(output_path);
+    fs::create_dir_all(&dir)?;
+    let rel = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("export_files");
+    let rel = crate::services::highlight::escape_attr(rel);
+    let mut head = String::new();
+    let mut scripts = String::new();
+    if needs_katex {
+        use crate::services::katex_css::{drop_katex_woff_ttf, scope_katex_counters};
+        let css = scope_katex_counters(&drop_katex_woff_ttf(include_str!(
+            "../../../assets/vendor/katex.min.css"
+        )));
+        fs::create_dir_all(dir.join("fonts"))?;
+        fs::write(dir.join("katex.min.css"), css)?;
+        fs::write(
+            dir.join("katex.min.js"),
+            include_bytes!("../../../assets/vendor/katex.min.js"),
+        )?;
+        for (name, bytes) in katex_font_bytes() {
+            fs::write(dir.join("fonts").join(name), bytes)?;
+        }
+        head.push_str(&format!(
+            "<link rel=\"stylesheet\" href=\"{rel}/katex.min.css\">"
+        ));
+        scripts.push_str(&format!("<script src=\"{rel}/katex.min.js\"></script>"));
+    }
+    if needs_mermaid {
+        fs::write(
+            dir.join("mermaid.min.js"),
+            include_bytes!("../../../assets/vendor/mermaid.min.js"),
+        )?;
+        scripts.push_str(&format!("<script src=\"{rel}/mermaid.min.js\"></script>"));
+    }
+    Ok((head, scripts))
+}
+
+/// 打印 iframe 没有文件基底，公式和图表直接内联
+/// The print iframe has no file base, so math and diagrams are inlined
+fn inline_math_runtime(body: &str) -> (String, String) {
+    let mut head = String::new();
+    let mut scripts = String::new();
+    if body_needs_katex(body) {
+        head.push_str("<style>");
+        head.push_str(inline_katex_css());
+        head.push_str("</style>");
+        scripts.push_str("<script>");
+        scripts.push_str(&js_for_inline(include_str!(
+            "../../../assets/vendor/katex.min.js"
+        )));
+        scripts.push_str("</script>");
+    }
+    if body_needs_mermaid(body) {
+        scripts.push_str("<script>");
+        scripts.push_str(&js_for_inline(include_str!(
+            "../../../assets/vendor/mermaid.min.js"
+        )));
+        scripts.push_str("</script>");
+    }
+    (head, scripts)
+}
+
+/// 把 KaTeX 字体收成 data URI，供离线打印使用
+/// Embed KaTeX fonts as data URIs for offline printing
+fn inline_katex_css() -> &'static str {
+    static CSS: OnceLock<String> = OnceLock::new();
+    CSS.get_or_init(|| {
+        use crate::services::katex_css::{
+            drop_katex_woff_ttf, replace_katex_font_urls, scope_katex_counters,
+        };
+        use base64::{engine::general_purpose, Engine as _};
+
+        let encoded: Vec<(String, String)> = katex_font_bytes()
+            .into_iter()
+            .map(|(name, bytes)| {
+                (
+                    name.to_string(),
+                    format!(
+                        "data:font/woff2;base64,{}",
+                        general_purpose::STANDARD.encode(bytes)
+                    ),
+                )
+            })
+            .collect();
+        let refs: Vec<(&str, &str)> = encoded
+            .iter()
+            .map(|(name, url)| (name.as_str(), url.as_str()))
+            .collect();
+        scope_katex_counters(&replace_katex_font_urls(
+            &drop_katex_woff_ttf(include_str!("../../../assets/vendor/katex.min.css")),
+            &refs,
+        ))
+    })
+}
+
 /// 把已渲染的正文包成带样式的完整 HTML 文档
 /// Wrap rendered body HTML in a styled standalone document
-fn wrap_html_document(html_content: &str, options: &HtmlExportOptions) -> String {
+fn wrap_html_document(
+    html_content: &str,
+    options: &HtmlExportOptions,
+    head_assets: &str,
+    body_assets: &str,
+) -> String {
     let lang = sanitize_html_lang(&options.language);
     let (fg, bg, muted, border, code_bg, syn_keyword, syn_string, syn_number, syn_fn, syn_type) =
         if options.dark {
@@ -282,14 +506,13 @@ fn wrap_html_document(html_content: &str, options: &HtmlExportOptions) -> String
             }}
         }}
     </style>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
+    {head_assets}
 </head>
 <body>
 <article class="markdown-body">
 {html_content}
 </article>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+{body_assets}
 <script>
 (function() {{
     var dark = {export_dark};
@@ -317,6 +540,8 @@ fn wrap_html_document(html_content: &str, options: &HtmlExportOptions) -> String
 </html>"#,
         color_scheme = if options.dark { "dark" } else { "light" },
         export_dark = if options.dark { "true" } else { "false" },
+        head_assets = head_assets,
+        body_assets = body_assets,
     )
 }
 
@@ -486,8 +711,25 @@ mod tests {
         let html = fs::read_to_string(&out).unwrap();
         assert!(html.contains("class=\"mermaid\""));
         assert!(html.contains("math-inline"));
-        assert!(html.contains("katex.min.js"));
-        assert!(html.contains("mermaid.min.js"));
+        assert!(html.contains("diagram_files/katex.min.js"));
+        assert!(html.contains("diagram_files/mermaid.min.js"));
+        assert!(!html.contains("jsdelivr.net"));
+        assert!(dir
+            .path()
+            .join("diagram_files")
+            .join("katex.min.js")
+            .is_file());
+        assert!(dir
+            .path()
+            .join("diagram_files")
+            .join("mermaid.min.js")
+            .is_file());
+        assert!(dir
+            .path()
+            .join("diagram_files")
+            .join("fonts")
+            .join("KaTeX_Main-Regular.woff2")
+            .is_file());
     }
 
     #[test]
@@ -517,7 +759,9 @@ mod tests {
             render_html_for_print("# Title\n\n$a^2$", None, &HtmlExportOptions::default()).unwrap();
         assert!(html.contains("@media print"));
         assert!(html.contains("math-inline"));
-        assert!(html.contains("katex.min.js"));
+        assert!(html.contains("module.exports="));
+        assert!(!html.contains("jsdelivr.net"));
+        assert!(!html.contains("mermaid.min.js"));
     }
 
     #[test]

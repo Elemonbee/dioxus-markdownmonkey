@@ -885,6 +885,135 @@ pub fn ai_insert_after_payload(content: &str, offset: usize, text: &str) -> Stri
     format!("{gap}{text}")
 }
 
+/// 续写风格 / Tone used when continuing a passage
+///
+/// 空 id 与未知 id 都表示保持原文，这样旧请求重试时行为不变。
+/// An empty or unknown id means match the source, so retries of older requests stay unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContinueStyle {
+    /// 保持原文 / Match the source
+    Match,
+    /// 活泼 / Lively
+    Lively,
+    /// 欢乐 / Joyful
+    Joyful,
+    /// 悲伤 / Sad
+    Sad,
+    /// 严肃 / Serious
+    Serious,
+    /// 幽默 / Humorous
+    Humorous,
+    /// 抒情 / Lyrical
+    Lyrical,
+}
+
+impl ContinueStyle {
+    /// 右键菜单顺序，第一项保持原文
+    /// Context-menu order; the first item keeps the source tone
+    pub const MENU: [Self; 7] = [
+        Self::Match,
+        Self::Lively,
+        Self::Joyful,
+        Self::Sad,
+        Self::Serious,
+        Self::Humorous,
+        Self::Lyrical,
+    ];
+
+    /// 写入请求快照的稳定 id / Stable id stored on the request snapshot
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Match => "match",
+            Self::Lively => "lively",
+            Self::Joyful => "joyful",
+            Self::Sad => "sad",
+            Self::Serious => "serious",
+            Self::Humorous => "humorous",
+            Self::Lyrical => "lyrical",
+        }
+    }
+
+    /// 从快照 id 解析；未知值回落到保持原文
+    /// Parse a snapshot id; unknown values fall back to matching the source
+    pub fn from_str_id(s: &str) -> Self {
+        match s {
+            "lively" => Self::Lively,
+            "joyful" => Self::Joyful,
+            "sad" => Self::Sad,
+            "serious" => Self::Serious,
+            "humorous" => Self::Humorous,
+            "lyrical" => Self::Lyrical,
+            _ => Self::Match,
+        }
+    }
+
+    /// 菜单与结果标题用的 i18n key / i18n key for the menu label and result title
+    pub fn label_i18n_key(self) -> &'static str {
+        match self {
+            Self::Match => "ai_continue_style_match",
+            Self::Lively => "ai_continue_style_lively",
+            Self::Joyful => "ai_continue_style_joyful",
+            Self::Sad => "ai_continue_style_sad",
+            Self::Serious => "ai_continue_style_serious",
+            Self::Humorous => "ai_continue_style_humorous",
+            Self::Lyrical => "ai_continue_style_lyrical",
+        }
+    }
+
+    /// 按风格生成续写的 system 与 user 提示词
+    /// Build the continue system and user prompts for this tone
+    pub fn prompts(self, zh: bool, content: &str) -> (String, String) {
+        let Some(tone) = self.tone_phrase(zh) else {
+            return if zh {
+                (
+                    "你是一个专业的写作助手。请根据用户提供的文本，自然地续写内容。续写应该与原文风格一致，内容连贯。".to_string(),
+                    format!("请续写以下文本：\n\n{content}"),
+                )
+            } else {
+                (
+                    "You are a professional writing assistant. Continue the user's text naturally, matching its style and staying coherent.".to_string(),
+                    format!("Continue the following text:\n\n{content}"),
+                )
+            };
+        };
+        if zh {
+            (
+                format!(
+                    "你是一个专业的写作助手。请根据用户提供的文本自然续写，内容连贯。续写语气要{tone}。只返回续写部分，不要重复原文，不要解释。"
+                ),
+                format!("请用{tone}的风格续写以下文本：\n\n{content}"),
+            )
+        } else {
+            (
+                format!(
+                    "You are a professional writing assistant. Continue the user's text so it stays coherent. Write in a {tone} tone. Return only the continuation, without repeating the source or adding explanations."
+                ),
+                format!("Continue the following text in a {tone} style:\n\n{content}"),
+            )
+        }
+    }
+
+    /// 当前语言下写进提示词的风格短语；保持原文时没有额外短语
+    /// Tone phrase inserted into prompts; matching the source adds no extra phrase
+    fn tone_phrase(self, zh: bool) -> Option<&'static str> {
+        Some(match (self, zh) {
+            (Self::Match, _) => return None,
+            (Self::Lively, true) => "活泼、轻快",
+            (Self::Lively, false) => "lively, light",
+            (Self::Joyful, true) => "欢乐、明快",
+            (Self::Joyful, false) => "joyful, bright",
+            (Self::Sad, true) => "悲伤、低沉",
+            (Self::Sad, false) => "sad, subdued",
+            (Self::Serious, true) => "严肃、庄重",
+            (Self::Serious, false) => "serious, solemn",
+            (Self::Humorous, true) => "幽默、风趣",
+            (Self::Humorous, false) => "humorous, witty",
+            (Self::Lyrical, true) => "抒情、细腻",
+            (Self::Lyrical, false) => "lyrical, delicate",
+        })
+    }
+}
+
 /// AI 任务类型枚举 / AI Task Type Enum
 ///
 /// 将 6 个独立的 builder 函数统一为一个枚举，
@@ -1140,19 +1269,7 @@ impl AITask {
             (false, Language::ZhCN) => "Simplified Chinese",
         };
         match self {
-            Self::Continue => {
-                if zh {
-                    (
-                        "你是一个专业的写作助手。请根据用户提供的文本，自然地续写内容。续写应该与原文风格一致，内容连贯。".to_string(),
-                        format!("请续写以下文本：\n\n{}", content),
-                    )
-                } else {
-                    (
-                        "You are a professional writing assistant. Continue the user's text naturally, matching its style and staying coherent.".to_string(),
-                        format!("Continue the following text:\n\n{}", content),
-                    )
-                }
-            }
+            Self::Continue => ContinueStyle::from_str_id(input).prompts(zh, content),
             Self::Improve => {
                 if zh {
                     (
@@ -1604,6 +1721,41 @@ mod tests {
         assert!(msgs[0].content.contains("writing assistant"));
         assert!(msgs[1].content.contains("Continue the following text"));
         assert!(msgs[1].content.contains("Hello world"));
+    }
+
+    /// 指定续写风格应写进提示词，且不再要求贴着原文语气
+    /// A chosen continue style is written into the prompt and no longer asks to match the source tone
+    #[test]
+    fn test_continue_style_changes_prompt() {
+        use crate::state::Language;
+        assert_eq!(ContinueStyle::from_str_id(""), ContinueStyle::Match);
+        assert_eq!(ContinueStyle::from_str_id("nope"), ContinueStyle::Match);
+        assert_eq!(ContinueStyle::from_str_id("sad"), ContinueStyle::Sad);
+
+        let zh = AITask::Continue.build_messages_localized(
+            "原文",
+            ContinueStyle::Lively.as_str(),
+            &[],
+            "",
+            Language::ZhCN,
+            Language::EnUS,
+        );
+        assert!(zh[0].content.contains("活泼、轻快"));
+        assert!(zh[1].content.contains("请用活泼、轻快的风格续写"));
+        assert!(zh[1].content.contains("原文"));
+        assert!(!zh[0].content.contains("与原文风格一致"));
+
+        let en = AITask::Continue.build_messages_localized(
+            "Source",
+            ContinueStyle::Serious.as_str(),
+            &[],
+            "",
+            Language::EnUS,
+            Language::ZhCN,
+        );
+        assert!(en[0].content.contains("serious, solemn"));
+        assert!(en[1].content.contains("in a serious, solemn style"));
+        assert!(!en[0].content.contains("matching its style"));
     }
 
     /// 翻译目标语言应写入 system prompt / Translate target language should appear in the system prompt

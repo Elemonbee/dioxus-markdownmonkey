@@ -28,8 +28,8 @@ const SAFE_DATA_IMAGE_PREFIXES: &[&str] = &[
 /// 判断 URL 是否危险（XSS 载体）
 /// Whether a URL is a dangerous XSS vector
 fn is_dangerous_url(value: &str) -> bool {
-    let trimmed = value.trim();
-    let lower = trimmed.to_ascii_lowercase();
+    let normalized = normalize_url_for_scheme_check(value);
+    let lower = normalized.to_ascii_lowercase();
     if lower.starts_with("javascript:")
         || lower.starts_with("vbscript:")
         || lower.starts_with("blob:")
@@ -40,6 +40,61 @@ fn is_dangerous_url(value: &str) -> bool {
         return !is_safe_data_image_url(&lower);
     }
     false
+}
+
+/// 去掉空白、NUL，并解码常见实体，避免 `java\nscript:` 或 `&#106;avascript:` 绕过检查
+/// Strip whitespace and NUL, then decode common entities, so `java\nscript:` and `&#106;avascript:` cannot slip through
+fn normalize_url_for_scheme_check(value: &str) -> String {
+    let decoded = decode_basic_entities(value.trim());
+    decoded
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace() && *ch != '\0')
+        .collect()
+}
+
+/// 解码 HTML 属性里常见的字符实体 / Decode common character entities in HTML attributes
+fn decode_basic_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        if let Some(end) = after.find(';') {
+            if let Some(ch) = decode_entity(&after[..end]) {
+                out.push(ch);
+                rest = &after[end + 1..];
+                continue;
+            }
+        }
+        out.push('&');
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 解码单个不带 `&` `;` 的实体名 / Decode one entity name without the surrounding `&` and `;`
+fn decode_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" | "#39" => Some('\''),
+        _ => {
+            let code = if let Some(hex) = entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+            {
+                u32::from_str_radix(hex, 16).ok()
+            } else {
+                entity
+                    .strip_prefix('#')
+                    .and_then(|digits| digits.parse().ok())
+            }?;
+            char::from_u32(code)
+        }
+    }
 }
 
 /// 仅放行常见光栅图 data URI，拦截 SVG 与其它 data: 载体
@@ -245,11 +300,385 @@ impl Default for MarkdownService {
     }
 }
 
+/// 允许出现在预览里的标签 / Tags allowed in the preview
+fn is_allowed_html_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "a" | "abbr"
+            | "b"
+            | "blockquote"
+            | "br"
+            | "caption"
+            | "cite"
+            | "code"
+            | "dd"
+            | "del"
+            | "details"
+            | "div"
+            | "dl"
+            | "dt"
+            | "em"
+            | "figcaption"
+            | "figure"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "hr"
+            | "i"
+            | "img"
+            | "kbd"
+            | "li"
+            | "mark"
+            | "ol"
+            | "p"
+            | "pre"
+            | "q"
+            | "s"
+            | "samp"
+            | "small"
+            | "span"
+            | "strong"
+            | "sub"
+            | "summary"
+            | "sup"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "u"
+            | "ul"
+            | "wbr"
+            | "video"
+            | "audio"
+            | "source"
+    )
+}
+
+/// 会连同内部内容一起丢掉的标签 / Tags dropped together with their contents
+fn is_dangerous_html_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "script"
+            | "style"
+            | "iframe"
+            | "object"
+            | "embed"
+            | "svg"
+            | "math"
+            | "noscript"
+            | "template"
+            | "applet"
+            | "frameset"
+            | "frame"
+            | "form"
+            | "button"
+            | "textarea"
+            | "select"
+            | "option"
+            | "link"
+            | "meta"
+            | "base"
+            | "foreignobject"
+    )
+}
+
+/// 没有结束标签的元素 / Elements that have no end tag
+fn is_void_html_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "br" | "hr" | "img" | "wbr" | "source" | "input" | "meta" | "link" | "base"
+    )
+}
+
+/// 解析到的一个 HTML 标签 / One parsed HTML tag
+struct RawHtmlTag<'a> {
+    name: String,
+    is_close: bool,
+    self_closing: bool,
+    attrs: Vec<(&'a str, Option<String>)>,
+    end: usize,
+}
+
+/// 从 `<` 起解析一个标签；解析失败返回 None
+/// Parse one tag starting at `<`; return None when the markup is not a tag
+fn parse_html_tag(input: &str, start: usize) -> Option<RawHtmlTag<'_>> {
+    let bytes = input.as_bytes();
+    if start >= bytes.len() || bytes[start] != b'<' {
+        return None;
+    }
+    let mut i = start + 1;
+    let is_close = if bytes.get(i) == Some(&b'/') {
+        i += 1;
+        true
+    } else {
+        false
+    };
+    while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+        i += 1;
+    }
+    let name_start = i;
+    while bytes.get(i).is_some_and(|b| b.is_ascii_alphanumeric()) {
+        i += 1;
+    }
+    if i == name_start {
+        return None;
+    }
+    let name = input[name_start..i].to_ascii_lowercase();
+    let mut attrs = Vec::new();
+    let mut self_closing = false;
+    if !is_close {
+        loop {
+            while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                i += 1;
+            }
+            match bytes.get(i) {
+                Some(b'>') => {
+                    i += 1;
+                    break;
+                }
+                Some(b'/') if bytes.get(i + 1) == Some(&b'>') => {
+                    self_closing = true;
+                    i += 2;
+                    break;
+                }
+                Some(_) => {}
+                None => return None,
+            }
+            let attr_start = i;
+            while bytes
+                .get(i)
+                .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b':' | b'_'))
+            {
+                i += 1;
+            }
+            if i == attr_start {
+                return None;
+            }
+            let attr_name = &input[attr_start..i];
+            while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                i += 1;
+            }
+            let value = if bytes.get(i) == Some(&b'=') {
+                i += 1;
+                while bytes.get(i).is_some_and(|b| b.is_ascii_whitespace()) {
+                    i += 1;
+                }
+                let quote = bytes.get(i).copied();
+                if matches!(quote, Some(b'"' | b'\'')) {
+                    i += 1;
+                    let value_start = i;
+                    while bytes.get(i).is_some_and(|b| Some(*b) != quote) {
+                        i += 1;
+                    }
+                    if bytes.get(i) != quote.as_ref() {
+                        return None;
+                    }
+                    let value = input[value_start..i].to_string();
+                    i += 1;
+                    Some(value)
+                } else {
+                    let value_start = i;
+                    while bytes
+                        .get(i)
+                        .is_some_and(|b| !b.is_ascii_whitespace() && *b != b'>' && *b != b'/')
+                    {
+                        i += 1;
+                    }
+                    if i == value_start {
+                        return None;
+                    }
+                    Some(input[value_start..i].to_string())
+                }
+            } else {
+                None
+            };
+            attrs.push((attr_name, value));
+        }
+    } else {
+        while bytes.get(i).is_some_and(|b| *b != b'>') {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'>') {
+            return None;
+        }
+        i += 1;
+    }
+    Some(RawHtmlTag {
+        name,
+        is_close,
+        self_closing,
+        attrs,
+        end: i,
+    })
+}
+
+/// 保留安全属性和 URL，丢掉事件处理和样式
+/// Keep safe attributes and URLs, and drop event handlers and styles
+fn sanitize_html_attr(
+    tag: &str,
+    name: &str,
+    value: Option<&str>,
+) -> Option<(String, Option<String>)> {
+    let name = name.to_ascii_lowercase();
+    if name.starts_with("on") || name == "style" || name.contains("xmlns") {
+        return None;
+    }
+    let url_attr = matches!(name.as_str(), "href" | "src" | "cite");
+    let global = matches!(name.as_str(), "title" | "class" | "id" | "dir");
+    let allowed = match tag {
+        "a" => url_attr && name == "href" || global,
+        "img" | "source" => matches!(name.as_str(), "src" | "alt" | "width" | "height") || global,
+        "video" | "audio" => {
+            matches!(name.as_str(), "src" | "controls" | "width" | "height") || global
+        }
+        "td" | "th" => matches!(name.as_str(), "colspan" | "rowspan") || global,
+        "ol" => matches!(name.as_str(), "start" | "type") || global,
+        "blockquote" | "q" => name == "cite" || global,
+        "details" => name == "open" || global,
+        _ => global,
+    };
+    if !allowed {
+        return None;
+    }
+    if matches!(name.as_str(), "controls" | "open") {
+        return Some((name, None));
+    }
+    let raw = value.unwrap_or("");
+    let cleaned = if url_attr {
+        if is_dangerous_url(raw) {
+            return None;
+        }
+        raw.to_string()
+    } else if matches!(name.as_str(), "class" | "id") {
+        raw.chars()
+            .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '_' | '-' | ':'))
+            .collect()
+    } else if matches!(
+        name.as_str(),
+        "width" | "height" | "colspan" | "rowspan" | "start"
+    ) {
+        let digits: String = raw.chars().filter(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            return None;
+        }
+        digits
+    } else if name == "dir" {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "ltr" | "rtl" | "auto" => raw.trim().to_ascii_lowercase(),
+            _ => return None,
+        }
+    } else if name == "type" {
+        match raw.trim() {
+            "1" | "a" | "A" | "i" | "I" => raw.trim().to_string(),
+            _ => return None,
+        }
+    } else {
+        raw.chars().filter(|ch| !ch.is_control()).collect()
+    };
+    if cleaned.is_empty() && name != "alt" {
+        return None;
+    }
+    Some((name, Some(cleaned)))
+}
+
+/// 把 Markdown 里的原始 HTML 收成安全子集
+/// Reduce raw HTML embedded in Markdown to a safe subset
+fn sanitize_raw_html(input: &str) -> String {
+    let mut out = String::new();
+    let mut skip: Vec<String> = Vec::new();
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            if skip.is_empty() && input[i..].starts_with("<!--") {
+                if let Some(end) = input[i..].find("-->") {
+                    i += end + 3;
+                    continue;
+                }
+            }
+            if let Some(tag) = parse_html_tag(input, i) {
+                let end = tag.end;
+                if !skip.is_empty() {
+                    if tag.is_close && tag.name == *skip.last().unwrap() {
+                        skip.pop();
+                    } else if !tag.is_close
+                        && !tag.self_closing
+                        && is_dangerous_html_tag(&tag.name)
+                        && !is_void_html_tag(&tag.name)
+                    {
+                        skip.push(tag.name);
+                    }
+                    i = end;
+                    continue;
+                }
+                if tag.is_close {
+                    if is_allowed_html_tag(&tag.name) {
+                        out.push_str("</");
+                        out.push_str(&tag.name);
+                        out.push('>');
+                    }
+                } else if is_dangerous_html_tag(&tag.name) {
+                    if !tag.self_closing && !is_void_html_tag(&tag.name) {
+                        skip.push(tag.name);
+                    }
+                } else if is_allowed_html_tag(&tag.name) {
+                    out.push('<');
+                    out.push_str(&tag.name);
+                    for (attr_name, attr_value) in &tag.attrs {
+                        if let Some((safe_name, safe_value)) =
+                            sanitize_html_attr(&tag.name, attr_name, attr_value.as_deref())
+                        {
+                            out.push(' ');
+                            out.push_str(&safe_name);
+                            if let Some(value) = safe_value {
+                                out.push_str("=\"");
+                                out.push_str(&highlight::escape_attr(&value));
+                                out.push('"');
+                            }
+                        }
+                    }
+                    if tag.self_closing || is_void_html_tag(&tag.name) {
+                        out.push_str(" />");
+                    } else {
+                        out.push('>');
+                    }
+                }
+                i = end;
+                continue;
+            }
+        }
+        if !skip.is_empty() {
+            i += 1;
+            continue;
+        }
+        let ch = input[i..].chars().next().unwrap_or('\u{FFFD}');
+        match ch {
+            '<' => out.push_str("&lt;"),
+            _ => out.push(ch),
+        }
+        i += ch.len_utf8();
+    }
+    out
+}
+
 /// 过滤原始 HTML，并清洗链接/图片 URL
-/// Drop raw HTML and sanitize link/image URLs
+/// Sanitize raw HTML and link/image URLs
 fn sanitize_event(event: Event<'_>) -> Option<Event<'_>> {
     match event {
-        Event::Html(_) | Event::InlineHtml(_) => None,
+        Event::Html(raw) | Event::InlineHtml(raw) => {
+            let cleaned = sanitize_raw_html(&raw);
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(Event::Html(cleaned.into()))
+            }
+        }
         Event::Start(Tag::HtmlBlock) | Event::End(pulldown_cmark::TagEnd::HtmlBlock) => None,
         Event::Start(Tag::Link {
             link_type,
@@ -433,6 +862,27 @@ mod tests {
         let html = render_markdown("ok\n\n<script>alert('xss')</script>");
         assert!(!html.contains("<script"));
         assert!(html.contains("ok"));
+    }
+
+    #[test]
+    fn keeps_safe_html_and_strips_event_handlers() {
+        let html = render_markdown(
+            "<details><summary>More</summary>body</details>\n\n<p onclick=\"alert(1)\">x</p>",
+        );
+        assert!(html.contains("<details>"));
+        assert!(html.contains("<summary>"));
+        assert!(html.contains("More"));
+        assert!(html.contains("<p>"));
+        assert!(html.contains(">x</p>") || html.contains(">x</p"));
+        assert!(!html.to_lowercase().contains("onclick"));
+    }
+
+    #[test]
+    fn strips_obfuscated_javascript_urls() {
+        let html = render_markdown(
+            "[x](java\nscript:alert(1)) <a href=\"&#106;avascript:alert(1)\">y</a>",
+        );
+        assert!(!html.to_lowercase().contains("javascript:"));
     }
 
     #[test]

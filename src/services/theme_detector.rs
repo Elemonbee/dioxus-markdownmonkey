@@ -25,9 +25,15 @@ impl ThemeDetector {
         match Self::detect_inner() {
             Some(theme) => theme,
             None => {
-                tracing::warn!(
-                    "主题检测失败，使用默认深色主题 / Theme detection failed, using default dark theme"
-                );
+                // 轮询失败时只警告一次，避免每 2 秒刷一条日志
+                // Warn once so a failed poll does not log every 2 seconds
+                static WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        "主题检测失败，使用默认深色主题 / Theme detection failed, using default dark theme"
+                    );
+                }
                 "dark"
             }
         }

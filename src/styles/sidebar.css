@@ -489,6 +489,10 @@
   z-index: 1001;
 }
 
+.context-submenu .context-submenu {
+  z-index: 1002;
+}
+
 .context-menu-item.danger {
   color: var(--accent-error);
 }

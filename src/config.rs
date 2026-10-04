@@ -10,15 +10,6 @@ pub const PREVIEW_LARGE_FILE_DEBOUNCE_MS: u64 = 500;
 /// Content size threshold to switch to the longer preview debounce (bytes).
 pub const PREVIEW_LARGE_FILE_THRESHOLD_BYTES: usize = 100 * 1024;
 
-/// Editor virtual scroll threshold in rendered lines.
-pub const EDITOR_VIRTUAL_SCROLL_THRESHOLD_LINES: usize = 500;
-
-/// Editor line height used by virtual scrolling calculations.
-pub const EDITOR_LINE_HEIGHT_PX: f32 = 22.4;
-
-/// Extra lines rendered above and below the visible editor viewport.
-pub const EDITOR_VIRTUAL_SCROLL_BUFFER_LINES: usize = 10;
-
 /// Sidebar width clamp range.
 pub const SIDEBAR_MIN_WIDTH: u32 = 200;
 pub const SIDEBAR_MAX_WIDTH: u32 = 400;

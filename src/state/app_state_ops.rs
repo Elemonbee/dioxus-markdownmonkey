@@ -15,6 +15,20 @@ use crate::config::{
 };
 use crate::utils::file_encoding::FileEncoding;
 
+/// 一次自动保存要写盘的标签快照 / One tab snapshot waiting to be auto-saved
+pub struct PendingAutoSave {
+    /// 目标路径 / Destination path
+    pub path: PathBuf,
+    /// 要写入的正文 / Body to write
+    pub content: String,
+    /// 写回编码 / Encoding used for the write
+    pub encoding: FileEncoding,
+    /// 是否为当前编辑标签 / Whether this is the active editor tab
+    pub is_current: bool,
+    /// 当前标签取样时的内容修订号 / Content revision captured for the active tab
+    pub revision: u64,
+}
+
 /// 将任意字节偏移钳制到字符串内最近的前向 UTF-8 字符边界
 /// Clamp an arbitrary byte offset down to the nearest valid UTF-8 boundary
 fn clamp_to_char_boundary(content: &str, offset: usize) -> usize {
@@ -214,7 +228,153 @@ impl AppState {
         *self.modified.write() = false;
         *self.save_status.write() = SaveStatus::Saved;
         *self.last_saved.write() = Some(std::time::Instant::now());
+        let saved_path = self.current_file.read().clone();
+        if let Some(path) = saved_path {
+            self.forget_external_path(&path);
+        }
         self.save_current_tab_content();
+        self.refresh_file_watch();
+    }
+
+    /// 记下外部修改过的路径，并让提示弹窗显示队列中的第一个
+    /// Record externally modified paths and show the first one in the prompt
+    pub fn note_external_modifications(&mut self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        let mut queue = self.external_modified_paths.write();
+        for path in paths {
+            if !queue.iter().any(|existing| existing == path) {
+                queue.push(path.clone());
+            }
+        }
+        *self.file_external_modified.write() = !queue.is_empty();
+    }
+
+    /// 关掉当前这一条外部修改提示，队列里还有别的文件时继续显示
+    /// Dismiss the current external-edit prompt and keep showing the queue when more files remain
+    pub fn dismiss_one_external_modification(&mut self) {
+        let mut queue = self.external_modified_paths.write();
+        if !queue.is_empty() {
+            queue.remove(0);
+        }
+        *self.file_external_modified.write() = !queue.is_empty();
+    }
+
+    /// 某个路径已经按磁盘内容重载后，从提示队列里去掉它
+    /// Drop a path from the prompt queue after it was reloaded from disk
+    pub fn forget_external_path(&mut self, path: &Path) {
+        let mut queue = self.external_modified_paths.write();
+        queue.retain(|existing| existing != path);
+        *self.file_external_modified.write() = !queue.is_empty();
+    }
+
+    /// 丢掉已经不在打开标签里的外部修改提示
+    /// Drop external-edit prompts for paths that are no longer open
+    pub fn prune_external_modifications(&mut self) {
+        let open = self.open_file_paths();
+        let mut queue = self.external_modified_paths.write();
+        queue.retain(|path| open.iter().any(|existing| existing == path));
+        *self.file_external_modified.write() = !queue.is_empty();
+    }
+
+    /// 当前打开标签里的全部文件路径 / Every file path among the open tabs
+    pub fn open_file_paths(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = self
+            .tabs
+            .read()
+            .iter()
+            .filter_map(|tab| tab.path.clone())
+            .collect();
+        if let Some(current) = self.current_file.read().clone() {
+            if !paths.iter().any(|path| path == &current) {
+                paths.push(current);
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// 是否有可以写盘的未保存文件 / Whether any unsaved file can be written
+    pub fn has_pending_auto_save(&self) -> bool {
+        let current = *self.current_tab_index.read();
+        let blocked = self.external_modified_paths.read();
+        let current_blocked = self
+            .current_file
+            .read()
+            .as_ref()
+            .is_some_and(|path| blocked.iter().any(|blocked_path| blocked_path == path));
+        if *self.modified.read() && self.current_file.read().is_some() && !current_blocked {
+            return true;
+        }
+        self.tabs.read().iter().enumerate().any(|(index, tab)| {
+            index != current
+                && tab.modified
+                && tab.content.is_some()
+                && tab
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| !blocked.iter().any(|blocked_path| blocked_path == path))
+        })
+    }
+
+    /// 收集需要自动保存的标签快照；已在外部修改队列里的文件先不写，避免盖掉别人的内容
+    /// Collect tab snapshots that need auto-save; skip files waiting on an external-edit prompt
+    pub fn pending_auto_saves(&self) -> Vec<PendingAutoSave> {
+        let current = *self.current_tab_index.read();
+        let revision = *self.content_revision.read();
+        let blocked = self.external_modified_paths.read().clone();
+        let tabs = self.tabs.read();
+        let mut jobs = Vec::new();
+        for (index, tab) in tabs.iter().enumerate() {
+            let Some(path) = tab.path.clone() else {
+                continue;
+            };
+            if blocked.iter().any(|blocked_path| blocked_path == &path) {
+                continue;
+            }
+            if index == current {
+                if !*self.modified.read() {
+                    continue;
+                }
+                jobs.push(PendingAutoSave {
+                    path,
+                    content: self.content.read().clone(),
+                    encoding: *self.file_encoding.read(),
+                    is_current: true,
+                    revision,
+                });
+            } else if tab.modified {
+                if let Some(content) = tab.content.clone() {
+                    jobs.push(PendingAutoSave {
+                        path,
+                        content: content.to_string(),
+                        encoding: tab.encoding,
+                        is_current: false,
+                        revision: 0,
+                    });
+                }
+            }
+        }
+        jobs
+    }
+
+    /// 非当前标签自动保存成功后，若正文没再变，就清掉它的修改标记
+    /// After a background tab auto-saves, clear its modified flag when the body is unchanged
+    pub fn mark_inactive_tab_saved(&mut self, path: &Path, content: &str) {
+        let current = *self.current_tab_index.read();
+        {
+            let mut tabs = self.tabs.write();
+            for (index, tab) in tabs.iter_mut().enumerate() {
+                if index == current {
+                    continue;
+                }
+                if tab.path.as_deref() == Some(path) && tab.content.as_deref() == Some(content) {
+                    tab.modified = false;
+                }
+            }
+        }
         self.refresh_file_watch();
     }
 
@@ -377,6 +537,8 @@ impl AppState {
             tab.modified = false;
         }
 
+        self.forget_external_path(&path);
+
         if is_current {
             *self.current_file.write() = Some(path);
             *self.content.write() = content.clone();
@@ -386,7 +548,6 @@ impl AppState {
             *self.save_status.write() = SaveStatus::Saved;
             *self.last_saved.write() = Some(std::time::Instant::now());
             *self.file_size_bytes.write() = content.len();
-            *self.file_external_modified.write() = false;
             self.bump_content_revision();
             self.update_outline();
             self.refresh_file_watch();
@@ -522,7 +683,7 @@ impl AppState {
         *self.current_tab_index.write() = index;
 
         // 获取标签数据（包含历史记录）/ Get tab data (including history)
-        let (content_opt, path, modified, history, mut encoding, needs_reload) = {
+        let (content_opt, path, modified, mut history, mut encoding, needs_reload) = {
             let tabs = self.tabs.read();
             let tab = &tabs[index];
             (
@@ -565,13 +726,10 @@ impl AppState {
         *self.current_file.write() = path;
         *self.modified.write() = modified;
         *self.file_encoding.write() = encoding;
-        *self.history.write() = if needs_reload {
-            let mut h = DocumentHistory::default();
-            h.reset_with_content(&self.content.read());
-            h
-        } else {
-            history
-        };
+        if needs_reload {
+            history.reseed_hash(&self.content.read());
+        }
+        *self.history.write() = history;
         self.bump_content_revision();
         self.update_outline();
         self.touch_current_tab_access();
@@ -635,7 +793,7 @@ impl AppState {
         *self.current_tab_index.write() = new_index;
 
         // 恢复到新当前标签（含历史记录）/ Restore to new current tab (including history)
-        let (content_opt, path, modified, history, mut encoding, needs_reload) = {
+        let (content_opt, path, modified, mut history, mut encoding, needs_reload) = {
             let tabs = self.tabs.read();
             let tab = &tabs[new_index];
             (
@@ -675,13 +833,10 @@ impl AppState {
         *self.current_file.write() = path;
         *self.modified.write() = modified;
         *self.file_encoding.write() = encoding;
-        *self.history.write() = if needs_reload {
-            let mut h = DocumentHistory::default();
-            h.reset_with_content(&self.content.read());
-            h
-        } else {
-            history
-        };
+        if needs_reload {
+            history.reseed_hash(&self.content.read());
+        }
+        *self.history.write() = history;
         self.bump_content_revision();
         self.update_outline();
         self.touch_current_tab_access();

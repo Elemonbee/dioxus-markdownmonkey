@@ -289,14 +289,26 @@ pub fn App() -> Element {
         state
     });
 
-    // 获取当前主题 / Get current theme
+    // 获取当前主题。只有「跟随系统」才探测操作系统，避免固定主题时反复启动 reg/gsettings
+    // Read the theme. Probe the OS only while following the system theme, so a fixed theme does not spawn reg/gsettings
     let theme = *state.ui().theme.read();
-    let system_theme = use_signal(|| ThemeDetector::detect().to_string());
+    let system_theme = use_signal(|| {
+        if theme == Theme::System {
+            ThemeDetector::detect().to_string()
+        } else {
+            "dark".to_string()
+        }
+    });
+    let theme_state = state;
     use_future(move || {
         let mut system_theme = system_theme;
+        let ui = theme_state.ui();
         async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(SYSTEM_THEME_POLL_SECS)).await;
+                if *ui.theme.peek() != Theme::System {
+                    continue;
+                }
                 let detected = ThemeDetector::detect();
                 if *system_theme.peek() != detected {
                     system_theme.set(detected.to_string());
@@ -379,9 +391,10 @@ pub fn App() -> Element {
             let mut auto_saver = AutoSaveService::new();
             async move {
                 loop {
-                    // 检查自动保存状态 / Check auto-save status
+                    // 任一已打开文件都参与轮询，不只有当前标签
+                    // Poll whenever any open tab has a path, not only the active tab
                     let enabled = *ui.auto_save_enabled.read();
-                    let has_file = doc.current_file.read().is_some();
+                    let has_file = !state.open_file_paths().is_empty();
 
                     // 动态调整休眠时间：活跃时 5s，空闲时 60s，减少 CPU 唤醒
                     // Dynamic sleep: 5s when active, 60s when idle, reduce CPU wakeups
@@ -392,40 +405,36 @@ pub fn App() -> Element {
                     };
                     tokio::time::sleep(sleep_duration).await;
 
-                    // 再次检查（避免唤醒后立即执行）/ Re-check after sleep
-                    if !enabled || !has_file {
+                    let enabled = *ui.auto_save_enabled.read();
+                    if !enabled {
                         continue;
                     }
 
-                    // 同步设置到 AutoSaveService / Sync settings to AutoSaveService
                     let interval = *ui.auto_save_interval.read();
-                    let modified = *doc.modified.read();
-
                     auto_saver.set_enabled(enabled);
                     auto_saver.set_interval(interval);
+                    if !state.has_pending_auto_save() || !auto_saver.should_save(true) {
+                        continue;
+                    }
 
-                    // 检查是否需要保存 / Check if save is needed
-                    if auto_saver.should_save(modified) {
-                        // 非受控编辑器：先 flush DOM，避免自动保存过期内容
-                        // Uncontrolled editor: flush DOM first so auto-save is not stale
-                        EditorActions::flush_from_dom(&mut state).await;
-                        let path = doc.current_file.read().clone();
-                        let content = doc.content.read().clone();
-                        let encoding = *doc.file_encoding.read();
-                        let revision = *doc.content_revision.read();
+                    // 非受控编辑器：先 flush DOM，避免自动保存过期内容
+                    // Uncontrolled editor: flush DOM first so auto-save is not stale
+                    EditorActions::flush_from_dom(&mut state).await;
+                    let jobs = state.pending_auto_saves();
+                    if jobs.is_empty() {
+                        continue;
+                    }
 
+                    for job in jobs {
                         match auto_saver
-                            .auto_save(path.as_ref(), &content, encoding)
+                            .auto_save(Some(&job.path), &job.content, job.encoding)
                             .await
                         {
-                            Ok(_) => {
-                                if *doc.content_revision.read() == revision {
+                            Ok(_) if job.is_current => {
+                                if *doc.content_revision.read() == job.revision {
                                     tracing::info!("自动保存成功 / Auto save successful");
-                                    // 使用 mark_saved 确保同步 file_watch_refresh_seq，防止误报外部修改
-                                    // Use mark_saved to sync file_watch_refresh_seq, preventing false external-modification alerts
                                     state.mark_saved();
                                 } else {
-                                    // 过期写入：用最新内容再写一次 / Stale write: rewrite with latest content
                                     tracing::warn!(
                                         "自动保存内容已过期，重新写入最新内容 / Auto-save stale; rewriting latest content"
                                     );
@@ -453,6 +462,13 @@ pub fn App() -> Element {
                                     }
                                 }
                             }
+                            Ok(_) => {
+                                tracing::info!(
+                                    "后台标签自动保存成功 / Background tab auto-saved: {}",
+                                    job.path.display()
+                                );
+                                state.mark_inactive_tab_saved(&job.path, &job.content);
+                            }
                             Err(e) => {
                                 tracing::error!("自动保存失败 / Auto save failed: {}", e);
                             }
@@ -467,18 +483,19 @@ pub fn App() -> Element {
     {
         let state_clone = state;
         use_future(move || {
-            let mut doc = state_clone.document();
+            let mut state = state_clone;
+            let doc = state.document();
             let mut checker = FileModificationChecker::new();
             let mut hub = FileEventHub::spawn();
             let mut events_alive = true;
-            let mut last_file: Option<std::path::PathBuf> = None;
+            let mut last_paths: Vec<std::path::PathBuf> = Vec::new();
             let mut last_refresh_seq = 0_u64;
 
             async move {
                 loop {
                     // 有事件时用较长 mtime 兜底；事件通道挂了再回到快速轮询
                     // Use a longer mtime fallback while events work; poll fast if the hub dies
-                    let has_file = doc.current_file.read().is_some();
+                    let has_file = !state.open_file_paths().is_empty();
                     let check_interval = if !has_file {
                         std::time::Duration::from_secs(FILE_WATCH_IDLE_INTERVAL_SECS)
                     } else if events_alive {
@@ -495,20 +512,16 @@ pub fn App() -> Element {
                         }
                     }
 
-                    let current_file = doc.current_file.read().clone();
+                    let paths = state.open_file_paths();
                     let refresh_seq = *doc.file_watch_refresh_seq.read();
 
-                    // 如果文件改变，更新检测器 / If file changed, update checker
-                    if current_file != last_file {
-                        if let Some(ref path) = current_file {
-                            checker.set_file(path);
-                            hub.watch_file(Some(path));
-                            *doc.file_external_modified.write() = false;
-                        } else {
-                            checker.clear();
-                            hub.watch_file(None);
-                        }
-                        last_file = current_file;
+                    // 打开的文件集合变了就重设基线，避免把刚打开的文件当成外部修改
+                    // Reset baselines when the open-file set changes so a just-opened file is not an external edit
+                    if paths != last_paths {
+                        checker.sync_files(&paths);
+                        hub.watch_files(&paths);
+                        state.prune_external_modifications();
+                        last_paths = paths;
                         last_refresh_seq = refresh_seq;
                         continue;
                     }
@@ -517,7 +530,6 @@ pub fn App() -> Element {
                     // Refresh watcher baseline after internal save, ignore, or reload actions
                     if refresh_seq != last_refresh_seq {
                         checker.update();
-                        *doc.file_external_modified.write() = false;
                         last_refresh_seq = refresh_seq;
                         continue;
                     }
@@ -534,14 +546,18 @@ pub fn App() -> Element {
                         continue;
                     }
 
-                    // 检查文件是否被外部修改 / Check if file was externally modified
-                    if checker.check_modified() {
-                        let already_notified = *doc.file_external_modified.read();
-                        if !already_notified {
-                            tracing::warn!("文件被外部修改/File was externally modified");
-                            *doc.file_external_modified.write() = true;
-                            // FileModifiedModal 会显示提示 / FileModifiedModal will show the prompt
-                        }
+                    let changed = checker.changed_paths();
+                    if !changed.is_empty() {
+                        checker.acknowledge(&changed);
+                        tracing::warn!(
+                            "文件被外部修改 / File was externally modified: {}",
+                            changed
+                                .iter()
+                                .map(|path| path.display().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        state.note_external_modifications(&changed);
                     }
                 }
             }

@@ -33,23 +33,16 @@ fn init_native_store() -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        match zbus_secret_service_keyring_store::Store::new_with_configuration(&HashMap::new()) {
-            Ok(store) => {
-                set_default_store(store);
-                return Ok(());
-            }
-            Err(secret_error) => {
-                tracing::warn!(
-                    "Linux Secret Service 不可用，回退到会话级 keyutils: {} / \
-                     Linux Secret Service unavailable, falling back to session keyutils: {}",
-                    secret_error,
-                    secret_error
-                );
-            }
-        }
-
-        let store = linux_keyutils_keyring_store::Store::new_with_configuration(&HashMap::new())
-            .map_err(|e| format!("初始化系统密钥环失败 / Failed to initialize keyring: {}", e))?;
+        // 只用 Secret Service。会话级 keyutils 会在注销后丢失密钥，不能当成持久存储。
+        // Secret Service only. Session keyutils drops keys at logout, so it is not durable storage.
+        let store =
+            zbus_secret_service_keyring_store::Store::new_with_configuration(&HashMap::new())
+                .map_err(|e| {
+                    format!(
+                        "Linux Secret Service 不可用，API Key 仅保留在本次进程内存中 / \
+                     Linux Secret Service unavailable, API Key stays in process memory only: {e}"
+                    )
+                })?;
         set_default_store(store);
         Ok(())
     }

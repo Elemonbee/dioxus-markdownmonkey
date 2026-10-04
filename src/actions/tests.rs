@@ -996,6 +996,20 @@ mod app_actions_integration_tests {
         });
     }
 
+    /// 续写/翻译开始后关闭聊天窗，不能把这次生成取消掉
+    /// Closing the chat modal after continue/translate starts must not cancel that generation
+    #[test]
+    fn test_hide_ai_chat_does_not_cancel_preset_generation() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            let (generation_id, _cancel_rx) = AppActions::start_ai_generation(&mut state);
+            AppActions::hide_ai_chat(&mut state);
+
+            assert!(AppActions::is_ai_generation_current(&state, generation_id));
+            assert!(*state.ai().ai_loading.read());
+        });
+    }
+
     #[test]
     fn test_show_hide_ai_chat() {
         with_runtime(|| {

@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use crate::state::app_state::AppState;
 use crate::state::types::History as UndoHistory;
 use crate::state::types::{
-    AIConfig, AIProvider, Language, OutlineItem, SaveStatus, SidebarTab, TabInfo, Theme,
-    HUGE_FILE_HISTORY_THRESHOLD, HUGE_FILE_MAX_HISTORY, LARGE_FILE_HISTORY_THRESHOLD,
-    LARGE_FILE_MAX_HISTORY, MAX_HISTORY_SIZE,
+    ai_session_key_for_path, AIConfig, AIProvider, Language, OutlineItem, SaveStatus, SidebarTab,
+    TabInfo, Theme, HUGE_FILE_HISTORY_THRESHOLD, HUGE_FILE_MAX_HISTORY,
+    LARGE_FILE_HISTORY_THRESHOLD, LARGE_FILE_MAX_HISTORY, MAX_HISTORY_SIZE,
 };
 
 // ========== History 测试 / History Tests ==========
@@ -145,13 +145,37 @@ fn test_tab_info_from_file_no_extension() {
 fn test_tab_info_try_evict() {
     let mut tab = TabInfo::from_file(PathBuf::from("/docs/doc.md"), "body");
     assert!(!tab.is_evicted());
+    tab.history.push("older".to_string());
     assert!(tab.try_evict());
     assert!(tab.is_evicted());
     assert_eq!(tab.content_str(), "");
+    assert_eq!(tab.history.past.len(), 1);
+    assert_eq!(tab.history.past[0].as_ref(), "older");
 
     let mut dirty = TabInfo::from_file(PathBuf::from("/docs/a.md"), "x");
     dirty.modified = true;
     assert!(!dirty.try_evict());
+}
+
+#[test]
+fn test_ai_session_key_is_stable() {
+    let key = ai_session_key_for_path(PathBuf::from(r"C:\Notes\Demo.md").as_path());
+    assert!(key.starts_with("path-"));
+    assert_eq!(key.len(), "path-".len() + 32);
+    assert_eq!(
+        key,
+        ai_session_key_for_path(PathBuf::from(r"C:\Notes\Demo.md").as_path())
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        key,
+        ai_session_key_for_path(PathBuf::from("c:/notes/demo.md").as_path())
+    );
+    #[cfg(not(any(windows, target_os = "macos")))]
+    assert_ne!(
+        ai_session_key_for_path(std::path::Path::new("/Notes/Demo.md")),
+        ai_session_key_for_path(std::path::Path::new("/notes/demo.md"))
+    );
 }
 
 // ========== OutlineItem 测试 / OutlineItem Tests ==========

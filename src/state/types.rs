@@ -108,7 +108,7 @@ impl TabInfo {
             .and_then(|s| s.to_str())
             .unwrap_or("Untitled")
             .to_string();
-        let ai_session_key = ai_session_key_for_path(&path);
+        let ai_session_key = bind_ai_session_key(&path);
         let mut history = History::default();
         history.reset_with_content(content);
         Self {
@@ -140,13 +140,13 @@ impl TabInfo {
         self.content = Some(content);
     }
 
-    /// 在可安全重载时驱逐正文与历史 / Evict body and history when safe to reload
+    /// 在可安全重载时只驱逐正文，保留撤销栈
+    /// Evict the body when it can be reloaded, and keep the undo stack
     pub fn try_evict(&mut self) -> bool {
         if self.modified || self.path.is_none() || self.content.is_none() {
             return false;
         }
         self.content = None;
-        self.history = History::default();
         true
     }
 }
@@ -171,14 +171,63 @@ pub fn new_untitled_ai_session_key() -> String {
     format!("untitled-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
-/// 由文件路径派生 AI 会话键 / Derive AI session key from a file path
+/// 派生稳定会话键，并把旧哈希对应的历史文件改到新键上
+/// Derive the stable session key and rename a legacy history file onto it
+pub fn bind_ai_session_key(path: &std::path::Path) -> String {
+    let key = ai_session_key_for_path(path);
+    crate::services::settings::migrate_ai_history_key(&legacy_ai_session_key_for_path(path), &key);
+    key
+}
+
+/// 由文件路径派生稳定的 AI 会话键
+/// Derive a stable AI session key from a file path
+///
+/// 使用固定的 FNV-1a，不随 Rust 版本变化。Windows / macOS 忽略大小写；
+/// 区分大小写的系统保留原始大小写，避免不同路径合成同一条记录。
+/// Uses fixed FNV-1a so the key does not change across Rust releases.
+/// Windows / macOS ignore case; case-sensitive systems keep the original case.
 pub fn ai_session_key_for_path(path: &std::path::Path) -> String {
+    let normalized = normalized_ai_path(path);
+    let bytes = normalized.as_bytes();
+    let high = fnv1a64(bytes, 0xcbf29ce484222325);
+    let low = fnv1a64(bytes, 0x6c62272e07bb0142);
+    format!("path-{high:016x}{low:016x}")
+}
+
+/// 升级前用 `DefaultHasher` 生成的会话键，仅用于把旧历史文件改名
+/// Session key produced by `DefaultHasher` before the stable key, used only to rename old history files
+pub fn legacy_ai_session_key_for_path(path: &std::path::Path) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let normalized = path.to_string_lossy().to_lowercase().replace('\\', "/");
     let mut hasher = DefaultHasher::new();
     normalized.hash(&mut hasher);
     format!("path-{:016x}", hasher.finish())
+}
+
+/// 把路径收成会话键用的规范字符串
+/// Canonicalize a path for the AI session key
+fn normalized_ai_path(path: &std::path::Path) -> String {
+    let mut normalized = path.to_string_lossy().replace('\\', "/");
+    if let Some(stripped) = normalized.strip_prefix("//?/") {
+        normalized = stripped.to_string();
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        normalized = normalized.to_lowercase();
+    }
+    normalized
+}
+
+/// 稳定的 64 位 FNV-1a / Stable 64-bit FNV-1a
+fn fnv1a64(data: &[u8], offset: u64) -> u64 {
+    const PRIME: u64 = 0x100000001b3;
+    let mut hash = offset;
+    for byte in data {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 /// 大纲项 / Outline Item
@@ -372,6 +421,12 @@ impl History {
         (s.len() as u64).hash(&mut hasher);
         s.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// 保留撤销栈，并把“当前正文”哈希对齐到重新载入的内容
+    /// Keep the undo stack and align the current-body hash with reloaded text
+    pub fn reseed_hash(&mut self, content: &str) {
+        self.last_hash = Self::hash(content);
     }
 
     /// 检查内容是否真的改变了 / Check if content actually changed

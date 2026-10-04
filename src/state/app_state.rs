@@ -116,6 +116,8 @@ pub struct AppState {
     // ========== 文件监控状态 / File Watch State ==========
     /// 文件是否被外部修改 / Is File Externally Modified
     pub file_external_modified: Signal<bool>,
+    /// 待确认的外部修改路径（含非当前标签）/ Paths with external edits awaiting confirmation, including inactive tabs
+    pub external_modified_paths: Signal<Vec<PathBuf>>,
     /// 文件监控刷新序列号（内部保存/确认后递增）/ File watch refresh sequence
     pub file_watch_refresh_seq: Signal<u64>,
     /// 内容修订号（用于保存竞态检测）/ Content revision (for save race detection)
@@ -231,6 +233,7 @@ impl AppState {
 
             // 文件监控状态 / File Watch State
             file_external_modified: Signal::new(false),
+            external_modified_paths: Signal::new(Vec::new()),
             file_watch_refresh_seq: Signal::new(0),
             content_revision: Signal::new(0),
             tab_access_clock: Signal::new(0),

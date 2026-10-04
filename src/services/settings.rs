@@ -425,12 +425,32 @@ const AI_HISTORY_DIRNAME: &str = "ai_history";
 /// Persisted history cap (matches in-memory: 10 turns / 20 messages)
 pub const AI_HISTORY_MAX_MESSAGES: usize = 20;
 
-/// 按文档键解析历史文件路径 / Resolve history file path for a document key
-pub fn ai_history_path_for_key(key: &str) -> io::Result<PathBuf> {
-    let dir = SettingsService::get_config_dir()?.join(AI_HISTORY_DIRNAME);
-    fs::create_dir_all(&dir)?;
-    let safe = key
-        .chars()
+/// 把旧会话键的历史文件改名为新键；两边相同或源文件不存在时什么都不做
+/// Rename an AI history file from an old key to a new one; no-op when keys match or the source is missing
+pub fn migrate_ai_history_key(from_key: &str, to_key: &str) {
+    if from_key.is_empty() || to_key.is_empty() || from_key == to_key {
+        return;
+    }
+    let Ok(root) = SettingsService::get_config_dir() else {
+        return;
+    };
+    let dir = root.join(AI_HISTORY_DIRNAME);
+    if !dir.is_dir() {
+        return;
+    }
+    let from = dir.join(format!("{}.json", sanitize_ai_history_key(from_key)));
+    let to = dir.join(format!("{}.json", sanitize_ai_history_key(to_key)));
+    if to.exists() || !from.exists() {
+        return;
+    }
+    if fs::rename(&from, &to).is_err() && fs::copy(&from, &to).is_ok() {
+        let _ = fs::remove_file(&from);
+    }
+}
+
+/// 会话键收成安全文件名 / Reduce a session key to a safe filename stem
+fn sanitize_ai_history_key(key: &str) -> String {
+    key.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
                 c
@@ -438,8 +458,14 @@ pub fn ai_history_path_for_key(key: &str) -> io::Result<PathBuf> {
                 '_'
             }
         })
-        .collect::<String>();
-    Ok(dir.join(format!("{safe}.json")))
+        .collect()
+}
+
+/// 按文档键解析历史文件路径 / Resolve history file path for a document key
+pub fn ai_history_path_for_key(key: &str) -> io::Result<PathBuf> {
+    let dir = SettingsService::get_config_dir()?.join(AI_HISTORY_DIRNAME);
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{}.json", sanitize_ai_history_key(key))))
 }
 
 /// 一次性把旧版全局历史迁移到指定文档键 / One-time migrate legacy global history into a document key
