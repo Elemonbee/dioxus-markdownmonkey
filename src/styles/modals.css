@@ -525,6 +525,15 @@
   width: 640px;
 }
 
+.ai-result-source {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ai-result-content {
   max-height: 350px;
   overflow-y: auto;

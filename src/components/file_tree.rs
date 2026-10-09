@@ -516,6 +516,37 @@ fn paths_equal(a: &Path, b: &Path) -> bool {
     a == b
 }
 
+/// 文件树一行的未保存与外部修改标记
+/// Unsaved and externally-changed marks for one file-tree row
+struct FileRowMarks {
+    unsaved: bool,
+    external: bool,
+}
+
+/// 根据标签和外部修改队列判断这一行该标什么
+/// Decide the row marks from open tabs and the external-change queue
+fn file_row_marks(
+    path: &Path,
+    current_path: Option<&Path>,
+    current_modified: bool,
+    tabs: &[crate::state::TabInfo],
+    external_paths: &[PathBuf],
+) -> FileRowMarks {
+    let unsaved = tabs.iter().any(|tab| {
+        tab.path
+            .as_ref()
+            .is_some_and(|tab_path| paths_equal(tab_path, path))
+            && (tab.modified
+                || (current_modified
+                    && current_path.is_some_and(|current| paths_equal(current, path))))
+    }) || (current_modified
+        && current_path.is_some_and(|current| paths_equal(current, path)));
+    let external = external_paths
+        .iter()
+        .any(|candidate| paths_equal(candidate, path));
+    FileRowMarks { unsaved, external }
+}
+
 fn search_result_parent_label(path: &Path, workspace: Option<&Path>) -> Option<String> {
     let parent = path.parent()?;
     let relative = workspace.and_then(|root| parent.strip_prefix(root).ok());
@@ -659,6 +690,27 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
     let copy_path_t = t("copy_path", lang);
     let reveal_t = t("reveal_in_explorer", lang);
     let confirm_delete_t = t("confirm_delete", lang);
+    let unsaved_t = t("file_unsaved", lang);
+    let external_t = t("file_external_changed", lang);
+    let row_marks = if is_dir {
+        FileRowMarks {
+            unsaved: false,
+            external: false,
+        }
+    } else {
+        let doc = state.document();
+        let current_path = doc.current_file.read().clone();
+        let current_modified = *doc.modified.read();
+        let tabs = doc.tabs.read();
+        let external_paths = doc.external_modified_paths.read();
+        file_row_marks(
+            &path,
+            current_path.as_deref(),
+            current_modified,
+            &tabs,
+            &external_paths,
+        )
+    };
 
     let path_for_click = path.clone();
     let path_for_rename = path.clone();
@@ -757,6 +809,25 @@ fn FileTreeItemFlat(props: FileTreeItemFlatProps) -> Element {
                 }
             } else {
                 span { class: "name", "{name}" }
+                if row_marks.unsaved || row_marks.external {
+                    span { class: "file-status",
+                        if row_marks.unsaved {
+                            span {
+                                class: "file-status-unsaved",
+                                title: "{unsaved_t}",
+                                aria_label: "{unsaved_t}",
+                            }
+                        }
+                        if row_marks.external {
+                            span {
+                                class: "file-status-external",
+                                title: "{external_t}",
+                                aria_label: "{external_t}",
+                                "!"
+                            }
+                        }
+                    }
+                }
             }
 
             if *show_context_menu.read() {
@@ -940,6 +1011,34 @@ mod tests {
         let path = root.join("README.md");
 
         assert_eq!(search_result_parent_label(&path, Some(&root)), None);
+    }
+
+    /// 未保存和外部修改分别标在对应文件上
+    /// Unsaved and external-change marks stay on the matching file
+    #[test]
+    fn file_row_marks_unsaved_and_external() {
+        use crate::state::TabInfo;
+        let current = PathBuf::from("notes").join("a.md");
+        let other = PathBuf::from("notes").join("b.md");
+        let mut current_tab = TabInfo::from_file(current.clone(), "a");
+        current_tab.modified = false;
+        let mut other_tab = TabInfo::from_file(other.clone(), "b");
+        other_tab.modified = true;
+        let tabs = vec![current_tab, other_tab];
+        let external = vec![current.clone()];
+
+        let current_marks = file_row_marks(&current, Some(&current), true, &tabs, &external);
+        assert!(current_marks.unsaved);
+        assert!(current_marks.external);
+
+        let other_marks = file_row_marks(&other, Some(&current), true, &tabs, &external);
+        assert!(other_marks.unsaved);
+        assert!(!other_marks.external);
+
+        let clean = PathBuf::from("notes").join("c.md");
+        let clean_marks = file_row_marks(&clean, Some(&current), true, &tabs, &external);
+        assert!(!clean_marks.unsaved);
+        assert!(!clean_marks.external);
     }
 
     #[test]

@@ -340,6 +340,29 @@ impl EditorActions {
         ));
     }
 
+    /// 把拼写检查推到编辑器内核 / Push spellcheck into the editor kernel
+    fn notify_spellcheck(enabled: bool) {
+        let _ = document::eval(&format!(
+            "window._mm_spellcheck={}; if(window._mm_setSpellcheck) window._mm_setSpellcheck({});",
+            if enabled { "true" } else { "false" },
+            if enabled { "true" } else { "false" }
+        ));
+    }
+
+    /// 切换拼写检查 / Toggle spell check
+    pub fn toggle_spellcheck(state: &mut AppState) {
+        let mut ui = state.ui();
+        let next = !*ui.spellcheck.read();
+        *ui.spellcheck.write() = next;
+        Self::notify_spellcheck(next);
+    }
+
+    /// 设置拼写检查 / Set spell check
+    pub fn set_spellcheck(state: &mut AppState, enabled: bool) {
+        *state.ui().spellcheck.write() = enabled;
+        Self::notify_spellcheck(enabled);
+    }
+
     /// 把行号显示推到内核隔间 / Push line numbers into the kernel compartment
     fn notify_line_numbers(enabled: bool) {
         let _ = document::eval(&format!(

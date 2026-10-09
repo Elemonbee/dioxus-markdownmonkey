@@ -993,6 +993,66 @@ impl ContinueStyle {
         }
     }
 
+    /// 优化提示词。保持原文时与原先一字不差。
+    /// Improve prompts. Match keeps the previous wording exactly.
+    pub fn improve_prompts(self, zh: bool, content: &str) -> (String, String) {
+        if self.tone_phrase(zh).is_none() {
+            return if zh {
+                (
+                    "你是一个专业的文字编辑。请优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。".to_string(),
+                    format!("请优化以下文本：\n\n{content}"),
+                )
+            } else {
+                (
+                    "You are a professional editor. Improve the user's text so it is clearer, smoother, and more professional, without changing the core meaning.".to_string(),
+                    format!("Improve the following text:\n\n{content}"),
+                )
+            };
+        }
+        let tone = self.tone_phrase(zh).unwrap_or("");
+        if zh {
+            (
+                format!("你是一个专业的文字编辑。请用{tone}的语气优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。只返回优化后的文本，不要解释。"),
+                format!("请用{tone}的语气优化以下文本：\n\n{content}"),
+            )
+        } else {
+            (
+                format!("You are a professional editor. Improve the user's text in a {tone} tone so it is clearer, smoother, and more professional, without changing the core meaning. Return only the improved text with no explanation."),
+                format!("Improve the following text in a {tone} tone:\n\n{content}"),
+            )
+        }
+    }
+
+    /// 修正语法提示词。保持原文时与原先一字不差。
+    /// Grammar prompts. Match keeps the previous wording exactly.
+    pub fn grammar_prompts(self, zh: bool, content: &str) -> (String, String) {
+        if self.tone_phrase(zh).is_none() {
+            return if zh {
+                (
+                    "你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误。只返回修正后的文本，不要解释。".to_string(),
+                    content.to_string(),
+                )
+            } else {
+                (
+                    "You are a professional proofreader. Fix grammar, spelling, and punctuation in the user's text. Return only the corrected text with no explanation.".to_string(),
+                    content.to_string(),
+                )
+            };
+        }
+        let tone = self.tone_phrase(zh).unwrap_or("");
+        if zh {
+            (
+                format!("你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误，并把语气调整为{tone}。保持原文的核心意思不变。只返回修正后的文本，不要解释。"),
+                content.to_string(),
+            )
+        } else {
+            (
+                format!("You are a professional proofreader. Fix grammar, spelling, and punctuation in the user's text, and shift the tone to {tone}. Keep the original meaning. Return only the corrected text with no explanation."),
+                content.to_string(),
+            )
+        }
+    }
+
     /// 当前语言下写进提示词的风格短语；保持原文时没有额外短语
     /// Tone phrase inserted into prompts; matching the source adds no extra phrase
     fn tone_phrase(self, zh: bool) -> Option<&'static str> {
@@ -1297,19 +1357,7 @@ impl AITask {
         };
         match self {
             Self::Continue => continue_style.prompts(zh, content),
-            Self::Improve => {
-                if zh {
-                    (
-                        "你是一个专业的文字编辑。请优化用户提供的文本，使其更加清晰、流畅、专业。保持原文的核心意思不变。".to_string(),
-                        format!("请优化以下文本：\n\n{}", content),
-                    )
-                } else {
-                    (
-                        "You are a professional editor. Improve the user's text so it is clearer, smoother, and more professional, without changing the core meaning.".to_string(),
-                        format!("Improve the following text:\n\n{}", content),
-                    )
-                }
-            }
+            Self::Improve => continue_style.improve_prompts(zh, content),
             Self::Outline => {
                 let topic = if input.is_empty() { content } else { input };
                 if zh {
@@ -1343,19 +1391,7 @@ impl AITask {
                     )
                 }
             }
-            Self::FixGrammar => {
-                if zh {
-                    (
-                        "你是一个专业的语言校对员。请修正用户提供的文本中的语法、拼写和标点错误。只返回修正后的文本，不要解释。".to_string(),
-                        content.to_string(),
-                    )
-                } else {
-                    (
-                        "You are a professional proofreader. Fix grammar, spelling, and punctuation in the user's text. Return only the corrected text with no explanation.".to_string(),
-                        content.to_string(),
-                    )
-                }
-            }
+            Self::FixGrammar => continue_style.grammar_prompts(zh, content),
             Self::Custom => {
                 let system = if zh {
                     "你是 Markdown 写作助手。根据用户的问题和当前提供的文档上下文回答。上下文可能只是选区或光标附近的片段；不要把上下文当成续写或翻译任务，除非用户明确要求。".to_string()
@@ -1792,6 +1828,71 @@ mod tests {
         assert!(en[0].content.contains("serious, solemn"));
         assert!(en[1].content.contains("in a serious, solemn style"));
         assert!(!en[0].content.contains("matching its style"));
+    }
+
+    /// 优化和修正语法在指定风格时写入语气，保持原文时与原先提示词一致
+    /// Improve and grammar mention the tone when one is chosen, and Match keeps the old prompts
+    #[test]
+    fn test_improve_and_grammar_styles() {
+        use crate::state::Language;
+        let match_improve = AITask::Improve.build_messages_localized(
+            "原文",
+            "",
+            &[],
+            "",
+            AiPromptOptions {
+                ui_lang: Language::ZhCN,
+                translate_target: Language::EnUS,
+                continue_style: ContinueStyle::Match,
+            },
+        );
+        assert!(match_improve[0].content.contains("更加清晰、流畅、专业"));
+        assert!(!match_improve[0].content.contains("活泼、轻快"));
+        assert!(match_improve[1].content.contains("请优化以下文本"));
+
+        let lively = AITask::Improve.build_messages_localized(
+            "原文",
+            "",
+            &[],
+            "",
+            AiPromptOptions {
+                ui_lang: Language::ZhCN,
+                translate_target: Language::EnUS,
+                continue_style: ContinueStyle::Lively,
+            },
+        );
+        assert!(lively[0].content.contains("活泼、轻快"));
+        assert!(lively[1].content.contains("请用活泼、轻快的语气优化"));
+
+        let serious = AITask::FixGrammar.build_messages_localized(
+            "Source",
+            "",
+            &[],
+            "",
+            AiPromptOptions {
+                ui_lang: Language::EnUS,
+                translate_target: Language::ZhCN,
+                continue_style: ContinueStyle::Serious,
+            },
+        );
+        assert!(serious[0].content.contains("serious, solemn"));
+        assert_eq!(serious[1].content, "Source");
+
+        let match_grammar = AITask::FixGrammar.build_messages_localized(
+            "Source",
+            "",
+            &[],
+            "",
+            AiPromptOptions {
+                ui_lang: Language::EnUS,
+                translate_target: Language::ZhCN,
+                continue_style: ContinueStyle::Match,
+            },
+        );
+        assert!(match_grammar[0]
+            .content
+            .contains("Return only the corrected text with no explanation."));
+        assert!(!match_grammar[0].content.contains("serious, solemn"));
     }
 
     /// 翻译目标语言应写入 system prompt / Translate target language should appear in the system prompt

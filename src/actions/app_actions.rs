@@ -525,6 +525,9 @@ impl AppActions {
         title_error: String,
         error_prefix: String,
     ) {
+        if let Some(style) = continue_style {
+            Self::remember_ai_style(state, style);
+        }
         if let Some(target) = translate_target {
             Self::set_ai_translate_target(state, target);
         }
@@ -580,7 +583,11 @@ impl AppActions {
             Self::clear_ai_input(state);
         } else {
             let mut result_title = t(task.title_i18n_key(), lang);
-            if matches!(task, AITask::Continue) && continue_style != ContinueStyle::Match {
+            if matches!(
+                task,
+                AITask::Continue | AITask::Improve | AITask::FixGrammar
+            ) && continue_style != ContinueStyle::Match
+            {
                 result_title = format!(
                     "{} · {}",
                     result_title,
@@ -669,6 +676,32 @@ impl AppActions {
                 }
             }
         }
+    }
+
+    /// 记住当前文档上次选用的风格；保持原文存空串
+    /// Remember the current document's last tone; matching the source is stored as empty
+    pub fn remember_ai_style(state: &mut AppState, style: ContinueStyle) {
+        let mut doc = state.document();
+        let idx = *doc.current_tab_index.read();
+        let mut tabs = doc.tabs.write();
+        if let Some(tab) = tabs.get_mut(idx) {
+            tab.last_ai_style = if style == ContinueStyle::Match {
+                String::new()
+            } else {
+                style.as_str().to_string()
+            };
+        }
+    }
+
+    /// 读取当前文档上次选用的风格
+    /// Read the current document's last chosen tone
+    pub fn current_ai_style(state: &AppState) -> ContinueStyle {
+        let doc = state.document();
+        let idx = *doc.current_tab_index.read();
+        let tabs = doc.tabs.read();
+        tabs.get(idx)
+            .map(|tab| ContinueStyle::from_str_id(&tab.last_ai_style))
+            .unwrap_or(ContinueStyle::Match)
     }
 
     /// 设置 AI 输入框内容 / Set AI input text

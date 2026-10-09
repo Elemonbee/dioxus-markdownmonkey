@@ -28,6 +28,10 @@ pub struct AppSettings {
     pub word_wrap: bool,
     /// 显示行号 / Show Line Numbers
     pub line_numbers: bool,
+    /// 拼写检查；默认关闭，避免中文文档被划线
+    /// Spell check; off by default so Chinese documents are not underlined
+    #[serde(default)]
+    pub spellcheck: bool,
     /// 同步滚动 / Sync Scroll
     pub sync_scroll: bool,
     /// 侧边栏可见 / Sidebar Visible
@@ -107,6 +111,7 @@ impl Default for AppSettings {
             preview_font_size: 16,
             word_wrap: true,
             line_numbers: true,
+            spellcheck: false,
             sync_scroll: true,
             sidebar_visible: true,
             show_preview: true,
@@ -145,6 +150,7 @@ impl AppSettings {
             preview_font_size: *ui.preview_font_size.read(),
             word_wrap: *ui.word_wrap.read(),
             line_numbers: *ui.line_numbers.read(),
+            spellcheck: *ui.spellcheck.read(),
             sync_scroll: *ui.sync_scroll.read(),
             sidebar_visible: *ui.sidebar_visible.read(),
             show_preview: *ui.show_preview.read(),
@@ -613,6 +619,7 @@ mod tests {
         assert_eq!(settings.auto_save_interval, 30);
         assert!(settings.word_wrap);
         assert!(settings.line_numbers);
+        assert!(!settings.spellcheck);
         assert!(settings.sync_scroll);
     }
 

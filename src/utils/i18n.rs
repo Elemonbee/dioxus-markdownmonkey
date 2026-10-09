@@ -53,6 +53,7 @@ impl I18n {
             "ai_continue_style_match",
             lang_map("保持原文", "Match original"),
         );
+        texts.insert("ai_source_label", lang_map("来源：", "Source: "));
         texts.insert("ai_continue_style_lively", lang_map("活泼", "Lively"));
         texts.insert("ai_continue_style_joyful", lang_map("欢乐", "Joyful"));
         texts.insert("ai_continue_style_sad", lang_map("悲伤", "Sad"));
@@ -196,6 +197,11 @@ impl I18n {
 
         // 文件修改 / File Modified
         texts.insert("file_modified", lang_map("文件已修改", "File Modified"));
+        texts.insert("file_unsaved", lang_map("未保存", "Unsaved"));
+        texts.insert(
+            "file_external_changed",
+            lang_map("外部已修改", "Changed on disk"),
+        );
         texts.insert(
             "file_modified_msg",
             lang_map(
@@ -434,6 +440,7 @@ impl I18n {
             lang_map("预览字体大小", "Preview Font Size"),
         );
         texts.insert("word_wrap", lang_map("自动换行", "Word Wrap"));
+        texts.insert("spellcheck", lang_map("拼写检查", "Spell Check"));
         texts.insert("line_numbers", lang_map("显示行号", "Line Numbers"));
         texts.insert("sync_scroll", lang_map("同步滚动", "Sync Scroll"));
         texts.insert("auto_save", lang_map("自动保存", "Auto Save"));
@@ -637,6 +644,10 @@ mod tests {
             "ai_insert_cursor",
             "ai_insert_after_selection",
             "ai_continue_need_selection",
+            "ai_source_label",
+            "spellcheck",
+            "file_unsaved",
+            "file_external_changed",
             "ai_continue_style_match",
             "ai_continue_style_lively",
             "ai_continue_style_joyful",

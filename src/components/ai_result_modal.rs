@@ -8,6 +8,35 @@ use crate::state::AppState;
 use crate::utils::i18n::t;
 use dioxus::prelude::*;
 
+/// 结果窗来源摘要的字符上限 / Character budget for the result-modal source excerpt
+const AI_SOURCE_EXCERPT_CHARS: usize = 42;
+
+/// 把选区收成一行来源摘要；空白会折成单个空格
+/// Collapse a selection into a one-line source excerpt, folding whitespace into single spaces
+fn source_excerpt(text: &str, max_chars: usize) -> String {
+    let mut flat = String::new();
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !flat.is_empty() {
+                pending_space = true;
+            }
+            continue;
+        }
+        if pending_space {
+            flat.push(' ');
+            pending_space = false;
+        }
+        flat.push(ch);
+    }
+    if flat.chars().count() <= max_chars {
+        flat
+    } else {
+        let truncated: String = flat.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
+}
+
 /// AI 结果弹窗 / AI Result Modal
 #[component]
 pub fn AiResultModal() -> Element {
@@ -36,8 +65,14 @@ pub fn AiResultModal() -> Element {
         && !ai_loading
         && !can_retry
         && source_text.chars().count() <= AI_COMPARE_MAX_CHARS;
+    let source_line = if show_compare {
+        String::new()
+    } else {
+        source_excerpt(&source_text, AI_SOURCE_EXCERPT_CHARS)
+    };
 
     let close_t = t("close", lang);
+    let source_label_t = t("ai_source_label", lang);
     let copy_t = t("copy", lang);
     let retry_t = t("ai_retry", lang);
     let follow_up_t = t("ai_follow_up", lang);
@@ -78,6 +113,13 @@ pub fn AiResultModal() -> Element {
                 }
 
                 div { class: "modal-body",
+                    if !source_line.is_empty() {
+                        div {
+                            class: "ai-result-source",
+                            title: "{source_text}",
+                            "{source_label_t}{source_line}"
+                        }
+                    }
                     if ai_loading && result.is_empty() {
                         div { class: "ai-result-loading", "aria-live": "polite", "{thinking_t}" }
                     }
@@ -234,5 +276,20 @@ fn RetryButton(props: RetryButtonProps) -> Element {
             },
             "{props.label}"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::source_excerpt;
+
+    /// 多行选区收成一行，超长时加省略号
+    /// A multiline selection collapses to one line and gains an ellipsis when long
+    #[test]
+    fn source_excerpt_collapses_whitespace_and_truncates() {
+        assert_eq!(source_excerpt("  hello\n\nworld  ", 40), "hello world");
+        let long = "一二三四五六七八九十";
+        assert_eq!(source_excerpt(long, 4), "一二三四…");
+        assert!(source_excerpt("   \n", 10).is_empty());
     }
 }

@@ -397,6 +397,28 @@
   white-space: nowrap;
 }
 
+.file-status {
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.file-status-unsaved {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--accent-warning);
+}
+
+.file-status-external {
+  color: var(--accent-error);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .empty-state {
   padding: 24px;
   text-align: center;
@@ -470,6 +492,36 @@
 .context-menu-caret {
   color: var(--text-secondary);
   margin-left: 12px;
+}
+
+.context-menu-item.tone-task {
+  padding: 0;
+  gap: 0;
+}
+
+.tone-task-label,
+.tone-task-caret {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tone-task-label {
+  flex: 1;
+  padding: 8px 8px 8px 14px;
+}
+
+.tone-task-caret {
+  padding: 8px 14px 8px 8px;
+  color: var(--text-secondary);
+}
+
+.tone-task-label:hover,
+.tone-task-caret:hover {
+  background-color: var(--bg-hover);
 }
 
 .context-menu-submenu-host {

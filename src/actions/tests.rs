@@ -848,8 +848,29 @@ mod editor_actions_integration_tests {
 mod app_actions_integration_tests {
     use super::with_runtime;
     use crate::actions::AppActions;
+    use crate::services::ai::ContinueStyle;
     use crate::state::{AIProvider, AppState, Language, SidebarTab, Theme};
     use dioxus::prelude::{ReadableExt, WritableExt};
+
+    /// 风格记在当前标签上，换文档后互不影响
+    /// A tone is stored on the current tab and does not leak into another document
+    #[test]
+    fn test_remember_ai_style_is_per_tab() {
+        with_runtime(|| {
+            let mut state = AppState::new();
+            state.new_tab();
+            let remembered = *state.current_tab_index.read();
+            AppActions::remember_ai_style(&mut state, ContinueStyle::Sad);
+            assert_eq!(AppActions::current_ai_style(&state), ContinueStyle::Sad);
+            state.new_tab();
+            assert_eq!(AppActions::current_ai_style(&state), ContinueStyle::Match);
+            assert_eq!(state.tabs.read()[remembered].last_ai_style, "sad");
+            AppActions::remember_ai_style(&mut state, ContinueStyle::Match);
+            assert!(state.tabs.read()[*state.current_tab_index.read()]
+                .last_ai_style
+                .is_empty());
+        });
+    }
 
     #[test]
     fn test_toggle_theme_cycles() {

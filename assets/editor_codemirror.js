@@ -8,6 +8,7 @@
     window._mm_cmRetries = 0;
     if (typeof window._mm_wordWrap !== 'boolean') window._mm_wordWrap = true;
     if (typeof window._mm_lineNumbers !== 'boolean') window._mm_lineNumbers = true;
+    if (typeof window._mm_spellcheck !== 'boolean') window._mm_spellcheck = false;
     if (!window._mm_tabStates) window._mm_tabStates = Object.create(null);
     if (typeof window._mm_activeTabId === 'undefined') window._mm_activeTabId = null;
     if (!Array.isArray(window._mm_workspaceFiles)) window._mm_workspaceFiles = [];
@@ -279,6 +280,17 @@
      * 把已有 EditorView 挂回当前 textarea / host，不重建文档
      * Reattach an existing EditorView to the current textarea/host without rebuilding the doc
      */
+    /**
+     * 把拼写检查写到当前内核的可编辑节点
+     * Apply spellcheck to the active kernel's editable node
+     */
+    function applySpellcheck(view) {
+        var on = window._mm_spellcheck === true;
+        if (!view) return;
+        if (view.contentDOM) view.contentDOM.spellcheck = on;
+        if (view.dom) view.dom.spellcheck = on;
+    }
+
     function attachView(view, ta, host) {
         if (!view || !host) return;
         view._mm_ta = ta;
@@ -288,6 +300,7 @@
         if (view.dom.parentNode !== host) {
             host.appendChild(view.dom);
         }
+        applySpellcheck(view);
     }
 
     /**
@@ -613,6 +626,17 @@
      * 设置内核行号 gutter（对应设置项 line_numbers）
      * Set the kernel line-number gutter (settings line_numbers)
      */
+    /**
+     * 设置拼写检查（对应设置项 spellcheck，默认关闭）
+     * Set spellcheck (settings spellcheck, off by default)
+     */
+    window._mm_setSpellcheck = function (enabled) {
+        window._mm_spellcheck = enabled === true || enabled === 1 || enabled === 'true';
+        var ta = document.querySelector('.editor-textarea');
+        if (ta) ta.spellcheck = window._mm_spellcheck;
+        applySpellcheck(window._mm_cmInstance);
+    };
+
     window._mm_setLineNumbers = function (enabled) {
         window._mm_lineNumbers = enabled === true || enabled === 1 || enabled === 'true';
         var view = window._mm_cmInstance;

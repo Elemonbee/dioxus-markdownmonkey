@@ -74,6 +74,9 @@ pub struct TabInfo {
     pub last_accessed: u64,
     /// 按文档隔离的 AI 会话键 / Per-document AI session key
     pub ai_session_key: String,
+    /// 上次选用的续写、优化或校对风格；空表示保持原文
+    /// Last continue, improve, or proofread tone; empty means match the source
+    pub last_ai_style: String,
 }
 
 impl TabInfo {
@@ -91,6 +94,7 @@ impl TabInfo {
             history,
             last_accessed: 0,
             ai_session_key: new_untitled_ai_session_key(),
+            last_ai_style: String::new(),
         }
     }
 
@@ -121,6 +125,7 @@ impl TabInfo {
             history,
             last_accessed: 0,
             ai_session_key,
+            last_ai_style: String::new(),
         }
     }
 

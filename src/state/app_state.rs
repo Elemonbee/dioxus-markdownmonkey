@@ -61,6 +61,8 @@ pub struct AppState {
     pub word_wrap: Signal<bool>,
     /// 显示行号 / Show Line Numbers
     pub line_numbers: Signal<bool>,
+    /// 拼写检查 / Spell check
+    pub spellcheck: Signal<bool>,
     /// 同步滚动 / Sync Scroll
     pub sync_scroll: Signal<bool>,
 
@@ -189,6 +191,7 @@ impl AppState {
             preview_font_size: Signal::new(DEFAULT_PREVIEW_FONT_SIZE),
             word_wrap: Signal::new(true),
             line_numbers: Signal::new(true),
+            spellcheck: Signal::new(false),
             sync_scroll: Signal::new(true),
 
             // 文件编码状态 / File Encoding State

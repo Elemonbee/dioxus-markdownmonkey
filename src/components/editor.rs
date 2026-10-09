@@ -105,6 +105,7 @@ fn schedule_uncontrolled_sync(state: AppState, mut sync_gen: Signal<u64>) {
 const CONTEXT_MENU_WIDTH_PX: i32 = 180;
 const CONTEXT_SUBMENU_WIDTH_PX: i32 = 168;
 const CONTINUE_SUBMENU_HEIGHT_PX: i32 = 280;
+const AI_MENU_ITEM_HEIGHT_PX: i32 = 36;
 
 /// 读取窗口尺寸，供右键子菜单决定向哪边展开
 /// Read the viewport size so context submenus can open inward
@@ -130,14 +131,113 @@ fn submenu_class(open_left: bool, open_up: bool) -> &'static str {
     }
 }
 
+/// 风格子菜单是否应向上展开。靠下的菜单项用更大的偏移。
+/// Whether a tone submenu should open upward. Lower items use a larger offset.
+fn style_submenu_opens_up(menu_y: i32, viewport_h: i32, item_index: i32) -> bool {
+    viewport_h > 0
+        && menu_y + item_index * AI_MENU_ITEM_HEIGHT_PX + CONTINUE_SUBMENU_HEIGHT_PX > viewport_h
+}
+
+/// 任务名旁显示已记住的风格；保持原文时只显示任务名
+/// Show the remembered tone beside the task name; Match shows the task name alone
+fn tone_task_label(task_label: &str, style: ContinueStyle, lang: Language) -> String {
+    if style == ContinueStyle::Match {
+        task_label.to_string()
+    } else {
+        format!("{task_label} · {}", t(style.label_i18n_key(), lang))
+    }
+}
+
+/// 右键菜单里三个风格子菜单共用的开关
+/// Shared toggles for the three tone submenus in the context menu
+#[derive(Clone, Copy, PartialEq)]
+struct ToneMenuHandles {
+    show_editor_menu: Signal<bool>,
+    show_ai_submenu: Signal<bool>,
+    open_style_task: Signal<String>,
+}
+
+/// 带风格次级菜单的预设任务。点名称沿用上次风格，点箭头展开列表。
+/// A preset task with a tone submenu. The label reuses the last tone; the caret opens the list.
+#[component]
+fn ToneTaskHost(
+    task_id: &'static str,
+    label: String,
+    open: bool,
+    menu_class: String,
+    last_style: ContinueStyle,
+    lang: Language,
+    handles: ToneMenuHandles,
+) -> Element {
+    let state = use_context::<AppState>();
+    let remembered = last_style;
+    let mut show_editor_menu = handles.show_editor_menu;
+    let mut show_ai_submenu = handles.show_ai_submenu;
+    let mut open_style_task = handles.open_style_task;
+
+    rsx! {
+        div { class: "context-menu-submenu-host",
+            div { class: "context-menu-item has-submenu tone-task",
+                button {
+                    class: "tone-task-label",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        show_editor_menu.set(false);
+                        show_ai_submenu.set(false);
+                        open_style_task.set(String::new());
+                        launch_editor_ai_preset(state, task_id, None, Some(remembered));
+                    },
+                    "{label}"
+                }
+                button {
+                    class: "tone-task-caret",
+                    onclick: move |e| {
+                        e.stop_propagation();
+                        if open {
+                            open_style_task.set(String::new());
+                        } else {
+                            open_style_task.set(task_id.to_string());
+                        }
+                    },
+                    "›"
+                }
+            }
+            if open {
+                div { class: "{menu_class}",
+                    for style in ContinueStyle::MENU {
+                        button {
+                            key: "{style.as_str()}",
+                            class: "context-menu-item",
+                            onclick: move |e| {
+                                e.stop_propagation();
+                                show_editor_menu.set(false);
+                                show_ai_submenu.set(false);
+                                open_style_task.set(String::new());
+                                launch_editor_ai_preset(state, task_id, None, Some(style));
+                            },
+                            "{t(style.label_i18n_key(), lang)}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// 从右键菜单启动预设 AI 任务 / Launch a preset AI task from the context menu
+///
+/// 风格菜单是子组件，点选后菜单会卸掉。普通 spawn 绑在这个子组件上，会跟着被取消，结果窗就出不来。
+/// The tone menu is a child component and unmounts when a style is chosen. A scope-bound spawn is cancelled with it, so the result modal never opens.
 fn launch_editor_ai_preset(
     mut state: AppState,
     task_id: &'static str,
     translate_target: Option<Language>,
     continue_style: Option<ContinueStyle>,
 ) {
-    spawn(async move {
+    if let Some(style) = continue_style {
+        AppActions::remember_ai_style(&mut state, style);
+    }
+    dioxus_core::spawn_forever(async move {
         let lang = *state.ui().language.read();
         let title_error = t("ai_error", lang);
         let error_prefix = t("error", lang);
@@ -174,7 +274,7 @@ pub fn Editor() -> Element {
     let mut show_editor_menu = use_signal(|| false);
     let mut editor_menu_pos = use_signal(|| (0_i32, 0_i32));
     let mut show_ai_submenu = use_signal(|| false);
-    let mut show_continue_submenu = use_signal(|| false);
+    let mut open_style_task = use_signal(String::new);
     let mut menu_has_selection = use_signal(|| false);
     let editor_viewport = use_signal(|| (0_i32, 0_i32));
 
@@ -231,6 +331,10 @@ pub fn Editor() -> Element {
     let translate_en_t = t("ai_translate_to_en", lang);
     let translate_zh_t = t("ai_translate_to_zh", lang);
     let need_selection_t = t("ai_need_selection", lang);
+    let last_style = AppActions::current_ai_style(&state);
+    let continue_label = tone_task_label(&continue_t, last_style, lang);
+    let improve_label = tone_task_label(&improve_t, last_style, lang);
+    let grammar_label = tone_task_label(&grammar_t, last_style, lang);
 
     let filename = current_file
         .as_ref()
@@ -303,16 +407,20 @@ pub fn Editor() -> Element {
     let _ = use_effect(move || {
         let wrap = *ui.word_wrap.read();
         let lines = *ui.line_numbers.read();
+        let spell = *ui.spellcheck.read();
         let sync = *ui.sync_scroll.read();
         let files = serde_json::to_string(&EditorActions::workspace_completion_paths(&state))
             .unwrap_or_else(|_| "[]".to_string());
         let _ = document::eval(&format!(
-            "if(window._mm_setWordWrap)window._mm_setWordWrap({wrap});\
+            "window._mm_spellcheck={spell};\
+             if(window._mm_setWordWrap)window._mm_setWordWrap({wrap});\
              if(window._mm_setLineNumbers)window._mm_setLineNumbers({lines});\
+             if(window._mm_setSpellcheck)window._mm_setSpellcheck({spell});\
              if(window._mm_setSyncScroll)window._mm_setSyncScroll({sync});\
              if(window._mm_setWorkspaceFiles)window._mm_setWorkspaceFiles({files});",
             wrap = if wrap { "true" } else { "false" },
             lines = if lines { "true" } else { "false" },
+            spell = if spell { "true" } else { "false" },
             sync = if sync { "true" } else { "false" },
             files = files
         ));
@@ -324,20 +432,35 @@ pub fn Editor() -> Element {
     };
     let editor_menu_open = *show_editor_menu.read();
     let ai_submenu_open = *show_ai_submenu.read();
-    let continue_submenu_open = *show_continue_submenu.read();
+    let open_style = open_style_task.read().clone();
     let editor_has_sel = *menu_has_selection.read();
     let (menu_x, menu_y) = *editor_menu_pos.read();
     let (viewport_w, viewport_h) = *editor_viewport.read();
     let ai_opens_left =
         viewport_w > 0 && menu_x + CONTEXT_MENU_WIDTH_PX + CONTEXT_SUBMENU_WIDTH_PX > viewport_w;
-    let continue_opens_left = if ai_opens_left {
+    let style_opens_left = if ai_opens_left {
         menu_x >= CONTEXT_SUBMENU_WIDTH_PX * 2
     } else {
         viewport_w > 0 && menu_x + CONTEXT_MENU_WIDTH_PX + CONTEXT_SUBMENU_WIDTH_PX * 2 > viewport_w
     };
-    let continue_opens_up = viewport_h > 0 && menu_y + CONTINUE_SUBMENU_HEIGHT_PX > viewport_h;
     let ai_submenu_class = submenu_class(ai_opens_left, false);
-    let continue_submenu_class = submenu_class(continue_opens_left, continue_opens_up);
+    let continue_submenu_class = submenu_class(
+        style_opens_left,
+        style_submenu_opens_up(menu_y, viewport_h, 0),
+    );
+    let improve_submenu_class = submenu_class(
+        style_opens_left,
+        style_submenu_opens_up(menu_y, viewport_h, 1),
+    );
+    let grammar_submenu_class = submenu_class(
+        style_opens_left,
+        style_submenu_opens_up(menu_y, viewport_h, 5),
+    );
+    let tone_handles = ToneMenuHandles {
+        show_editor_menu,
+        show_ai_submenu,
+        open_style_task,
+    };
 
     rsx! {
         div {
@@ -361,7 +484,7 @@ pub fn Editor() -> Element {
                 editor_menu_pos.set((coords.x as i32, coords.y as i32));
                 refresh_editor_viewport(editor_viewport);
                 show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                 let start = *ui.cursor_start.read();
                 let end = *ui.cursor_end.read();
                 menu_has_selection
@@ -380,7 +503,7 @@ pub fn Editor() -> Element {
                 if *show_editor_menu.read() && e.key() == Key::Escape {
                     show_editor_menu.set(false);
                     show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                     e.prevent_default();
                     return;
                 }
@@ -418,7 +541,7 @@ pub fn Editor() -> Element {
                 textarea {
                     class: "editor-textarea",
                     placeholder: "{placeholder_text}",
-                    spellcheck: false,
+                    spellcheck: *ui.spellcheck.read(),
                     "aria-label": "{aria_editor_t}",
                     "aria-multiline": "true",
                     role: "textbox",
@@ -474,13 +597,13 @@ pub fn Editor() -> Element {
                     onclick: move |_| {
                         show_editor_menu.set(false);
                         show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                     },
                     oncontextmenu: move |e| {
                         e.prevent_default();
                         show_editor_menu.set(false);
                         show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                     },
                 }
                 div {
@@ -493,7 +616,7 @@ pub fn Editor() -> Element {
                             e.stop_propagation();
                             show_editor_menu.set(false);
                             show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                             launch_clipboard(state, "copy");
                         },
                         "{copy_t}"
@@ -504,7 +627,7 @@ pub fn Editor() -> Element {
                             e.stop_propagation();
                             show_editor_menu.set(false);
                             show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                             launch_clipboard(state, "cut");
                         },
                         "{cut_t}"
@@ -515,7 +638,7 @@ pub fn Editor() -> Element {
                             e.stop_propagation();
                             show_editor_menu.set(false);
                             show_ai_submenu.set(false);
-                show_continue_submenu.set(false);
+                open_style_task.set(String::new());
                             launch_clipboard(state, "paste");
                         },
                         "{paste_t}"
@@ -533,7 +656,7 @@ pub fn Editor() -> Element {
                                     let open = *show_ai_submenu.read();
                                     show_ai_submenu.set(!open);
                                     if open {
-                                        show_continue_submenu.set(false);
+                                        open_style_task.set(String::new());
                                     }
                                 }
                             },
@@ -542,40 +665,23 @@ pub fn Editor() -> Element {
                         }
                         if ai_submenu_open && editor_has_sel {
                             div { class: "{ai_submenu_class}",
-                                div { class: "context-menu-submenu-host",
-                                    button {
-                                        class: "context-menu-item has-submenu",
-                                        onclick: move |e| {
-                                            e.stop_propagation();
-                                            let open = *show_continue_submenu.read();
-                                            show_continue_submenu.set(!open);
-                                        },
-                                        span { "{continue_t}" }
-                                        span { class: "context-menu-caret", "›" }
-                                    }
-                                    if continue_submenu_open {
-                                        div { class: "{continue_submenu_class}",
-                                            for style in ContinueStyle::MENU {
-                                                button {
-                                                    key: "{style.as_str()}",
-                                                    class: "context-menu-item",
-                                                    onclick: move |e| {
-                                                        e.stop_propagation();
-                                                        show_editor_menu.set(false);
-                                                        show_ai_submenu.set(false);
-                                                        show_continue_submenu.set(false);
-                                                        launch_editor_ai_preset(
-                                                            state,
-                                                            "continue",
-                                                            None,
-                                                            Some(style),
-                                                        );
-                                                    },
-                                                    "{t(style.label_i18n_key(), lang)}"
-                                                }
-                                            }
-                                        }
-                                    }
+                                ToneTaskHost {
+                                    task_id: "continue",
+                                    label: continue_label.clone(),
+                                    open: open_style == "continue",
+                                    menu_class: continue_submenu_class.to_string(),
+                                    last_style,
+                                    lang,
+                                    handles: tone_handles,
+                                }
+                                ToneTaskHost {
+                                    task_id: "improve",
+                                    label: improve_label.clone(),
+                                    open: open_style == "improve",
+                                    menu_class: improve_submenu_class.to_string(),
+                                    last_style,
+                                    lang,
+                                    handles: tone_handles,
                                 }
                                 button {
                                     class: "context-menu-item",
@@ -583,18 +689,7 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
-                                        show_continue_submenu.set(false);
-                                        launch_editor_ai_preset(state, "improve", None, None);
-                                    },
-                                    "{improve_t}"
-                                }
-                                button {
-                                    class: "context-menu-item",
-                                    onclick: move |e| {
-                                        e.stop_propagation();
-                                        show_editor_menu.set(false);
-                                        show_ai_submenu.set(false);
-                                        show_continue_submenu.set(false);
+                                        open_style_task.set(String::new());
                                         launch_editor_ai_preset(state, "outline", None, None);
                                     },
                                     "{outline_t}"
@@ -605,7 +700,7 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
-                                        show_continue_submenu.set(false);
+                                        open_style_task.set(String::new());
                                         launch_editor_ai_preset(
                                             state,
                                             "translate",
@@ -621,7 +716,7 @@ pub fn Editor() -> Element {
                                         e.stop_propagation();
                                         show_editor_menu.set(false);
                                         show_ai_submenu.set(false);
-                                        show_continue_submenu.set(false);
+                                        open_style_task.set(String::new());
                                         launch_editor_ai_preset(
                                             state,
                                             "translate",
@@ -631,16 +726,14 @@ pub fn Editor() -> Element {
                                     },
                                     "{translate_zh_t}"
                                 }
-                                button {
-                                    class: "context-menu-item",
-                                    onclick: move |e| {
-                                        e.stop_propagation();
-                                        show_editor_menu.set(false);
-                                        show_ai_submenu.set(false);
-                                        show_continue_submenu.set(false);
-                                        launch_editor_ai_preset(state, "fix_grammar", None, None);
-                                    },
-                                    "{grammar_t}"
+                                ToneTaskHost {
+                                    task_id: "fix_grammar",
+                                    label: grammar_label.clone(),
+                                    open: open_style == "fix_grammar",
+                                    menu_class: grammar_submenu_class.to_string(),
+                                    last_style,
+                                    lang,
+                                    handles: tone_handles,
                                 }
                             }
                         }
@@ -671,6 +764,7 @@ mod tests {
         assert!(bridge.contains("EditorView"));
         assert!(bridge.contains("_mm_applyFormat"));
         assert!(bridge.contains("_mm_setWordWrap"));
+        assert!(bridge.contains("_mm_setSpellcheck"));
         assert!(bridge.contains("_mm_retainTabStates"));
         assert!(bridge.contains("_mm_clipboardAction"));
         assert!(!bridge.contains("fromTextArea"));
@@ -701,5 +795,7 @@ mod tests {
             "context-submenu opens-up"
         );
         assert_eq!(super::submenu_class(false, false), "context-submenu");
+        assert!(!super::style_submenu_opens_up(100, 900, 0));
+        assert!(super::style_submenu_opens_up(700, 900, 5));
     }
 }

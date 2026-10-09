@@ -44,6 +44,10 @@ pub struct SessionTabEntry {
     pub modified: bool,
     /// 草稿文件 ID（有则从 sidecar 读正文）/ Draft id when body lives in a sidecar
     pub draft_id: Option<String>,
+    /// 上次选用的风格 id；空表示保持原文
+    /// Last chosen tone id; empty means match the source
+    #[serde(default)]
+    pub ai_style: String,
 }
 
 /// 恢复结果统计 / Restore outcome statistics
@@ -162,6 +166,7 @@ impl SessionService {
                 title: tab.title.clone(),
                 modified: draft_id.is_some(),
                 draft_id,
+                ai_style: tab.last_ai_style.clone(),
             });
             seen += 1;
         }
@@ -255,6 +260,7 @@ impl SessionService {
                         tab.title = entry.title.clone();
                         tab.modified = true;
                         tab.set_content_arc(std::sync::Arc::<str>::from(content.as_str()));
+                        apply_saved_style(&mut tab, entry);
                         built.push(tab);
                         report.restored += 1;
                     }
@@ -262,7 +268,8 @@ impl SessionService {
                         // 草稿丢失：若有路径则退回路径恢复
                         // Draft missing: fall back to path if present
                         if let Some(ref path) = entry.path {
-                            if let Some(tab) = try_load_path_tab(path, &mut report) {
+                            if let Some(mut tab) = try_load_path_tab(path, &mut report) {
+                                apply_saved_style(&mut tab, entry);
                                 built.push(tab);
                                 report.restored += 1;
                             }
@@ -275,7 +282,8 @@ impl SessionService {
             }
 
             if let Some(ref path) = entry.path {
-                if let Some(tab) = try_load_path_tab(path, &mut report) {
+                if let Some(mut tab) = try_load_path_tab(path, &mut report) {
+                    apply_saved_style(&mut tab, entry);
                     built.push(tab);
                     report.restored += 1;
                 }
@@ -313,6 +321,12 @@ impl SessionService {
         let drafts = Self::drafts_dir().unwrap_or_else(|_| PathBuf::from(DRAFTS_DIRNAME));
         Self::restore_into(state, snapshot, &drafts)
     }
+}
+
+/// 把会话里记住的风格写回标签
+/// Copy the remembered tone from a session entry onto a tab
+fn apply_saved_style(tab: &mut TabInfo, entry: &SessionTabEntry) {
+    tab.last_ai_style = entry.ai_style.clone();
 }
 
 /// 尝试从磁盘路径加载标签（过大则跳过）
@@ -395,11 +409,16 @@ mod tests {
                 title: "a".to_string(),
                 modified: false,
                 draft_id: None,
+                ai_style: String::new(),
             }],
         };
         let json = serde_json::to_string(&snap).unwrap();
         let back: SessionSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(snap, back);
+
+        let legacy = r#"{"path":null,"title":"a","modified":false,"draft_id":null}"#;
+        let entry: SessionTabEntry = serde_json::from_str(legacy).unwrap();
+        assert!(entry.ai_style.is_empty());
     }
 
     #[test]
@@ -415,6 +434,15 @@ mod tests {
             let mut state = AppState::new();
             state.open_file_in_tab(file_a.clone(), "# A\n".to_string());
             state.open_file_in_tab(file_b.clone(), "# B\nhello".to_string());
+            {
+                let mut doc = state.document();
+                let mut tabs = doc.tabs.write();
+                let tab = tabs
+                    .iter_mut()
+                    .find(|tab| tab.path.as_ref() == Some(&file_b))
+                    .unwrap();
+                tab.last_ai_style = "lively".to_string();
+            }
 
             let snap = SessionService::save_to(root, &state).unwrap();
             assert_eq!(snap.tabs.len(), 2);
@@ -430,7 +458,7 @@ mod tests {
                 .tabs
                 .read()
                 .iter()
-                .any(|t| t.path.as_ref() == Some(&file_b)));
+                .any(|t| t.path.as_ref() == Some(&file_b) && t.last_ai_style == "lively"));
         });
     }
 
@@ -475,6 +503,7 @@ mod tests {
                     title: "gone".to_string(),
                     modified: false,
                     draft_id: None,
+                    ai_style: String::new(),
                 }],
             };
 

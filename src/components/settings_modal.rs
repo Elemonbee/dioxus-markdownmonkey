@@ -29,6 +29,7 @@ pub fn SettingsModal() -> Element {
     let preview_font_size_t = t("preview_font_size", lang);
     let word_wrap_t = t("word_wrap", lang);
     let line_numbers_t = t("line_numbers", lang);
+    let spellcheck_t = t("spellcheck", lang);
     let sync_scroll_t = t("sync_scroll", lang);
     let auto_save_t = t("auto_save", lang);
     let auto_save_interval_t = t("auto_save_interval", lang);
@@ -196,6 +197,17 @@ pub fn SettingsModal() -> Element {
                                 checked: *ui.line_numbers.read(),
                                 onchange: move |_| {
                                     EditorActions::toggle_line_numbers(&mut state);
+                                },
+                            }
+                        }
+
+                        div { class: "settings-row",
+                            label { "{spellcheck_t}" }
+                            input {
+                                r#type: "checkbox",
+                                checked: *ui.spellcheck.read(),
+                                onchange: move |_| {
+                                    EditorActions::toggle_spellcheck(&mut state);
                                 },
                             }
                         }

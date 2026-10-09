@@ -173,6 +173,7 @@ pub fn App() -> Element {
             *ui.preview_font_size.write() = settings.preview_font_size;
             *ui.word_wrap.write() = settings.word_wrap;
             *ui.line_numbers.write() = settings.line_numbers;
+            EditorActions::set_spellcheck(&mut state, settings.spellcheck);
             *ui.sync_scroll.write() = settings.sync_scroll;
             *ui.sidebar_visible.write() = settings.sidebar_visible;
             *ui.show_preview.write() = settings.show_preview;
