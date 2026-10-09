@@ -2,4 +2,34 @@
 # See: https://docs.rs/cargo-audit/latest/cargo_audit/
 
 [advisories]
-ignore = []
+ignore = [
+    # bincode 1.3.3：维护者已停止开发，并认为该版本不需要再更新。
+    # 预览高亮 syntect 5.3 的 default-syntaxes 会带上 dump-load，从而依赖它。
+    # 没有可替换的修补版本。上游换掉序列化格式之前，这条会一直在。
+    # bincode 1.3.3 is unmaintained; its authors treat that release as finished.
+    # syntect 5.3's default-syntaxes feature pulls it in through dump-load.
+    # There is no patched release. This stays until syntect stops using bincode.
+    "RUSTSEC-2025-0141",
+
+    # fxhash、旧 rand：wry 0.53 的 kuchikiki → selectors 0.24 → phf 0.8。
+    # phf 0.8 只能用 rand 0.7，而那条不健全只在自定义日志器重入 thread_rng 时出现。
+    # Dioxus 0.7.10 钉死了这版 wry，不能单独换成更新的 selectors。
+    # fxhash and old rand come from wry 0.53 → kuchikiki → selectors 0.24 → phf 0.8.
+    # phf 0.8 requires rand 0.7. That unsoundness needs a custom logger re-entering thread_rng.
+    # Dioxus 0.7.10 pins this wry, so selectors cannot be upgraded on its own.
+    "RUSTSEC-2025-0057",
+    "RUSTSEC-2026-0097",
+
+    # paste：dioxus-desktop 的 image 依赖，仓库已归档。没有修补版本。
+    # paste is archived and comes in through dioxus-desktop's image crate. No patched release.
+    "RUSTSEC-2024-0436",
+
+    # proc-macro-error、glib 0.18：Linux WebKit/GTK 0.18 绑定。
+    # glib 的问题在 VariantStrIter，0.20 已修，但 gtk 0.18 不能换上 glib 0.20。
+    # Windows 构建不会编进这些 crate。要等 wry 升级 GTK 绑定。
+    # proc-macro-error and glib 0.18 are the Linux WebKit/GTK 0.18 bindings.
+    # The glib bug is in VariantStrIter and is fixed in 0.20, which gtk 0.18 cannot use.
+    # Windows builds do not compile these crates. This waits on a wry GTK upgrade.
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2024-0429",
+]
