@@ -152,6 +152,29 @@ fn test_tab_info_try_evict() {
     assert_eq!(tab.history.past.len(), 1);
     assert_eq!(tab.history.past[0].as_ref(), "older");
 
+    for index in 0..6 {
+        tab.history.push(format!("snap-{index}"));
+    }
+    for index in 0..5 {
+        tab.history
+            .future
+            .push_back(std::sync::Arc::from(format!("redo-{index}")));
+    }
+    tab.content = Some(std::sync::Arc::from("body"));
+    assert!(tab.try_evict());
+    assert_eq!(
+        tab.history.past.len(),
+        crate::state::types::EVICTED_TAB_MAX_HISTORY
+    );
+    assert_eq!(
+        tab.history.past.back().map(|item| item.as_ref()),
+        Some("snap-5")
+    );
+    assert_eq!(
+        tab.history.future.len(),
+        crate::state::types::EVICTED_TAB_MAX_HISTORY
+    );
+
     let mut dirty = TabInfo::from_file(PathBuf::from("/docs/a.md"), "x");
     dirty.modified = true;
     assert!(!dirty.try_evict());

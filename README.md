@@ -38,7 +38,7 @@
 | **语言** | Rust | Edition 2021 |
 | **Markdown** | pulldown-cmark + 自写 HTML/URL 过滤 | 0.13 |
 | **语法高亮** | syntect（预览代码块） | 5 |
-| **公式 / 图表** | KaTeX（本地 woff2）+ Mermaid（预览按需加载；HTML 导出走 CDN） | 0.16 / 11 |
+| **公式 / 图表** | KaTeX（本地 woff2）+ Mermaid（预览按需加载；HTML 导出内置本地运行时） | 0.16 / 11 |
 | **编辑器内核** | CodeMirror 6（`lang-markdown` IIFE） | 6.43 |
 | **文件监视** | notify（目录事件）+ mtime 兜底 | 6.1 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |

@@ -38,7 +38,7 @@ Versions reflect the current `Cargo.lock` / `Cargo.toml` resolution and may chan
 | **Language** | Rust | Edition 2021 |
 | **Markdown** | pulldown-cmark + custom HTML/URL filtering | 0.13 |
 | **Syntax Highlighting** | syntect (preview code blocks) | 5 |
-| **Math / Diagrams** | KaTeX (bundled woff2) + Mermaid (lazy in preview; CDN in HTML export) | 0.16 / 11 |
+| **Math / Diagrams** | KaTeX (bundled woff2) + Mermaid (lazy in preview; HTML export embeds the local runtime) | 0.16 / 11 |
 | **Editor Kernel** | CodeMirror 6 (`lang-markdown` IIFE) | 6.43 |
 | **File Watch** | notify (directory events) + mtime fallback | 6.1 |
 | **HTTP / AI** | reqwest (rustls) + tokio | 0.13 / 1 |

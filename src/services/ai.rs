@@ -1064,6 +1064,17 @@ impl AiApplyKind {
     }
 }
 
+/// 构建提示词时的语言、翻译目标和续写风格
+/// Language, translate target, and continue tone used while building prompts
+pub struct AiPromptOptions {
+    /// 界面语言 / UI language
+    pub ui_lang: Language,
+    /// 翻译目标语言 / Translate target language
+    pub translate_target: Language,
+    /// 续写风格 / Continue-writing tone
+    pub continue_style: ContinueStyle,
+}
+
 impl AITask {
     /// 从字符串标识符解析任务类型 / Parse task type from string identifier
     pub fn from_str_id(s: &str) -> Self {
@@ -1187,8 +1198,11 @@ impl AITask {
             input,
             history,
             global_system,
-            Language::ZhCN,
-            Language::EnUS,
+            AiPromptOptions {
+                ui_lang: Language::ZhCN,
+                translate_target: Language::EnUS,
+                continue_style: ContinueStyle::Match,
+            },
         )
     }
 
@@ -1200,13 +1214,17 @@ impl AITask {
         input: &str,
         history: &[crate::state::ChatTurn],
         global_system: &str,
-        ui_lang: Language,
-        translate_target: Language,
+        options: AiPromptOptions,
     ) -> Vec<Message> {
         const MAX_HISTORY_TURNS: usize = 10;
 
-        let (task_system, user_content) =
-            self.build_prompts(content, input, ui_lang, translate_target);
+        let (task_system, user_content) = self.build_prompts(
+            content,
+            input,
+            options.ui_lang,
+            options.translate_target,
+            options.continue_style,
+        );
         let system_prompt = if global_system.trim().is_empty() {
             task_system
         } else {
@@ -1234,7 +1252,13 @@ impl AITask {
     /// 生成本轮写入历史的用户文本摘要 / User-turn text stored into history
     #[allow(dead_code)]
     pub fn history_user_summary(&self, content: &str, input: &str) -> String {
-        self.history_user_summary_localized(content, input, Language::ZhCN, Language::EnUS)
+        self.history_user_summary_localized(
+            content,
+            input,
+            Language::ZhCN,
+            Language::EnUS,
+            ContinueStyle::Match,
+        )
     }
 
     /// 按 UI 语言生成本轮写入历史的用户摘要
@@ -1245,11 +1269,13 @@ impl AITask {
         input: &str,
         ui_lang: Language,
         translate_target: Language,
+        continue_style: ContinueStyle,
     ) -> String {
         if matches!(self, Self::Custom) {
             return input.trim().to_string();
         }
-        let (_, user_content) = self.build_prompts(content, input, ui_lang, translate_target);
+        let (_, user_content) =
+            self.build_prompts(content, input, ui_lang, translate_target, continue_style);
         user_content
     }
 
@@ -1260,6 +1286,7 @@ impl AITask {
         input: &str,
         ui_lang: Language,
         translate_target: Language,
+        continue_style: ContinueStyle,
     ) -> (String, String) {
         let zh = matches!(ui_lang, Language::ZhCN);
         let target_name = match (zh, translate_target) {
@@ -1269,7 +1296,7 @@ impl AITask {
             (false, Language::ZhCN) => "Simplified Chinese",
         };
         match self {
-            Self::Continue => ContinueStyle::from_str_id(input).prompts(zh, content),
+            Self::Continue => continue_style.prompts(zh, content),
             Self::Improve => {
                 if zh {
                     (
@@ -1715,8 +1742,11 @@ mod tests {
             "",
             &[],
             "",
-            Language::EnUS,
-            Language::ZhCN,
+            AiPromptOptions {
+                ui_lang: Language::EnUS,
+                translate_target: Language::ZhCN,
+                continue_style: ContinueStyle::Match,
+            },
         );
         assert!(msgs[0].content.contains("writing assistant"));
         assert!(msgs[1].content.contains("Continue the following text"));
@@ -1734,11 +1764,14 @@ mod tests {
 
         let zh = AITask::Continue.build_messages_localized(
             "原文",
-            ContinueStyle::Lively.as_str(),
+            "",
             &[],
             "",
-            Language::ZhCN,
-            Language::EnUS,
+            AiPromptOptions {
+                ui_lang: Language::ZhCN,
+                translate_target: Language::EnUS,
+                continue_style: ContinueStyle::Lively,
+            },
         );
         assert!(zh[0].content.contains("活泼、轻快"));
         assert!(zh[1].content.contains("请用活泼、轻快的风格续写"));
@@ -1747,11 +1780,14 @@ mod tests {
 
         let en = AITask::Continue.build_messages_localized(
             "Source",
-            ContinueStyle::Serious.as_str(),
+            "",
             &[],
             "",
-            Language::EnUS,
-            Language::ZhCN,
+            AiPromptOptions {
+                ui_lang: Language::EnUS,
+                translate_target: Language::ZhCN,
+                continue_style: ContinueStyle::Serious,
+            },
         );
         assert!(en[0].content.contains("serious, solemn"));
         assert!(en[1].content.contains("in a serious, solemn style"));
@@ -1767,8 +1803,11 @@ mod tests {
             "",
             &[],
             "",
-            Language::EnUS,
-            Language::ZhCN,
+            AiPromptOptions {
+                ui_lang: Language::EnUS,
+                translate_target: Language::ZhCN,
+                continue_style: ContinueStyle::Match,
+            },
         );
         assert!(to_zh[0].content.contains("Simplified Chinese"));
         assert!(to_zh[1]
@@ -1781,8 +1820,11 @@ mod tests {
             "",
             &[],
             "",
-            Language::ZhCN,
-            Language::EnUS,
+            AiPromptOptions {
+                ui_lang: Language::ZhCN,
+                translate_target: Language::EnUS,
+                continue_style: ContinueStyle::Match,
+            },
         );
         assert!(to_en[0].content.contains("英文"));
         assert!(to_en[0].content.contains("不要续写"));
@@ -1816,6 +1858,7 @@ mod tests {
             source_text: "好世".into(),
             request_content: "好世".into(),
             request_input: String::new(),
+            continue_style: String::new(),
             is_error: false,
         };
         assert_eq!(

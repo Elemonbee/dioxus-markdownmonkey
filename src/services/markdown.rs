@@ -48,7 +48,7 @@ fn normalize_url_for_scheme_check(value: &str) -> String {
     let decoded = decode_basic_entities(value.trim());
     decoded
         .chars()
-        .filter(|ch| !ch.is_ascii_whitespace() && *ch != '\0')
+        .filter(|ch| !ch.is_whitespace() && *ch != '\0')
         .collect()
 }
 
@@ -75,17 +75,19 @@ fn decode_basic_entities(input: &str) -> String {
 
 /// 解码单个不带 `&` `;` 的实体名 / Decode one entity name without the surrounding `&` and `;`
 fn decode_entity(entity: &str) -> Option<char> {
-    match entity {
+    let entity = entity.to_ascii_lowercase();
+    match entity.as_str() {
         "amp" => Some('&'),
         "lt" => Some('<'),
         "gt" => Some('>'),
         "quot" => Some('"'),
         "apos" | "#39" => Some('\''),
+        "colon" => Some(':'),
+        "tab" => Some('\t'),
+        "newline" => Some('\n'),
+        "nbsp" => Some('\u{00A0}'),
         _ => {
-            let code = if let Some(hex) = entity
-                .strip_prefix("#x")
-                .or_else(|| entity.strip_prefix("#X"))
-            {
+            let code = if let Some(hex) = entity.strip_prefix("#x") {
                 u32::from_str_radix(hex, 16).ok()
             } else {
                 entity
@@ -385,6 +387,12 @@ fn is_dangerous_html_tag(name: &str) -> bool {
             | "meta"
             | "base"
             | "foreignobject"
+            | "noembed"
+            | "noframes"
+            | "plaintext"
+            | "xmp"
+            | "listing"
+            | "portal"
     )
 }
 
@@ -883,6 +891,31 @@ mod tests {
             "[x](java\nscript:alert(1)) <a href=\"&#106;avascript:alert(1)\">y</a>",
         );
         assert!(!html.to_lowercase().contains("javascript:"));
+    }
+
+    /// 命名实体和活动标签不能在浏览器里重新拼出脚本
+    /// Named entities and active markup must not reassemble a script in the browser
+    #[test]
+    fn strips_entity_schemes_and_active_markup() {
+        let html = render_markdown(
+            "<a href=\"javascript&colon;alert(1)\">link</a>\n\n\
+             <a href=\"java&Tab;script:alert(1)\">tab</a>\n\n\
+             <img src=\"x\" onerror=\"alert(1)\">\n\n\
+             <svg><script>alert(1)</script></svg>\n\n\
+             <iframe srcdoc=\"<script>alert(1)</script>\"></iframe>\n\n\
+             <math><mi>x</mi></math>\n\n\
+             <object data=\"javascript:alert(1)\"></object>",
+        );
+        let lower = html.to_lowercase();
+        assert!(html.contains(">link</a>"));
+        assert!(!lower.contains("javascript"));
+        assert!(!lower.contains("onerror"));
+        assert!(!lower.contains("<script"));
+        assert!(!lower.contains("<svg"));
+        assert!(!lower.contains("<iframe"));
+        assert!(!lower.contains("srcdoc"));
+        assert!(!lower.contains("<math"));
+        assert!(!lower.contains("<object"));
     }
 
     #[test]

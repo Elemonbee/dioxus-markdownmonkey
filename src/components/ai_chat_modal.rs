@@ -15,6 +15,7 @@ fn launch_chat_send(mut state: AppState) {
         AppActions::run_ai_task(
             &mut state,
             "custom".into(),
+            None,
             t("ai_error", lang),
             t("error", lang),
         )

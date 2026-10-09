@@ -140,13 +140,14 @@ impl TabInfo {
         self.content = Some(content);
     }
 
-    /// 在可安全重载时只驱逐正文，保留撤销栈
-    /// Evict the body when it can be reloaded, and keep the undo stack
+    /// 在可安全重载时只驱逐正文，并压缩撤销栈
+    /// Evict the body when it can be reloaded, and shrink the undo stack
     pub fn try_evict(&mut self) -> bool {
         if self.modified || self.path.is_none() || self.content.is_none() {
             return false;
         }
         self.content = None;
+        self.history.compact_for_eviction();
         true
     }
 }
@@ -319,6 +320,9 @@ pub struct AiApplyContext {
     pub request_content: String,
     /// 自定义输入 / Custom input
     pub request_input: String,
+    /// 续写风格 id；空字符串表示保持原文
+    /// Continue-style id; empty means match the source tone
+    pub continue_style: String,
     /// 本轮是否以错误结束 / Whether this round ended in error
     pub is_error: bool,
 }
@@ -359,6 +363,8 @@ pub(crate) const LARGE_FILE_MAX_HISTORY: usize = 10;
 pub(crate) const HUGE_FILE_HISTORY_THRESHOLD: usize = 1024 * 1024; // 1MB
 /// 超大文件历史容量 / History capacity for huge files
 pub(crate) const HUGE_FILE_MAX_HISTORY: usize = 5;
+/// 标签被驱逐后仍保留的撤销/重做条数 / Undo and redo entries kept after a tab is evicted
+pub(crate) const EVICTED_TAB_MAX_HISTORY: usize = 3;
 
 /// 历史记录（用于撤销/重做）/ History (for Undo/Redo)
 /// 使用 Arc<str> 共享不可变字符串，避免多标签切换时重复克隆内容
@@ -427,6 +433,17 @@ impl History {
     /// Keep the undo stack and align the current-body hash with reloaded text
     pub fn reseed_hash(&mut self, content: &str) {
         self.last_hash = Self::hash(content);
+    }
+
+    /// 驱逐后只留最近几条快照，避免非活动标签继续占着多份全文
+    /// After eviction keep only the newest snapshots, so an inactive tab does not retain many full copies
+    pub fn compact_for_eviction(&mut self) {
+        while self.past.len() > EVICTED_TAB_MAX_HISTORY {
+            self.past.pop_front();
+        }
+        while self.future.len() > EVICTED_TAB_MAX_HISTORY {
+            self.future.pop_front();
+        }
     }
 
     /// 检查内容是否真的改变了 / Check if content actually changed

@@ -493,6 +493,16 @@
   z-index: 1002;
 }
 
+.context-submenu.opens-left {
+  left: auto;
+  right: calc(100% - 2px);
+}
+
+.context-submenu.opens-up {
+  top: auto;
+  bottom: 0;
+}
+
 .context-menu-item.danger {
   color: var(--accent-error);
 }

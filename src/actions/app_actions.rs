@@ -11,10 +11,33 @@ use crate::services::ai::{
 use crate::state::{AIProvider, AiApplyContext, AppState, Language, SidebarTab, Theme};
 use crate::utils::i18n::t;
 use dioxus::prelude::{ReadableExt, WritableExt};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
-/// 当前 AI 流取消发送端 / Cancel sender for the active AI stream
-static AI_CANCEL_TX: Mutex<Option<tokio::sync::watch::Sender<bool>>> = Mutex::new(None);
+/// 进程内递增的 AI 世代号，避免两次生成共用同一个取消开关
+/// Process-wide AI generation ids, so two generations do not share one cancel switch
+static AI_GENERATION_SEQ: AtomicU64 = AtomicU64::new(1);
+/// 每个世代自己的取消发送端 / Cancel sender owned by one generation
+static AI_CANCELS: LazyLock<Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 分配一个新的世代号 / Allocate a new generation id
+fn next_ai_generation_id() -> u64 {
+    AI_GENERATION_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 只通知指定世代取消 / Signal cancel for one generation id
+fn signal_ai_cancel(generation_id: u64) {
+    if generation_id == 0 {
+        return;
+    }
+    if let Ok(mut guard) = AI_CANCELS.lock() {
+        if let Some(tx) = guard.remove(&generation_id) {
+            let _ = tx.send(true);
+        }
+    }
+}
 
 /// 应用 Actions 处理器 / App Actions Handler
 pub struct AppActions;
@@ -177,11 +200,16 @@ impl AppActions {
     /// 结束当前世代的 loading；世代过期则返回 false
     /// Finish loading for this generation; returns false if the generation is stale
     pub fn finish_ai_generation(state: &mut AppState, generation_id: u64) -> bool {
-        let mut ai = state.ai();
-        if *ai.ai_generation_id.read() != generation_id {
-            return false;
+        {
+            let mut ai = state.ai();
+            if *ai.ai_generation_id.read() != generation_id {
+                return false;
+            }
+            *ai.ai_loading.write() = false;
         }
-        *ai.ai_loading.write() = false;
+        if let Ok(mut guard) = AI_CANCELS.lock() {
+            guard.remove(&generation_id);
+        }
         true
     }
 
@@ -199,14 +227,13 @@ impl AppActions {
     /// Start an AI generation; returns generation epoch and cancel receiver
     pub fn start_ai_generation(state: &mut AppState) -> (u64, tokio::sync::watch::Receiver<bool>) {
         let (tx, rx) = tokio::sync::watch::channel(false);
-        if let Ok(mut guard) = AI_CANCEL_TX.lock() {
-            if let Some(old) = guard.take() {
-                let _ = old.send(true);
-            }
-            *guard = Some(tx);
+        let previous = *state.ai().ai_generation_id.read();
+        let next = next_ai_generation_id();
+        signal_ai_cancel(previous);
+        if let Ok(mut guard) = AI_CANCELS.lock() {
+            guard.insert(next, tx);
         }
         let mut ai = state.ai();
-        let next = *ai.ai_generation_id.read() + 1;
         *ai.ai_generation_id.write() = next;
         *ai.ai_loading.write() = true;
         if let Some(ctx) = ai.ai_apply_context.write().as_mut() {
@@ -218,15 +245,13 @@ impl AppActions {
     /// 取消当前 AI 生成（抬高世代号、发取消信号并结束 loading）
     /// Cancel current AI generation (bump epoch, signal cancel, clear loading)
     pub fn cancel_ai_generation(state: &mut AppState) {
-        if let Ok(mut guard) = AI_CANCEL_TX.lock() {
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(true);
-            }
+        let current = *state.ai().ai_generation_id.read();
+        signal_ai_cancel(current);
+        if *state.ai().ai_generation_id.read() == current {
+            let mut ai = state.ai();
+            *ai.ai_generation_id.write() = next_ai_generation_id();
+            *ai.ai_loading.write() = false;
         }
-        let mut ai = state.ai();
-        let next = *ai.ai_generation_id.read() + 1;
-        *ai.ai_generation_id.write() = next;
-        *ai.ai_loading.write() = false;
     }
 
     /// 从结果弹窗打开聊天，不预填任务提示词
@@ -406,6 +431,7 @@ impl AppActions {
     pub async fn run_ai_task(
         state: &mut AppState,
         task_id: String,
+        continue_style: Option<ContinueStyle>,
         title_error: String,
         error_prefix: String,
     ) {
@@ -471,11 +497,14 @@ impl AppActions {
             source_text,
             request_content: content.clone(),
             request_input: input.clone(),
+            continue_style: continue_style
+                .map(|style| style.as_str().to_string())
+                .unwrap_or_default(),
             is_error: false,
         });
 
-        // 预设任务的输入只留在快照里。续写风格 id 不能留在聊天框。
-        // Preset input stays on the snapshot. A continue-style id must not remain in the chat box.
+        // 预设任务不把聊天框里的草稿带进下一轮。
+        // Preset tasks do not keep the chat-box draft for the next round.
         if task != AITask::Custom {
             Self::clear_ai_input(state);
         }
@@ -486,8 +515,8 @@ impl AppActions {
     /// 从编辑器右键菜单启动预设任务
     /// Launch a preset AI task from the editor context menu
     ///
-    /// 续写把风格 id 放进输入快照；其他任务清空输入，避免大纲误用聊天框里的文字。
-    /// Continue stores the style id on the input snapshot; other tasks clear input so Outline cannot reuse chat text.
+    /// 续写风格写在请求字段上；其他任务清空输入，避免大纲误用聊天框里的文字。
+    /// Continue stores its tone on the request; other tasks clear input so Outline cannot reuse chat text.
     pub async fn run_editor_ai_preset(
         state: &mut AppState,
         task_id: String,
@@ -499,11 +528,8 @@ impl AppActions {
         if let Some(target) = translate_target {
             Self::set_ai_translate_target(state, target);
         }
-        match continue_style {
-            Some(style) => Self::set_ai_input(state, style.as_str().to_string()),
-            None => Self::clear_ai_input(state),
-        }
-        Self::run_ai_task(state, task_id, title_error, error_prefix).await;
+        Self::clear_ai_input(state);
+        Self::run_ai_task(state, task_id, continue_style, title_error, error_prefix).await;
     }
 
     /// 重试最近一次失败的 AI 请求 / Retry the last failed AI request
@@ -532,6 +558,7 @@ impl AppActions {
         let translate_target = *state.ai().ai_translate_target.read();
         let config = state.ai().ai_config.read().clone();
         let task = AITask::from_str_id(&ctx.task_id);
+        let continue_style = ContinueStyle::from_str_id(&ctx.continue_style);
         let (history, global_system) = if task.uses_chat_session() {
             (
                 state.ai().ai_history.read().clone(),
@@ -553,12 +580,12 @@ impl AppActions {
             Self::clear_ai_input(state);
         } else {
             let mut result_title = t(task.title_i18n_key(), lang);
-            if matches!(task, AITask::Continue) {
-                let style = ContinueStyle::from_str_id(&ctx.request_input);
-                if style != ContinueStyle::Match {
-                    result_title =
-                        format!("{} · {}", result_title, t(style.label_i18n_key(), lang));
-                }
+            if matches!(task, AITask::Continue) && continue_style != ContinueStyle::Match {
+                result_title = format!(
+                    "{} · {}",
+                    result_title,
+                    t(continue_style.label_i18n_key(), lang)
+                );
             }
             Self::prepare_ai_result(state, result_title);
         }
@@ -574,14 +601,18 @@ impl AppActions {
             &ctx.request_input,
             &history,
             &global_system,
-            lang,
-            translate_target,
+            crate::services::ai::AiPromptOptions {
+                ui_lang: lang,
+                translate_target,
+                continue_style,
+            },
         );
         let user_summary = task.history_user_summary_localized(
             &ctx.request_content,
             &ctx.request_input,
             lang,
             translate_target,
+            continue_style,
         );
         let mut stream_state = *state;
         let check_state = *state;

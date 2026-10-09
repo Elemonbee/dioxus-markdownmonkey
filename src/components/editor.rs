@@ -100,6 +100,36 @@ fn schedule_uncontrolled_sync(state: AppState, mut sync_gen: Signal<u64>) {
     });
 }
 
+/// 右键菜单和子菜单的估算宽度，用来判断会不会画出窗口
+/// Estimated context-menu widths, used to keep submenus inside the window
+const CONTEXT_MENU_WIDTH_PX: i32 = 180;
+const CONTEXT_SUBMENU_WIDTH_PX: i32 = 168;
+const CONTINUE_SUBMENU_HEIGHT_PX: i32 = 280;
+
+/// 读取窗口尺寸，供右键子菜单决定向哪边展开
+/// Read the viewport size so context submenus can open inward
+fn refresh_editor_viewport(mut viewport: Signal<(i32, i32)>) {
+    spawn(async move {
+        let mut eval = document::eval("dioxus.send([window.innerWidth|0, window.innerHeight|0]);");
+        if let Ok(vals) = eval.recv::<Vec<i32>>().await {
+            if vals.len() >= 2 && vals[0] > 0 && vals[1] > 0 {
+                viewport.set((vals[0], vals[1]));
+            }
+        }
+    });
+}
+
+/// 子菜单类名：靠右贴边时向左展开，靠下贴边时向上展开
+/// Submenu class: open left near the right edge, and upward near the bottom edge
+fn submenu_class(open_left: bool, open_up: bool) -> &'static str {
+    match (open_left, open_up) {
+        (true, true) => "context-submenu opens-left opens-up",
+        (true, false) => "context-submenu opens-left",
+        (false, true) => "context-submenu opens-up",
+        (false, false) => "context-submenu",
+    }
+}
+
 /// 从右键菜单启动预设 AI 任务 / Launch a preset AI task from the context menu
 fn launch_editor_ai_preset(
     mut state: AppState,
@@ -146,6 +176,7 @@ pub fn Editor() -> Element {
     let mut show_ai_submenu = use_signal(|| false);
     let mut show_continue_submenu = use_signal(|| false);
     let mut menu_has_selection = use_signal(|| false);
+    let editor_viewport = use_signal(|| (0_i32, 0_i32));
 
     // 仅在 content_revision 变化时克隆全文，滚动等局部更新不再 O(n) 拷贝
     // Clone full content only when content_revision changes; scroll updates skip O(n) copy
@@ -295,6 +326,18 @@ pub fn Editor() -> Element {
     let ai_submenu_open = *show_ai_submenu.read();
     let continue_submenu_open = *show_continue_submenu.read();
     let editor_has_sel = *menu_has_selection.read();
+    let (menu_x, menu_y) = *editor_menu_pos.read();
+    let (viewport_w, viewport_h) = *editor_viewport.read();
+    let ai_opens_left =
+        viewport_w > 0 && menu_x + CONTEXT_MENU_WIDTH_PX + CONTEXT_SUBMENU_WIDTH_PX > viewport_w;
+    let continue_opens_left = if ai_opens_left {
+        menu_x >= CONTEXT_SUBMENU_WIDTH_PX * 2
+    } else {
+        viewport_w > 0 && menu_x + CONTEXT_MENU_WIDTH_PX + CONTEXT_SUBMENU_WIDTH_PX * 2 > viewport_w
+    };
+    let continue_opens_up = viewport_h > 0 && menu_y + CONTINUE_SUBMENU_HEIGHT_PX > viewport_h;
+    let ai_submenu_class = submenu_class(ai_opens_left, false);
+    let continue_submenu_class = submenu_class(continue_opens_left, continue_opens_up);
 
     rsx! {
         div {
@@ -316,6 +359,7 @@ pub fn Editor() -> Element {
                 e.stop_propagation();
                 let coords = e.client_coordinates();
                 editor_menu_pos.set((coords.x as i32, coords.y as i32));
+                refresh_editor_viewport(editor_viewport);
                 show_ai_submenu.set(false);
                 show_continue_submenu.set(false);
                 let start = *ui.cursor_start.read();
@@ -497,7 +541,7 @@ pub fn Editor() -> Element {
                             span { class: "context-menu-caret", "›" }
                         }
                         if ai_submenu_open && editor_has_sel {
-                            div { class: "context-submenu",
+                            div { class: "{ai_submenu_class}",
                                 div { class: "context-menu-submenu-host",
                                     button {
                                         class: "context-menu-item has-submenu",
@@ -510,7 +554,7 @@ pub fn Editor() -> Element {
                                         span { class: "context-menu-caret", "›" }
                                     }
                                     if continue_submenu_open {
-                                        div { class: "context-submenu",
+                                        div { class: "{continue_submenu_class}",
                                             for style in ContinueStyle::MENU {
                                                 button {
                                                     key: "{style.as_str()}",
@@ -643,5 +687,19 @@ mod tests {
         assert!(src.contains("taskCheckbox"));
         assert!(src.contains("markdownAutocompletion"));
         assert!(src.contains("applyMarkdownFormat"));
+    }
+
+    /// 贴边时子菜单改向左、向上展开 / Submenus open left and upward when they would leave the window
+    #[test]
+    fn submenu_class_flips_toward_free_space() {
+        assert_eq!(
+            super::submenu_class(true, false),
+            "context-submenu opens-left"
+        );
+        assert_eq!(
+            super::submenu_class(false, true),
+            "context-submenu opens-up"
+        );
+        assert_eq!(super::submenu_class(false, false), "context-submenu");
     }
 }

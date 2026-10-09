@@ -2471,6 +2471,26 @@ mod file_actions_integration_tests {
         });
     }
 
+    /// 取消一次生成不能掐断另一个状态上的流
+    /// Cancelling one generation must not abort a stream owned by another state
+    #[test]
+    fn test_cancel_does_not_abort_another_states_generation() {
+        with_runtime(|| {
+            let mut first = AppState::new();
+            let mut second = AppState::new();
+            let (first_id, first_rx) = AppActions::start_ai_generation(&mut first);
+            let (second_id, second_rx) = AppActions::start_ai_generation(&mut second);
+
+            AppActions::cancel_ai_generation(&mut first);
+
+            assert!(!AppActions::is_ai_generation_current(&first, first_id));
+            assert!(*first_rx.borrow());
+            assert!(AppActions::is_ai_generation_current(&second, second_id));
+            assert!(!*second_rx.borrow());
+            assert!(*second.ai().ai_loading.read());
+        });
+    }
+
     /// 新生成应取消上一轮 HTTP 流 / A new generation should cancel the previous HTTP stream
     #[test]
     fn test_start_ai_generation_aborts_previous() {
